@@ -2,7 +2,8 @@ name: Docs
 
 on:
   push:
-    branches: [master]
+    branches: [dev]    # dev is the default branch; the github-pages environment
+    paths: [docs/**, python/**, src/**, "**/*.py", .github/workflows/docs.yml]
   workflow_dispatch:
 
 permissions:
