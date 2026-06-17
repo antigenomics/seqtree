@@ -41,10 +41,9 @@ def test_invalid_mode_setter():
 
 
 def test_invalid_matrix():
-    idx = seqtree.Index.build(["CAT"], alphabet="aa")
-    p = seqtree.SearchParams(matrix="PAM250")
+    # An unknown matrix name is rejected eagerly at construction (like engine/mode).
     with pytest.raises(ValueError):
-        idx.search("CAT", p)
+        seqtree.SearchParams(matrix="PAM250")
 
 
 def test_blosum_requires_aa():

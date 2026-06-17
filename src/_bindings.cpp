@@ -18,7 +18,8 @@ struct PyParams {
     int max_subs = 0, max_ins = 0, max_dels = 0, max_total_edits = 0;
     long max_penalty = 0;
     int gap_open = 1, gap_extend = 1;
-    std::string matrix;          // "" => unit cost
+    std::string matrix;          // named builtin: "" (unit), "blosum62", "pam50"
+    std::optional<SubstitutionMatrix> matrix_obj;  // explicit/custom matrix (overrides name)
     std::string engine = "auto"; // auto | seqtrie | seqtm
     std::string mode = "all";    // all | top
 };
@@ -51,16 +52,51 @@ Mode parse_mode(const std::string& m) {
     throw py::value_error("unknown mode '" + m + "' (use 'all' or 'top')");
 }
 
+// Symbols in codec code order for an alphabet (custom matrices must match this order).
+std::string alphabet_symbols(Alphabet a) {
+    Codec c(a);
+    std::string s;
+    for (uint8_t i = 0; i < c.size(); ++i) s += c.decode(i);
+    return s;
+}
+
 // Returns nullopt for unit cost; throws for an unknown name or alphabet mismatch.
-std::optional<SubstitutionMatrix> make_matrix(const std::string& name, Alphabet a) {
-    if (name.empty()) return std::nullopt;
-    std::string l = lower(name);
-    if (l == "blosum62") {
-        if (a != Alphabet::AminoAcid)
-            throw py::value_error("BLOSUM62 requires the amino-acid alphabet");
-        return SubstitutionMatrix::blosum62();
+// An explicit matrix object (custom or built via SubstitutionMatrix factories) wins
+// over the named builtin; we only check that its size matches the alphabet.
+std::optional<SubstitutionMatrix> make_matrix(const PyParams& pp, Alphabet a) {
+    if (pp.matrix_obj) {
+        if (pp.matrix_obj->size() != Codec(a).size())
+            throw py::value_error("matrix size does not match the alphabet");
+        return *pp.matrix_obj;
     }
-    throw py::value_error("unknown matrix '" + name + "' (use '' or 'BLOSUM62')");
+    if (pp.matrix.empty()) return std::nullopt;
+    std::string l = lower(pp.matrix);
+    if (l == "blosum62" || l == "pam50") {
+        if (a != Alphabet::AminoAcid)
+            throw py::value_error(pp.matrix + " requires the amino-acid alphabet");
+        return l == "blosum62" ? SubstitutionMatrix::blosum62() : SubstitutionMatrix::pam50();
+    }
+    throw py::value_error("unknown matrix '" + pp.matrix +
+                          "' (use '', 'BLOSUM62', 'PAM50', or a SubstitutionMatrix)");
+}
+
+// Accept either a builtin name ("", "blosum62", "pam50") or a SubstitutionMatrix.
+void set_matrix(PyParams& p, const py::object& m) {
+    p.matrix.clear();
+    p.matrix_obj.reset();
+    if (m.is_none()) return;
+    if (py::isinstance<py::str>(m)) {
+        std::string name = m.cast<std::string>();
+        std::string l = lower(name);
+        if (!(l.empty() || l == "blosum62" || l == "pam50"))
+            throw py::value_error("unknown matrix '" + name +
+                                  "' (use '', 'BLOSUM62', 'PAM50', or a SubstitutionMatrix)");
+        p.matrix = std::move(name);
+    } else if (py::isinstance<SubstitutionMatrix>(m)) {
+        p.matrix_obj = m.cast<SubstitutionMatrix>();
+    } else {
+        throw py::type_error("matrix must be a name string or a SubstitutionMatrix");
+    }
 }
 
 SearchParams to_cpp(const PyParams& pp, const SubstitutionMatrix* mat) {
@@ -85,14 +121,14 @@ py::list hits_to_list(const std::vector<Hit>& hits) {
 }
 
 py::list py_search(Index& idx, const std::string& q, const PyParams& pp) {
-    auto mat = make_matrix(pp.matrix, idx.alphabet());
+    auto mat = make_matrix(pp, idx.alphabet());
     SearchParams cp = to_cpp(pp, mat ? &*mat : nullptr);
     Searcher s(idx);
     return hits_to_list(s.search(q, cp));
 }
 
 py::list py_search_top(Index& idx, const std::string& q, const PyParams& pp, int k) {
-    auto mat = make_matrix(pp.matrix, idx.alphabet());
+    auto mat = make_matrix(pp, idx.alphabet());
     SearchParams cp = to_cpp(pp, mat ? &*mat : nullptr);
     cp.mode = Mode::TopHit;
     cp.max_hits = uint32_t(k < 1 ? 1 : k);
@@ -102,7 +138,7 @@ py::list py_search_top(Index& idx, const std::string& q, const PyParams& pp, int
 
 py::list py_search_batch(const Index& idx, const std::vector<std::string>& queries,
                          const PyParams& pp, int threads) {
-    auto mat = make_matrix(pp.matrix, idx.alphabet());
+    auto mat = make_matrix(pp, idx.alphabet());
     SearchParams cp = to_cpp(pp, mat ? &*mat : nullptr);
     std::vector<std::vector<Hit>> results;
     {
@@ -117,7 +153,7 @@ py::list py_search_batch(const Index& idx, const std::vector<std::string>& queri
 py::list py_pairwise_batch(const std::vector<std::string>& a, const std::vector<std::string>& b,
                            const PyParams& pp, const std::string& alphabet, int threads) {
     Alphabet alph = parse_alphabet(alphabet);
-    auto mat = make_matrix(pp.matrix, alph);
+    auto mat = make_matrix(pp, alph);
     SearchParams cp = to_cpp(pp, mat ? &*mat : nullptr);
     std::vector<std::vector<Hit>> results;
     {
@@ -130,7 +166,7 @@ py::list py_pairwise_batch(const std::vector<std::string>& a, const std::vector<
 }
 
 Alignment py_align(const Index& idx, uint32_t ref_id, const std::string& q, const PyParams& pp) {
-    auto mat = make_matrix(pp.matrix, idx.alphabet());
+    auto mat = make_matrix(pp, idx.alphabet());
     SearchParams cp = to_cpp(pp, mat ? &*mat : nullptr);
     return idx.align(q, ref_id, cp);
 }
@@ -140,18 +176,54 @@ Alignment py_align(const Index& idx, uint32_t ref_id, const std::string& q, cons
 PYBIND11_MODULE(_core, m) {
     m.doc() = "seqtree: fuzzy biological-sequence search (C++ core)";
 
+    py::class_<SubstitutionMatrix>(m, "SubstitutionMatrix",
+                                   "Non-negative substitution penalties (penalty(a,a)==0). Build a "
+                                   "named builtin (``blosum62``/``pam50``) or a custom one from a "
+                                   "similarity grid whose row/column order matches "
+                                   "``amino_acids()`` (or ``alphabet_symbols(alphabet)``).")
+        .def_static("blosum62", &SubstitutionMatrix::blosum62)
+        .def_static("pam50", &SubstitutionMatrix::pam50)
+        .def_static("unit", &SubstitutionMatrix::unit, py::arg("size"))
+        .def_static(
+            "from_similarity",
+            [](const std::vector<std::vector<int32_t>>& grid) {
+                size_t n = grid.size();
+                if (n == 0 || n > 32) throw py::value_error("matrix size must be 1..32");
+                std::vector<int32_t> flat;
+                flat.reserve(n * n);
+                for (const auto& row : grid) {
+                    if (row.size() != n) throw py::value_error("similarity matrix must be square");
+                    flat.insert(flat.end(), row.begin(), row.end());
+                }
+                return SubstitutionMatrix::from_similarity(uint8_t(n), flat.data());
+            },
+            py::arg("grid"),
+            "Build from a square similarity grid (higher == more similar), converted to "
+            "penalties via max(sim[a,a], sim[b,b]) - sim[a,b]. Row/column order must match the "
+            "target alphabet's symbol order (see ``amino_acids()``).")
+        .def("size", &SubstitutionMatrix::size)
+        .def("__repr__", [](const SubstitutionMatrix& s) {
+            return "SubstitutionMatrix(size=" + std::to_string(s.size()) + ")";
+        });
+
+    m.def("alphabet_symbols", [](const std::string& a) { return alphabet_symbols(parse_alphabet(a)); },
+          py::arg("alphabet") = "aa",
+          "Symbols in code order for an alphabet; custom matrices must follow this order.");
+    m.def("amino_acids", [] { return alphabet_symbols(Alphabet::AminoAcid); },
+          "The amino-acid symbol order used by BLOSUM62 / PAM50 and custom AA matrices.");
+
     py::class_<PyParams>(m, "SearchParams",
                          "Search scope and budget. Scope: max_subs/max_ins/max_dels (exact, "
                          "seqtm) and max_total_edits. Budget: max_penalty with an optional "
                          "matrix ('BLOSUM62') and gap costs. engine is 'auto'|'seqtrie'|'seqtm', "
                          "mode is 'all'|'top'.")
         .def(py::init([](int max_subs, int max_ins, int max_dels, int max_total_edits,
-                         long max_penalty, std::string matrix, int gap_open, int gap_extend,
+                         long max_penalty, py::object matrix, int gap_open, int gap_extend,
                          std::string engine, std::string mode) {
                  PyParams p;
                  p.max_subs = max_subs; p.max_ins = max_ins; p.max_dels = max_dels;
                  p.max_total_edits = max_total_edits; p.max_penalty = max_penalty;
-                 p.matrix = std::move(matrix); p.gap_open = gap_open; p.gap_extend = gap_extend;
+                 set_matrix(p, matrix); p.gap_open = gap_open; p.gap_extend = gap_extend;
                  parse_engine(engine); parse_mode(mode);  // validate eagerly
                  p.engine = std::move(engine); p.mode = std::move(mode);
                  return p;
@@ -165,7 +237,13 @@ PYBIND11_MODULE(_core, m) {
         .def_readwrite("max_dels", &PyParams::max_dels)
         .def_readwrite("max_total_edits", &PyParams::max_total_edits)
         .def_readwrite("max_penalty", &PyParams::max_penalty)
-        .def_readwrite("matrix", &PyParams::matrix)
+        .def_property(
+            "matrix",
+            [](const PyParams& p) -> py::object {
+                if (p.matrix_obj) return py::cast(*p.matrix_obj);
+                return py::cast(p.matrix);
+            },
+            [](PyParams& p, const py::object& m) { set_matrix(p, m); })
         .def_readwrite("gap_open", &PyParams::gap_open)
         .def_readwrite("gap_extend", &PyParams::gap_extend)
         .def_property("engine", [](const PyParams& p) { return p.engine; },

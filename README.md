@@ -1,5 +1,8 @@
 # seqtree
 
+[![PyPI](https://img.shields.io/pypi/v/seqtree.svg)](https://pypi.org/project/seqtree/)
+[![Python](https://img.shields.io/pypi/pyversions/seqtree.svg)](https://pypi.org/project/seqtree/)
+[![License](https://img.shields.io/pypi/l/seqtree.svg)](LICENSE)
 [![CI](https://github.com/antigenomics/seqtree/actions/workflows/ci.yml/badge.svg)](https://github.com/antigenomics/seqtree/actions/workflows/ci.yml)
 [![Docs](https://github.com/antigenomics/seqtree/actions/workflows/docs.yml/badge.svg)](https://antigenomics.github.io/seqtree/)
 
@@ -20,7 +23,13 @@ Two search engines over one trie:
 `(ref_id, score, n_subs, n_ins, n_dels)`. Downstream libraries map `ref_id` back
 to their own payloads (V gene, MHC, counts) and filter.
 
-## Build
+## Install
+
+```fish
+pip install seqtree       # prebuilt wheels for CPython 3.10–3.13 (Linux/macOS/Windows)
+```
+
+## Build from source
 
 ```fish
 bash setup.sh            # repo-local .venv + editable install
@@ -66,9 +75,13 @@ pytest tests/python              # Python tests
 ## Benchmarks
 
 ```fish
-python bench/bench.py                                   # fast tier (real VDJdb data)
+python bench/bench.py                                   # recall vs ground truth (real VDJdb data)
+python bench/bench_gnuplot.py                           # max-edit-3 throughput → SVG figures (needs gnuplot)
 env RUN_BENCHMARK=1 python bench/bench.py --sizes 1000000 --queries 1000000 --threads 16
 ```
+
+`bench/bench_gnuplot.py` renders queries/ms vs reference-set size (both engines), peak RSS, and
+alignment-fetch cost. See [docs/benchmarks.rst](docs/benchmarks.rst).
 
 ## Development
 

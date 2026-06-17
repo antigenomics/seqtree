@@ -90,7 +90,9 @@ std::vector<std::vector<Hit>> Index::search_batch(const std::vector<std::string>
     nt = std::min<unsigned>(nt, std::max<size_t>(1, n));
 
     std::atomic<size_t> next{0};
-    const size_t chunk = 1024;
+    // Adaptive chunk: large batches keep ~1024 for low atomic contention, but small
+    // batches must split fine enough that every worker gets work (~8 chunks/thread).
+    const size_t chunk = std::clamp<size_t>(n / (size_t(nt) * 8), size_t(1), size_t(1024));
     std::exception_ptr err;
     std::mutex emu;
 

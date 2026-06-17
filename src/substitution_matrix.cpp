@@ -5,6 +5,7 @@
 namespace seqtree {
 
 #include "blosum62.inc"
+#include "pam50.inc"
 
 SubstitutionMatrix SubstitutionMatrix::unit(uint8_t size) {
     SubstitutionMatrix m;
@@ -30,6 +31,10 @@ SubstitutionMatrix SubstitutionMatrix::from_similarity(uint8_t size, const int32
 
 SubstitutionMatrix SubstitutionMatrix::blosum62() {
     return from_similarity(static_cast<uint8_t>(kBlosum62Size), kBlosum62);
+}
+
+SubstitutionMatrix SubstitutionMatrix::pam50() {
+    return from_similarity(static_cast<uint8_t>(kPam50Size), kPam50);
 }
 
 }  // namespace seqtree

@@ -37,6 +37,8 @@ public:
     static SubstitutionMatrix unit(uint8_t size);
     // BLOSUM62 converted to penalties; valid only for the AminoAcid codec order.
     static SubstitutionMatrix blosum62();
+    // PAM50 (EMBOSS EPAM50) converted to penalties; AminoAcid codec order.
+    static SubstitutionMatrix pam50();
     // Convert a similarity matrix (row-major, size*size) to penalties via
     // pen[a][b] = max(sim[a][a], sim[b][b]) - sim[a][b].
     static SubstitutionMatrix from_similarity(uint8_t size, const int32_t* sim);

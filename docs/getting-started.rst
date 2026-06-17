@@ -4,19 +4,20 @@ Getting Started
 Install
 -------
 
-seqtree builds from source (C++17/20 core + pybind11). From a clone:
+Prebuilt wheels are published on `PyPI <https://pypi.org/project/seqtree/>`_ for CPython
+3.10–3.13 (Linux, macOS, Windows):
+
+.. code-block:: console
+
+   pip install seqtree
+
+To build the C++17/20 core + pybind11 binding from a clone instead:
 
 .. code-block:: fish
 
    bash setup.sh            # repo-local .venv + editable install
    bash setup.sh --tests    # also install pytest
    bash setup.sh --bench    # also install benchmark deps
-
-Or directly with pip:
-
-.. code-block:: console
-
-   pip install -e .
 
 First search
 ------------
