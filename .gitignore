@@ -9,3 +9,4 @@ __pycache__/
 *.o
 _skbuild/
 docs/_build/
+bench/figures/

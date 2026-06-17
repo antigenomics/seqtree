@@ -4,19 +4,41 @@ build-backend = "scikit_build_core.build"
 
 [project]
 name = "seqtree"
-version = "0.1.0"
+version = "0.0.1"
 description = "Fast fuzzy search over biological sequences (C++ core, Python bindings)"
-requires-python = ">=3.10"
 readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "GPL-3.0-or-later" }
+authors = [{ name = "ISALGO laboratory", email = "mikhail.shugay@gmail.com" }]
+keywords = ["sequence-search", "fuzzy-matching", "CDR3", "immunology", "bioinformatics", "trie"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: C++",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+]
 dependencies = []
 
 [project.optional-dependencies]
 test = ["pytest>=7.4"]
 bench = ["huggingface_hub", "pandas", "psutil"]
+docs = ["sphinx", "pydata-sphinx-theme", "nbsphinx"]
+
+[project.urls]
+Homepage = "https://github.com/antigenomics/seqtree"
+Repository = "https://github.com/antigenomics/seqtree"
+Documentation = "https://antigenomics.github.io/seqtree/"
 
 [tool.scikit-build]
 wheel.packages = ["python/seqtree"]
 cmake.build-type = "Release"
+# Keep the sdist lean: ship only what builds the package. Anchor with a leading "/".
+sdist.exclude = [
+    "/bench", "/tests", "/docs", "/.github", "/setup.sh", "/build",
+]
+editable.rebuild = false
 
 [tool.scikit-build.cmake.define]
 SEQTREE_PYTHON = "ON"
