@@ -1,0 +1,22 @@
+[build-system]
+requires = ["scikit-build-core>=0.12", "pybind11>=2.12"]
+build-backend = "scikit_build_core.build"
+
+[project]
+name = "seqtree"
+version = "0.1.0"
+description = "Fast fuzzy search over biological sequences (C++ core, Python bindings)"
+requires-python = ">=3.10"
+readme = "README.md"
+dependencies = []
+
+[project.optional-dependencies]
+test = ["pytest>=7.4"]
+bench = ["huggingface_hub", "pandas", "psutil"]
+
+[tool.scikit-build]
+wheel.packages = ["python/seqtree"]
+cmake.build-type = "Release"
+
+[tool.scikit-build.cmake.define]
+SEQTREE_PYTHON = "ON"
