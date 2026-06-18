@@ -30,7 +30,14 @@ def _poisson_sf(k, lam):
     return min(1.0, max(0.0, 1.0 - cdf))
 
 
-def evalues(target, control, queries, params, threads=0):
+def _counts(hitlists, exclude_exact):
+    """Per-query hit counts, optionally dropping exact (distance-0) self/identity hits."""
+    if exclude_exact:
+        return [sum(1 for h in hl if h.score > 0) for hl in hitlists]
+    return [len(hl) for hl in hitlists]
+
+
+def evalues(target, control, queries, params, threads=0, exclude_exact=False):
     """Compute control-calibrated E-values for each query.
 
     Args:
@@ -39,6 +46,9 @@ def evalues(target, control, queries, params, threads=0):
         queries: list of query strings.
         params: :class:`SearchParams` defining the scope/budget (the ball).
         threads: worker threads for the batch searches (0 = all cores).
+        exclude_exact: drop distance-0 (exact / self) hits from both target and control
+            counts. Set this when queries may themselves be members of the target or
+            control (e.g. a VDJdb-vs-VDJdb scan) so the trivial self-match is not counted.
 
     Returns:
         One dict per query with ``n_target, n_control, E, p_any, p_enrichment,
@@ -50,8 +60,8 @@ def evalues(target, control, queries, params, threads=0):
     if M < N:
         warnings.warn(f"control ({M}) smaller than target ({N}); E-values may be imprecise")
 
-    n_t = [len(h) for h in target.search_batch(queries, params, threads)]
-    n_c = [len(h) for h in control.search_batch(queries, params, threads)]
+    n_t = _counts(target.search_batch(queries, params, threads), exclude_exact)
+    n_c = _counts(control.search_batch(queries, params, threads), exclude_exact)
 
     out = []
     for nt, nc in zip(n_t, n_c):

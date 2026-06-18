@@ -56,9 +56,18 @@ Karlin--Altschul E-value is its product-measure, ungapped special case.
 
 Given a query CDR3 $q$ and a target set $D$ (e.g.\ VDJdb), fuzzy search returns the neighbours of
 $q$ within a fixed scope/budget $\theta$. We want a significance value for such hits. BLAST answers
-this for protein search with the Karlin--Altschul E-value $E = K\,m\,n\,e^{-\lambda^\ast S}$, valid
-when the database is a string of i.i.d.\ letters with background frequencies $p_i$ and
-$\lambda^\ast$ solves $\sum_{ij} p_i p_j e^{\lambda^\ast s_{ij}} = 1$~\cite{Karlin1990,Karlin1993}.
+this for protein search with the Karlin--Altschul E-value
+\begin{equation}\label{eq:ka}
+  E = K\,m\,n\,e^{-\lambda^\ast S},
+\end{equation}
+where $m$ is the query length and $n$ the total database length (both in residues), $S$ is the
+alignment score of the hit under a substitution matrix with entries $s_{ij}$, $\lambda^\ast$ is the
+unique positive root of $\sum_{ij} p_i p_j e^{\lambda^\ast s_{ij}} = 1$ (the natural scale that turns
+scores into log-probabilities for i.i.d.\ letters with background frequencies $p_i$), and $K>0$ is a
+prefactor---the ``clumping'' or edge-effect constant---fixed by the score distribution. $E$ is the
+expected number of distinct alignments scoring at least $S$ by chance; the number of such alignments
+is asymptotically Poisson, so $\Pr(\text{at least one}) = 1-e^{-E}$~\cite{Karlin1990,Karlin1993}.
+The whole construction rests on the database being a string of i.i.d.\ letters.
 
 Immune repertoires violate the i.i.d.\ assumption catastrophically. CDR3s are produced by V(D)J
 recombination, whose generation probability $\Pgen$, first derived and inferred from sequence
@@ -103,6 +112,14 @@ A control sample $C=(C_1,\dots,C_M)$ and a target set $D$ are given. Crucially, 
 \end{equation}
 Write $N=|D|$ (unique clonotypes; see \S\ref{sec:overdispersion}).
 
+\begin{lemma}[Scope monotonicity]\label{lem:monotone}
+The balls nest, $\ball{\theta}{q}\subseteq\ball{\theta'}{q}$ for $\theta\le\theta'$ (since $s\ge0$ and
+the cut is by a single threshold). Hence $\pi_0(q,\cdot)$, $n_S(q,\cdot)$, the intensity
+$\lambda(q,\cdot)$ and the E-value $E(q,\cdot)$ are all non-decreasing in the scope/budget $\theta$,
+and the closest-hit score $S_{\min}(q)$ of \S\ref{sec:gumbel} is the smallest $\theta$ with
+$n_D(q,\theta)>0$. This justifies sweeping $\theta$ to trace an E-value curve per query.
+\end{lemma}
+
 \begin{assumption}[Exchangeability under $H_0$]\label{ass:exch}
 Under the null, the unique clonotypes of $D$ are exchangeable with marginal law $\Pzero$.
 \end{assumption}
@@ -122,7 +139,24 @@ each $x\in D$ satisfies $\E[\one(x\in\ball{\theta}{q})] = \pi_0(q,\theta)$. The 
 $H_1(q)$ posits excess mass $\pi_D(q,\theta) > \pi_0(q,\theta)$.
 \end{definition}
 
-The estimand is the per-query Poisson intensity $\lambda(q,\theta) = N\,\pi_0(q,\theta)$. Two
+\begin{lemma}[Self-match exclusion / punctured null]\label{lem:selfmatch}
+When the query is itself a database member ($q\in D$, as in a VDJdb-vs-VDJdb scan), the count
+$n_D(q,\theta)$ contains the exact self-match (and any exact duplicates of $q$), which are
+\emph{deterministic} identity hits, not random draws from $\Pzero$. Including them biases both the
+observed count and the null. The correct neighbour statistic is the \emph{punctured} count over the
+distance-positive ball,
+\begin{equation}\label{eq:punctured}
+  n_D^{>}(q,\theta) = \#\{x\in D : 0 < s(q,x) \le \theta\},
+\end{equation}
+with null intensity $\lambda^{>}(q,\theta) = (N-m_q)\,\pi_0^{>}(q,\theta)$, where $m_q$ is the
+multiplicity of $q$ in $D$ and $\pi_0^{>} = \Pzero(\ball{\theta}{q}) - \Pzero(\{x:s(q,x)=0\})$ removes
+the point mass at exact matches. The control estimator is punctured identically,
+$\hat\pi^{>} = n_C^{>}(q,\theta)/M$, so the deterministic identity term cancels in the calibrated
+E-value. (For $q\notin D$ the puncture is vacuous and $n_D^{>}=n_D$.)
+\end{lemma}
+
+The estimand is the per-query Poisson intensity $\lambda(q,\theta) = N\,\pi_0(q,\theta)$ (read as
+$\lambda^{>}$ with the puncture of Lemma~\ref{lem:selfmatch} whenever $q\in D$). Two
 estimators of $\pi_0$ target \emph{different} nulls and must not be conflated.
 \begin{itemize}
   \item \textbf{Control / Monte-Carlo (primary):} $\hat\pi(q,\theta) = n_C(q,\theta)/M$, unbiased
@@ -136,17 +170,21 @@ estimators of $\pi_0$ target \emph{different} nulls and must not be conflated.
   omits selection and sampling.
 \end{itemize}
 
-\begin{remark}[Thymic-selection correction]\label{rem:thymic}
-The generation probability $\Pgen$ overcounts relative to the naive-repertoire frequency because
-only a fraction of generated receptors survive thymic selection. On average this fraction is
-approximately constant, so an effective pre-immune frequency is well approximated by
-$f(x) \approx q\,\Pgen(x)$ with a global thymic-selection factor $q \approx 1/2.7$; baseline
-antigen-specific T-cell frequencies estimated this way agree with observed
-repertoires~\cite{Pogorelyy2018}. Because $q$ is (to first order) sequence-independent, it cancels in
-ratios and in the control-calibrated estimator $\hat\pi$ of \S\ref{sec:null}; it matters only when an
-\emph{absolute} generation-based frequency is needed (e.g.\ the analytic
-$\hat\pi_{\mathrm{gen}}$ fallback for rare queries, \S\ref{sec:precision}), where one uses
-$q\,\Pgen$ in place of $\Pgen$.
+\begin{remark}[Selection factor and the thymic correction]\label{rem:thymic}
+$\Pgen$ overcounts relative to the naive-repertoire frequency because only a fraction of generated
+receptors survive thymic and peripheral selection. Elhanati~et~al.~\cite{Elhanati2014} model this
+with a per-sequence \emph{selection factor} $Q(x)\ge 0$, inferred by maximum likelihood and
+normalized so $\langle Q\rangle = \sum_x \Pgen(x) Q(x) = 1$, giving the post-selection law
+$\Pzero(x) = Q(x)\,\Pgen(x)$. Restricting to a defined cell subset (e.g.\ naive) multiplies $\Pgen$
+by a further \emph{global} acceptance fraction; averaged over sequences this thymic factor is
+approximately $q \approx 1/2.7$, so an effective pre-immune frequency is
+$f(x) \approx q\,Q(x)\,\Pgen(x)$, and baseline antigen-specific T-cell frequencies estimated this way
+agree with observed repertoires~\cite{Pogorelyy2018}. Two consequences. (i) The empirical control
+$\Pzero$ already \emph{is} the post-selection law, so $\hat\pi$ needs no $Q$; the structured factor
+$Q$ matters only for the analytic estimator, where one uses $Q\,\Pgen$ in place of $\Pgen$.
+(ii) The global $q$ is sequence-independent and cancels in any ratio or in $\hat\pi$; it matters only
+when an \emph{absolute} generation-based frequency is needed (the $\hat\pi_{\mathrm{gen}}$ fallback
+for rare queries, \S\ref{sec:precision}).
 \end{remark}
 
 \begin{lemma}[The two nulls differ]\label{lem:hierarchy}
@@ -161,7 +199,17 @@ substitute for $\hat\pi$.
 
 Fix $q,\theta$. For the unique clonotypes $x_1,\dots,x_N$ of $D$ set
 $X_i=\one(x_i\in\ball{\theta}{q})$, $p_i=\E X_i=\pi_0$, $W=\sum_i X_i$, $\lambda=\sum_i p_i = N\pi_0$,
-and let $Z\sim\Poisson(\lambda)$.
+and let $Z\sim\Poisson(\lambda)$. We use the following standard objects. $\mathcal{L}(W)$ denotes the
+\emph{law} (probability distribution) of $W$. The \emph{total-variation distance} between two laws
+$\mu,\nu$ on $\mathbb{Z}_{\ge 0}$ is
+\begin{equation}\label{eq:dtv}
+  \dTV(\mu,\nu) = \sup_{A\subseteq\mathbb{Z}_{\ge0}} |\mu(A)-\nu(A)| = \tfrac12\sum_{k\ge0}|\mu(k)-\nu(k)|,
+\end{equation}
+so a bound on $\dTV$ bounds the error of \emph{every} event probability simultaneously. A family of
+\emph{dependency neighbourhoods} is a choice, for each index $i$, of a set $B_i\ni i$ such that $X_i$
+is independent of (or nearly independent of) $\{X_j : j\notin B_i\}$; intuitively $B_i$ collects the
+clonotypes whose ball-membership is statistically coupled to $x_i$'s (here, those sharing a motif).
+The residual $b_3$ below measures exactly how far that near-independence falls short.
 
 \begin{theorem}[Chen--Stein bound \cite{Arratia1989,Arratia1990}]\label{thm:cs}
 For any dependency neighbourhoods $\{B_i \ni i\}$,
@@ -186,8 +234,11 @@ With $w=n_D(q,\theta)$ observed,
 \begin{align}
   p_{\mathrm{any}}(q,\theta) &= \Prob(W\ge 1) = 1-e^{-\lambda} + O(N\pi_0^2), \label{eq:pany}\\
   p(q,\theta) &= \Prob(Z \ge w) = 1 - \sum_{k<w} \frac{e^{-\lambda}\lambda^k}{k!},
-  \quad \text{error} \le 2(b_1+b_2+b_3). \label{eq:ptail}
+  \quad |\,\Prob(W\ge w) - p(q,\theta)\,| \le b_1+b_2+b_3. \label{eq:ptail}
 \end{align}
+Both follow from Theorem~\ref{thm:cs}: the void probability is the event $A=\{0\}$ and the tail is
+$A=\{w,w+1,\dots\}$, and by~\eqref{eq:dtv} the error on any single event is at most $\dTV\le
+b_1+b_2+b_3$ (so $O(N\pi_0^2)$ in the independent regime, Corollary~\ref{cor:lecam}).
 \end{corollary}
 
 \begin{remark}[Where biology enters]
@@ -247,6 +298,37 @@ hits (clonal, convergent, or across $\mathcal{Q}$). Consequently $\Prob(\#\text{
 E_{\mathrm{tot}}$ by Markov's inequality, and $E_{\mathrm{tot}}$ bounds the expected number of false
 discoveries. This robustness---no independence needed for the \emph{mean}---is why the E-value, not
 the Poisson tail, is the primary report.
+\end{proposition}
+
+\begin{proposition}[Family-wise and false-discovery control]\label{prop:multiple}
+Two thresholding regimes for a family of $|\mathcal{Q}|$ tested queries:
+\begin{enumerate}
+  \item \emph{E-value / Bonferroni (FWER).} Reporting every query with
+  $\widehat E(q,\theta)\le\alpha/|\mathcal{Q}|$ controls the family-wise error rate at level $\alpha$:
+  by Proposition~\ref{prop:linearity} the expected number of false positives is
+  $\sum_q \widehat E \le \alpha$, and $\Prob(\ge 1\text{ false positive})\le\alpha$ by Markov. No
+  independence is required. A fixed E-value cutoff (e.g.\ $\widehat E\le 1$, the BLAST default) is the
+  $\alpha=|\mathcal{Q}|$ case and bounds the \emph{expected count} of false positives by $1$.
+  \item \emph{p-value / Benjamini--Hochberg (FDR).} Using the per-query enrichment p-values
+  $p(q,\theta)=\Prob(Z\ge n_D^{>}(q,\theta))$ from Corollary~\ref{cor:void}, the
+  Benjamini--Hochberg procedure~\cite{Benjamini1995}---sort $p_{(1)}\le\dots\le p_{(|\mathcal{Q}|)}$,
+  reject the $k$ largest with $p_{(k)}\le \tfrac{k}{|\mathcal{Q}|}\alpha$---controls the false
+  discovery rate at $\alpha$ under positive dependence of the test statistics, the relevant regime
+  here (convergent clusters induce positive correlation).
+\end{enumerate}
+\end{proposition}
+
+\begin{proposition}[Detectability / minimum cluster size]\label{prop:power}
+Under $H_1(q)$ let the antigen-driven excess add $k$ neighbours beyond the background mean
+$\lambda=\lambda^{>}(q,\theta)$, so $n_D^{>}\approx\lambda+k$. The enrichment test at E-value cutoff
+$\widehat E\le\alpha$ rejects when $n_D^{>}\ge w_\alpha$, the smallest $w$ with
+$\Prob(\Poisson(\lambda)\ge w)\le\alpha$. For small $\lambda$ (the typical rare-ball regime),
+$w_\alpha$ grows only logarithmically, $w_\alpha \approx \dfrac{\log(1/\alpha)}{\log\log(1/\alpha)-\log\lambda}$
+by the Poisson right tail, so a cluster of a handful of convergent neighbours is already detectable;
+for moderate $\lambda$ the Gaussian approximation gives the familiar
+$k \gtrsim z_{1-\alpha}\sqrt{\lambda}$. The control size enters only through the resolution of
+$\widehat\lambda$ (\S\ref{sec:precision}): $M$ must be large enough that the sampling noise of
+$\widehat E$ is below the excess $k$ being claimed.
 \end{proposition}
 
 \section{How large must the control be?}\label{sec:precision}
@@ -329,10 +411,13 @@ presented-peptide control is available; no generation-based null is claimed ther
 \begin{enumerate}
   \item Deduplicate $C$ and $D$ to unique clonotypes (Proposition~\ref{prop:collapse}).
   \item Build a \texttt{seqtree} index of $C$; for each query compute $n_C$ and $n_D$ at scope
-  $\theta$ via batched search.
-  \item Report $\widehat E=(N/M)\,n_C$ (Eq.~\eqref{eq:Ehat}), $p_{\mathrm{any}}=1-e^{-\widehat E}$,
-  and $p_{\mathrm{enrich}}=\Prob(\Poisson(\widehat E)\ge n_D)$; use the rule of three when $n_C=0$
-  (Proposition~\ref{prop:zero}).
+  $\theta$ via batched search. When the query may itself be in $D$ or $C$, use the punctured counts
+  $n^{>}$ that drop distance-zero (exact/self) hits (Lemma~\ref{lem:selfmatch}).
+  \item Report $\widehat E=(N/M)\,n_C^{>}$ (Eq.~\eqref{eq:Ehat}), $p_{\mathrm{any}}=1-e^{-\widehat E}$,
+  and $p_{\mathrm{enrich}}=\Prob(\Poisson(\widehat E)\ge n_D^{>})$; use the rule of three when
+  $n_C^{>}=0$ (Proposition~\ref{prop:zero}).
+  \item Across a query family, threshold on $\widehat E$ for FWER control or apply
+  Benjamini--Hochberg to the $p_{\mathrm{enrich}}$ for FDR control (Proposition~\ref{prop:multiple}).
   \item Validate the Poisson regime via the pairwise co-occupancy estimate of $b_2$; if inflated,
   use the negative-binomial check (Proposition~\ref{prop:nb}).
   \item Size the control by Eq.~\eqref{eq:resolution}; fall back to the model-based
@@ -340,8 +425,9 @@ presented-peptide control is available; no generation-based null is claimed ther
   $q\approx1/2.7$) for rare queries.
 \end{enumerate}
 
-This is implemented in \texttt{seqtree.evalues}, a thin layer over batched search; the control
-loader \texttt{seqtree.load\_control} supplies a deduplicated background.
+This is implemented in \texttt{seqtree.evalues} (with \texttt{exclude\_exact} for the punctured
+counts), a thin layer over batched search; the control loader \texttt{seqtree.load\_control} supplies
+a deduplicated background.
 
 \bibliographystyle{plain}
 \bibliography{refs}
