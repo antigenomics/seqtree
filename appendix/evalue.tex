@@ -21,6 +21,7 @@
 \DeclareMathOperator{\dTV}{d_{\mathrm{TV}}}
 \newcommand{\Pgen}{P_{\mathrm{gen}}}
 \newcommand{\Pzero}{P_{0}}
+\newcommand{\Pdata}{P_{\mathrm{data}}}
 \newcommand{\ball}[2]{B_{#1}(#2)}
 \newcommand{\R}{\mathbb{R}}
 \newcommand{\E}{\mathbb{E}}
@@ -155,6 +156,25 @@ $\hat\pi^{>} = n_C^{>}(q,\theta)/M$, so the deterministic identity term cancels 
 E-value. (For $q\notin D$ the puncture is vacuous and $n_D^{>}=n_D$.)
 \end{lemma}
 
+\begin{remark}[Consistency of the puncture, and when \emph{not} to use it]\label{rem:punct-app}
+The puncture is valid \emph{only if applied to both sides}: the E-value $E=(N/M)\,n_C$ estimates
+$N\pi_0$ for one and the same ball, so dropping the $s=0$ point mass from the target count requires
+estimating the punctured mass $\pi_0^{>}$ from the \emph{punctured} control count $n_C^{>}$. Doing so
+does change the numeric E-value (it shrinks by the removed exact-match mass, $E^{>}=(N/M)n_C^{>}\le
+E$), but it leaves the \emph{inference} unbiased: the exact-match term is deterministic and enters
+observed count and null intensity identically, so it carries no signal and its removal neither
+creates nor destroys significance for the genuine neighbours. Puncturing only one side
+(target but not control, or vice versa) \emph{does} bias the test and must be avoided.
+
+This exclusion is a \textbf{benchmark device}, not a default for applications. In the
+VDJdb-vs-VDJdb benchmark the queries are drawn from the target, so every query carries a guaranteed
+trivial self-hit that would otherwise inflate every count uniformly; puncturing removes it. In a real
+annotation task the query is a \emph{novel} sequence scored against a reference database
+($q\notin D$), where an exact database match is the strongest and most informative hit and must be
+kept. Hence \texttt{seqtree.evalues} leaves \texttt{exclude\_exact=False} by default and the benchmark
+sets it \texttt{True}.
+\end{remark}
+
 The estimand is the per-query Poisson intensity $\lambda(q,\theta) = N\,\pi_0(q,\theta)$ (read as
 $\lambda^{>}$ with the puncture of Lemma~\ref{lem:selfmatch} whenever $q\in D$). Two
 estimators of $\pi_0$ target \emph{different} nulls and must not be conflated.
@@ -171,20 +191,29 @@ estimators of $\pi_0$ target \emph{different} nulls and must not be conflated.
 \end{itemize}
 
 \begin{remark}[Selection factor and the thymic correction]\label{rem:thymic}
-$\Pgen$ overcounts relative to the naive-repertoire frequency because only a fraction of generated
-receptors survive thymic and peripheral selection. Elhanati~et~al.~\cite{Elhanati2014} model this
-with a per-sequence \emph{selection factor} $Q(x)\ge 0$, inferred by maximum likelihood and
-normalized so $\langle Q\rangle = \sum_x \Pgen(x) Q(x) = 1$, giving the post-selection law
-$\Pzero(x) = Q(x)\,\Pgen(x)$. Restricting to a defined cell subset (e.g.\ naive) multiplies $\Pgen$
-by a further \emph{global} acceptance fraction; averaged over sequences this thymic factor is
-approximately $q \approx 1/2.7$, so an effective pre-immune frequency is
-$f(x) \approx q\,Q(x)\,\Pgen(x)$, and baseline antigen-specific T-cell frequencies estimated this way
-agree with observed repertoires~\cite{Pogorelyy2018}. Two consequences. (i) The empirical control
-$\Pzero$ already \emph{is} the post-selection law, so $\hat\pi$ needs no $Q$; the structured factor
-$Q$ matters only for the analytic estimator, where one uses $Q\,\Pgen$ in place of $\Pgen$.
-(ii) The global $q$ is sequence-independent and cancels in any ratio or in $\hat\pi$; it matters only
-when an \emph{absolute} generation-based frequency is needed (the $\hat\pi_{\mathrm{gen}}$ fallback
-for rare queries, \S\ref{sec:precision}).
+$\Pgen$ is a \emph{pre-selection} law; only a fraction of generated receptors survive thymic and
+peripheral selection. Elhanati~et~al.~\cite{Elhanati2014} model this with a per-sequence
+\emph{selection factor} $Q(\sigma)\ge 0$ on the recombination outcome $\sigma=(\vec a,V,J)$, inferred
+by maximum likelihood, giving the post-selection law
+\begin{equation}\label{eq:qfactor}
+  \Pzero(\sigma) = \tfrac1Z\,Q(\sigma)\,\Pgen(\sigma),\qquad
+  Z=\sum_\sigma Q(\sigma)\Pgen(\sigma)=1 \;\;(\langle Q\rangle_{\Pgen}=1).
+\end{equation}
+The normalization $\langle Q\rangle=1$ means $Q$ \emph{redistributes} mass without a global rescale;
+the structured part (selection reinforces recombination biases, with the observed
+$\Pdata(Q)/\Pgen(Q)$ saturating around $\approx 7$~\cite{Elhanati2014}) reshapes the ball mass per
+sequence. Separately, the \emph{physical} thymic acceptance fraction---the fraction of recombined
+cells that survive to the naive repertoire---is $\alpha\lesssim 15\%$ (consistent with $10$--$30\%$
+for positive selection and $\approx5\%$ for full selection)~\cite{Elhanati2014}, and selection cuts
+repertoire diversity by $\approx 6$ bits ($\sim 50$-fold). Two consequences for the E-value.
+(i) The empirical control $\Pzero$ already \emph{is} the post-selection law of~\eqref{eq:qfactor}, so
+the control estimator $\hat\pi$ needs no $Q$ and no $\alpha$; $Q$ enters only the analytic estimator,
+where one uses $Q\,\Pgen$ in place of $\Pgen$. (ii) The global acceptance fraction $\alpha$ is
+sequence-independent and \emph{cancels} in every ratio and in $\hat\pi$ (which calibrates against the
+control's own size $M$); it would matter only for an \emph{absolute} naive-frequency
+estimate $f(\sigma)=\alpha\,Q(\sigma)\Pgen(\sigma)$, e.g.\ when the $\hat\pi_{\mathrm{gen}}$ fallback
+for a rare query (\S\ref{sec:precision}) is read as an expected count of cells rather than a
+probability.
 \end{remark}
 
 \begin{lemma}[The two nulls differ]\label{lem:hierarchy}
@@ -330,6 +359,48 @@ $k \gtrsim z_{1-\alpha}\sqrt{\lambda}$. The control size enters only through the
 $\widehat\lambda$ (\S\ref{sec:precision}): $M$ must be large enough that the sampling noise of
 $\widehat E$ is below the excess $k$ being claimed.
 \end{proposition}
+
+\subsection{Epitope detection complexity}\label{sec:epitope-complexity}
+
+Proposition~\ref{prop:power} concerns one query; in practice one samples a depth-$n$ repertoire and
+asks how much of an epitope-specific response is recoverable. Let an epitope's TCR repertoire
+$R_e$ have $K$ unique clonotypes and within-set scope-$\theta$ neighbour graph with degree
+distribution $\{d_x\}_{x\in R_e}$ and neighbour density
+$\rho = \tfrac{1}{K(K-1)}\sum_x d_x = \overline{d}/(K-1)$ (the probability that two random members of
+$R_e$ are within $\theta$).
+
+\begin{proposition}[Detection curve from the degree law]\label{prop:epitope}
+Draw $n$ clonotypes i.i.d.\ from $R_e$. A node of full-set degree $d_x$ retains in expectation
+$d_x\,(n-1)/(K-1)$ of its neighbours (hypergeometric sampling). Against the near-empty background
+ball ($\lambda\approx0$, so $w_\alpha$ is $O(1)$, Proposition~\ref{prop:power}), the node is detected
+once this exceeds a level $d_{\min}(\alpha)=O(1)$, i.e.\ at sampling depth
+\begin{equation}\label{eq:nstar}
+  n^{*}_x \approx 1 + d_{\min}\,\frac{K-1}{d_x},
+\end{equation}
+and the detectable fraction at depth $n$ is
+\begin{equation}\label{eq:phi}
+  \varphi(n) = \frac{1}{K}\,\#\Big\{x : d_x \ge d_{\min}\tfrac{K-1}{n-1}\Big\},
+\end{equation}
+fixed entirely by the degree law. Equivalently the expected number of within-sample neighbour pairs
+is $\binom{n}{2}\rho$, so the first significant pair appears near $n\approx\sqrt{2/\rho}$. The
+\emph{detection complexity} of $R_e$---the depth to recover a target fraction of the response---is
+therefore set by the upper tail of $\{d_x\}$ (equivalently by $\rho$ and the largest cluster): a
+repertoire dominated by one large convergent cluster is detected at small $n$, a diverse repertoire
+of many near-singletons requires deep sampling.
+\end{proposition}
+
+\begin{remark}[Worked example: A*02 NLV vs GIL]\label{rem:nlvgil}
+Measured on VDJdb TRB / HLA-A*02 repertoires against a $10^6$-sequence OLGA background at scope
+$\theta=1$ substitution: \textbf{GIL} (GILGFVFTL, influenza M1; $K=5236$) has
+$\rho = 3.4\times10^{-4}$, max degree $52$, and one dominant component of $896$ ($17\%$ of the set);
+\textbf{NLV} (NLVPMVATV, CMV pp65; $K=13044$) has $\rho = 2.8\times10^{-5}$ ($\approx12\times$
+sparser), max degree $22$, and a largest component of only $152$ ($1.2\%$). Equation~\eqref{eq:phi}
+then predicts---and the subsampled Benjamini--Hochberg significant fraction confirms (Fig.,
+\texttt{bench/bench\_epitope.py})---that GIL is $\sim$20--30\% recovered by $n\sim10^3$ sampled TCRs
+while NLV stays below $5\%$ even at $n\sim5\times10^3$. The two epitopes have detection complexities
+differing by more than an order of magnitude purely from repertoire structure, with no change to the
+search or the background.
+\end{remark}
 
 \section{How large must the control be?}\label{sec:precision}
 

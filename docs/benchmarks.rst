@@ -57,6 +57,43 @@ orders of magnitude more neighbours and are largely significant (BH FDR < 0.05),
 ``RUN_BENCHMARK`` tier uses :math:`M = 2{,}000{,}000`); the BH correction is what makes the
 fixed-cutoff fractions trustworthy at small control sizes.
 
+Comprehensive matrix
+~~~~~~~~~~~~~~~~~~~~~
+
+``bench/bench_evalue_matrix.py`` sweeps the full grid — reference set
+(``vdjdb`` / ``olga`` / ``vdjdb+noise`` / ``olga+noise``, all built to the same size :math:`N`),
+background control (OLGA ``1M`` / ``2M`` / ``10M``), query set (``vdjdb`` / ``olga``), and scope
+(1–3 substitutions) — and emits a TSV table plus ``evalue_matrix.svg``:
+
+.. code-block:: fish
+
+   python bench/bench_evalue_matrix.py                       # control 1M
+   env RUN_BENCHMARK=1 python bench/bench_evalue_matrix.py   # controls 1M / 2M / 10M
+
+The signal is structural: ``vdjdb`` queries against a ``vdjdb`` reference are ~0.87–0.98 significant
+(BH), ``vdjdb+noise`` stays ~0.77–0.97 (real clusters survive 50 % dilution), while ``olga``,
+``olga+noise``, and all cross combinations sit at ~0. The naive ``E < 1`` column over-calls (e.g.
+``olga``-vs-``olga`` reads 1.0) where BH reads 0.0 — a direct demonstration that the multiple-testing
+correction is what separates genuine convergence from background.
+
+Epitope detection complexity
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``bench/bench_epitope.py`` tests the detectability formalism on two HLA-A*02 epitopes of opposite
+repertoire structure: **GIL** (GILGFVFTL, one dominant convergent cluster) and **NLV** (NLVPMVATV,
+many diverse small clusters). It reports each epitope's within-set neighbour density, degree, and
+cluster sizes, then subsamples to depth :math:`n` and plots the fraction called significant (BH
+FDR < 0.05) against the degree-distribution prediction of Eq. (φ) in the appendix:
+
+.. code-block:: fish
+
+   python bench/bench_epitope.py --scopes 1 2
+
+At scope 1, GIL (ρ = 3.4×10⁻⁴, largest cluster 896 = 17 % of the set) is ~20–30 % recovered by
+:math:`n\sim10^3` sampled TCRs, while NLV (ρ = 2.8×10⁻⁵, largest cluster 152 = 1.2 %) stays below 5 %
+even at :math:`n\sim5\times10^3` — detection complexities differing by an order of magnitude purely
+from repertoire structure. See ``appendix/evalue.tex`` §"Epitope detection complexity".
+
 TCR-beta benchmark (gnuplot figures)
 ------------------------------------
 

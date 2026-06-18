@@ -52,7 +52,9 @@ Theory
 ------
 
 The full derivation — Poisson approximation with an explicit Chen–Stein / Le Cam error bound,
-clonotype-collapsing for over-dispersion, the tf-idf = self-information equivalence, the control-size
-requirement :math:`M \gtrsim N/(\rho^2 E^\ast)`, the closest-hit Gumbel law, the Karlin–Altschul
-reduction, and the epitope limitation — is in the technical appendix
+the self-match / punctured-null lemma (benchmark-only exact-hit exclusion), clonotype-collapsing for
+over-dispersion, the tf-idf = self-information equivalence, multiple-testing control (Bonferroni and
+Benjamini–Hochberg), the control-size requirement :math:`M \gtrsim N/(\rho^2 E^\ast)`, the closest-hit
+Gumbel law, **epitope detection complexity** from the degree distribution (worked NLV vs GIL example),
+the Karlin–Altschul reduction, and the epitope-presentation limitation — is in the technical appendix
 ``appendix/evalue.tex`` (build with ``make -C appendix``; also compiled as a CI artifact).
