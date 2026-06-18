@@ -1,8 +1,9 @@
 Benchmarks
 ==========
 
-Two harnesses ship with the repo. Both can bootstrap realistic TCR CDR3 sequences from OLGA
-(if installed) and otherwise fall back to seeded random sequences.
+Several harnesses ship with the repo, covering raw throughput, recall, E-value significance, and the
+epitope-detection formalism. Most bootstrap realistic TCR CDR3 sequences from OLGA (if installed) and
+otherwise fall back to seeded random sequences. Figures are rendered to SVG with gnuplot.
 
 C++ (raw throughput + scaling)
 ------------------------------
@@ -76,6 +77,10 @@ The signal is structural: ``vdjdb`` queries against a ``vdjdb`` reference are ~0
 ``olga``-vs-``olga`` reads 1.0) where BH reads 0.0 — a direct demonstration that the multiple-testing
 correction is what separates genuine convergence from background.
 
+.. image:: _static/bench/evalue_matrix.svg
+   :alt: significant fraction across reference/control/query/scope combinations
+   :width: 80%
+
 Epitope detection complexity
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -93,6 +98,10 @@ At scope 1, GIL (ρ = 3.4×10⁻⁴, largest cluster 896 = 17 % of the set) is ~
 :math:`n\sim10^3` sampled TCRs, while NLV (ρ = 2.8×10⁻⁵, largest cluster 152 = 1.2 %) stays below 5 %
 even at :math:`n\sim5\times10^3` — detection complexities differing by an order of magnitude purely
 from repertoire structure. See ``appendix/evalue.tex`` §"Epitope detection complexity".
+
+.. image:: _static/bench/epitope_detection.svg
+   :alt: significant fraction vs sampled depth for GIL and NLV epitopes
+   :width: 80%
 
 TCR-beta benchmark (gnuplot figures)
 ------------------------------------
