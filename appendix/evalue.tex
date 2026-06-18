@@ -3,7 +3,14 @@
 \usepackage[margin=1in]{geometry}
 \usepackage{amsmath,amssymb,amsthm}
 \usepackage{mathtools}
+\usepackage{graphicx}
+\usepackage[affil-it]{authblk}
 \usepackage[hidelinks]{hyperref}
+
+% Compact author/affiliation block (authblk; affiliations italicised by affil-it).
+\renewcommand\Authfont{\normalsize\bfseries}
+\renewcommand\Affilfont{\small}
+\setlength{\affilsep}{0.6em}
 
 \newtheorem{theorem}{Theorem}
 \newtheorem{lemma}{Lemma}
@@ -29,12 +36,11 @@
 \newcommand{\one}{\mathbf{1}}
 
 \title{A control-calibrated E-value for fuzzy TCR sequence search\\ over biologically redundant reference sets}
-\author{Mikhail Shugay$^{1,2,3}$\\[3pt]
-\small $^{1}$Institute of Translational Medicine, Russian National Medical State University, Moscow, Russia\\
-\small $^{2}$Department of Genomics of Adaptive Immunity, Shemyakin--Ovchinnikov Institute of Bioorganic Chemistry RAS, Moscow, Russia\\
-\small $^{3}$Institute of Molecular Biology NAS RA, Erevan, Armenia\\[3pt]
-\small \textit{seqtree technical appendix}\quad\textbullet\quad\href{mailto:mikhail.shugay@gmail.com}{mikhail.shugay@gmail.com}}
-\date{}
+\author[1,2,3]{Mikhail Shugay\thanks{\href{mailto:mikhail.shugay@gmail.com}{mikhail.shugay@gmail.com}}}
+\affil[1]{Institute of Translational Medicine, Russian National Medical State University, Moscow, Russia}
+\affil[2]{Department of Genomics of Adaptive Immunity, Shemyakin--Ovchinnikov Institute of Bioorganic Chemistry RAS, Moscow, Russia}
+\affil[3]{Institute of Molecular Biology NAS RA, Erevan, Armenia}
+\date{\small\textit{seqtree technical appendix}}
 
 \begin{document}
 \maketitle
@@ -399,12 +405,23 @@ $\theta=1$ substitution: \textbf{GIL} (GILGFVFTL, influenza M1; $K=5236$) has
 $\rho = 3.4\times10^{-4}$, max degree $52$, and one dominant component of $896$ ($17\%$ of the set);
 \textbf{NLV} (NLVPMVATV, CMV pp65; $K=13044$) has $\rho = 2.8\times10^{-5}$ ($\approx12\times$
 sparser), max degree $22$, and a largest component of only $152$ ($1.2\%$). Equation~\eqref{eq:phi}
-then predicts---and the subsampled Benjamini--Hochberg significant fraction confirms (Fig.,
-\texttt{bench/bench\_epitope.py})---that GIL is $\sim$20--30\% recovered by $n\sim10^3$ sampled TCRs
-while NLV stays below $5\%$ even at $n\sim5\times10^3$. The two epitopes have detection complexities
-differing by more than an order of magnitude purely from repertoire structure, with no change to the
-search or the background.
+then predicts---and the subsampled Benjamini--Hochberg significant fraction confirms
+(Fig.~\ref{fig:epitope}, \texttt{bench/bench\_epitope.py})---that GIL is $\sim$20--30\% recovered by
+$n\sim10^3$ sampled TCRs while NLV stays below $5\%$ even at $n\sim5\times10^3$. The two epitopes have
+detection complexities differing by more than an order of magnitude purely from repertoire structure,
+with no change to the search or the background.
 \end{remark}
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=\linewidth]{epitope_detection.pdf}
+  \caption{Epitope detection complexity (\texttt{bench/bench\_epitope.py}). Within-set neighbour
+  structure (top) and the subsampled fraction called significant (Benjamini--Hochberg, FDR $<0.05$)
+  versus sampled depth $n$ (bottom), for the convergent GIL and the diffuse NLV A*02 repertoires at
+  scope $\theta=1$. GIL's dominant cluster is recovered an order of magnitude sooner than NLV's
+  diffuse one, matching Eq.~\eqref{eq:phi}.}
+  \label{fig:epitope}
+\end{figure}
 
 \section{How large must the control be?}\label{sec:precision}
 

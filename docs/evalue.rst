@@ -30,10 +30,14 @@ the **TCRNET** approach — counting sequence neighbours against a real-world co
 put on a rigorous, finite-sample footing; it reduces to the classical Karlin–Altschul E-value when
 the background is an i.i.d. product measure and alignments are ungapped.
 
-An empirical control already carries the relevant background (convergent recombination, public
-clones). Where a generative null is needed instead, the V(D)J generation probability is used, with an
-average thymic-selection factor :math:`q \approx 1/2.7` converting it to a pre-immune frequency
-(:math:`f \approx q\,P_\mathrm{gen}`).
+An empirical control already **is** the post-selection law: thymic and peripheral selection are baked
+into a real repertoire, so no extra correction is applied when calibrating against it. Where a
+*generative* null is needed instead (rare queries with too few control neighbours), the V(D)J
+generation probability :math:`P_\mathrm{gen}` is reshaped by the per-sequence Elhanati selection
+factor :math:`Q` (:math:`\langle Q\rangle_{P_\mathrm{gen}} = 1`), giving the post-selection law
+:math:`P_0 \propto Q\,P_\mathrm{gen}`. A single global thymic-acceptance fraction only rescales
+absolute frequencies and is a crude last-resort fallback. See the appendix remark on the selection
+factor for the full treatment.
 
 Usage
 -----
@@ -64,4 +68,4 @@ over-dispersion, the tf-idf = self-information equivalence, multiple-testing con
 Benjamini–Hochberg), the control-size requirement :math:`M \gtrsim N/(\rho^2 E^\ast)`, the closest-hit
 Gumbel law, **epitope detection complexity** from the degree distribution (worked NLV vs GIL example),
 the Karlin–Altschul reduction, and the epitope-presentation limitation — is in the technical appendix
-``appendix/evalue.tex`` (build with ``make -C appendix``; also compiled as a CI artifact).
+linked at the top of this page (LaTeX source ``appendix/evalue.tex``; rebuild with ``make -C appendix``).
