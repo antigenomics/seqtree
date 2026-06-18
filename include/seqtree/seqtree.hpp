@@ -79,6 +79,11 @@ public:
 
     const Trie& trie() const { return *trie_; }
 
+    // Serialize the frozen index to a flat binary file (little-endian) and load it
+    // back. load() throws std::runtime_error on a missing/corrupt/version-mismatched file.
+    void save(const std::string& path) const;
+    static std::unique_ptr<Index> load(const std::string& path);
+
 private:
     Index();
     std::unique_ptr<Trie> trie_;

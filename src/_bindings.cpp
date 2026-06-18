@@ -316,7 +316,11 @@ PYBIND11_MODULE(_core, m) {
         .def("collisions_batch", &py_collisions_batch, py::arg("queries"), py::arg("params"),
              py::arg("threads") = 0,
              "Per-query count of seqtm collisions: how often a reference was re-reached via a "
-             "different edit path during branch-and-bound (0 for seqtrie / substitution-only).");
+             "different edit path during branch-and-bound (0 for seqtrie / substitution-only).")
+        .def("save", &Index::save, py::arg("path"),
+             "Serialize the index to a flat binary file for fast reload.")
+        .def_static("load", &Index::load, py::arg("path"),
+                    "Load an index previously written with save(); raises on a corrupt/old file.");
 
     m.def("pairwise_batch", &py_pairwise_batch, py::arg("a"), py::arg("b"), py::arg("params"),
           py::arg("alphabet") = "aa", py::arg("threads") = 0,

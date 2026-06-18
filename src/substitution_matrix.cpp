@@ -1,7 +1,5 @@
 #include "seqtree/seqtree.hpp"
 
-#include <algorithm>
-
 namespace seqtree {
 
 #include "blosum62.inc"
@@ -19,10 +17,13 @@ SubstitutionMatrix SubstitutionMatrix::from_similarity(uint8_t size, const int32
     SubstitutionMatrix m;
     m.size_ = size;
     m.pen_.resize(size_t(size) * size);
+    // Gram -> squared-distance transform: treating sim as an inner product
+    // s(a,b)=<phi(a),phi(b)>, this is ||phi(a)-phi(b)||^2 = s_aa + s_bb - 2 s_ab.
+    // Symmetric, 0 on the identity, and >= 0 for BLOSUM/PAM (the diagonal is each
+    // row's max, so s_ab <= min(s_aa,s_bb)). The clamp guards pathological pairs.
     for (uint8_t a = 0; a < size; ++a) {
         for (uint8_t b = 0; b < size; ++b) {
-            int32_t best = std::max(sim[a * size + a], sim[b * size + b]);
-            int32_t p = best - sim[a * size + b];  // >= 0; identity => 0
+            int32_t p = sim[a * size + a] + sim[b * size + b] - 2 * sim[a * size + b];
             m.pen_[a * size + b] = p < 0 ? 0 : p;
         }
     }

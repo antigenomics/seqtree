@@ -4,7 +4,7 @@ build-backend = "scikit_build_core.build"
 
 [project]
 name = "seqtree"
-version = "0.0.1"
+version = "0.0.2"
 description = "Fast fuzzy search over biological sequences (C++ core, Python bindings)"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -25,6 +25,7 @@ dependencies = []
 test = ["pytest>=7.4"]
 bench = ["huggingface_hub", "pandas", "psutil"]
 docs = ["sphinx", "pydata-sphinx-theme", "nbsphinx"]
+control = ["huggingface_hub"]  # only needed to download controls larger than the bundled subset
 
 [project.urls]
 Homepage = "https://github.com/antigenomics/seqtree"
