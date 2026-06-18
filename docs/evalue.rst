@@ -18,9 +18,15 @@ repertoire, for a query ``q`` at a fixed scope/budget:
    p_{\mathrm{enrich}} = \Pr\!\big(\mathrm{Poisson}(E) \ge n_{\mathrm{target}}(q)\big).
 
 Redundancy explained by the background process inflates ``n_control`` and hence ``E``, so such hits
-are **not** significant; antigen-driven convergence shows up as ``n_target`` exceeding ``E``. This
-formalizes and generalizes the neighbourhood-enrichment idea of ALICE, and reduces to the classical
-Karlin–Altschul E-value when the background is an i.i.d. product measure and alignments are ungapped.
+are **not** significant; antigen-driven convergence shows up as ``n_target`` exceeding ``E``. This is
+the **TCRNET** approach — counting sequence neighbours against a real-world control repertoire —
+put on a rigorous, finite-sample footing; it reduces to the classical Karlin–Altschul E-value when
+the background is an i.i.d. product measure and alignments are ungapped.
+
+An empirical control already carries the relevant background (convergent recombination, public
+clones). Where a generative null is needed instead, the V(D)J generation probability is used, with an
+average thymic-selection factor :math:`q \approx 1/2.7` converting it to a pre-immune frequency
+(:math:`f \approx q\,P_\mathrm{gen}`).
 
 Usage
 -----
