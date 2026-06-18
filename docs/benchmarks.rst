@@ -39,9 +39,11 @@ E-value benchmark
 
 ``bench/bench_evalue.py`` is the **true E-value benchmark**. For a target repertoire (VDJdb,
 antigen-selected) scored against the ``airr_control`` background, at each scope/budget it reports the
-total edit paths explored, the number of **collisions** (references re-reached via a different edit
-path — non-zero only for ``seqtm`` with indels), the number of **unique hits**, and the **fraction of
-unique hits whose query E-value falls below a threshold**:
+number of **neighbours** (distinct hits, **excluding exact/self matches** — the queries are members
+of the target, so the self-match is dropped per the punctured-null lemma), the **exact** self-hits
+removed, the number of **collisions** (references re-reached via a different edit path — non-zero only
+for ``seqtm`` with indels), and the **fraction of neighbours called significant** both at fixed
+E-value cutoffs and after a Benjamini–Hochberg FDR correction across the query family:
 
 .. code-block:: fish
 
@@ -49,10 +51,11 @@ unique hits whose query E-value falls below a threshold**:
    env RUN_BENCHMARK=1 python bench/bench_evalue.py --target-size 200000 --control-size 2000000
 
 The discriminating result is the contrast between query sets: antigen-selected VDJdb queries produce
-orders of magnitude more unique hits and are almost entirely significant at ``E < 1``, whereas
-background (control) queries produce almost none and are not significant. The smallest resolvable
-E-value is :math:`N/M`, so finer thresholds (``E < 0.01``) require a control much larger than the
-target (the ``RUN_BENCHMARK`` tier uses :math:`M = 2{,}000{,}000`).
+orders of magnitude more neighbours and are largely significant (BH FDR < 0.05), whereas background
+(control) queries produce almost none and survive no correction. The smallest resolvable E-value is
+:math:`N/M`, so finer fixed cutoffs (``E < 0.01``) require a control much larger than the target (the
+``RUN_BENCHMARK`` tier uses :math:`M = 2{,}000{,}000`); the BH correction is what makes the
+fixed-cutoff fractions trustworthy at small control sizes.
 
 TCR-beta benchmark (gnuplot figures)
 ------------------------------------

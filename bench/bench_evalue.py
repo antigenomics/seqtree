@@ -42,30 +42,48 @@ def scopes(slow):
     return grid
 
 
+def bh_reject(pvals, alpha):
+    """Benjamini-Hochberg: boolean mask of hypotheses rejected at FDR <= alpha."""
+    n = len(pvals)
+    if n == 0:
+        return []
+    order = sorted(range(n), key=lambda i: pvals[i])
+    kmax = 0
+    for rank, idx in enumerate(order, start=1):
+        if pvals[idx] <= rank / n * alpha:
+            kmax = rank
+    reject = [False] * n
+    for rank, idx in enumerate(order, start=1):
+        if rank <= kmax:
+            reject[idx] = True
+    return reject
+
+
 def run_block(name, target, control, queries, threads):
     N = len(target)
     print(f"\n## {name}: target N={N}  control M={len(control)}  queries={len(queries)}")
-    cols = ["scope", "raw_paths", "collisions", "unique_hits", "median_E"]
-    cols += [f"fracSig(E<{t})" for t in E_THRESHOLDS] + ["qps"]
+    cols = ["scope", "neighbours", "exact", "collisions", "median_E"]
+    cols += [f"fracSig(E<{t})" for t in E_THRESHOLDS] + ["fracSig(BH<0.05)", "qps"]
     print("\t".join(cols))
     for label, params in scopes(False):
         t0 = time.perf_counter()
         res = target.search_batch(queries, params, threads)
         coll = target.collisions_batch(queries, params, threads)
         dt = time.perf_counter() - t0
-        ev = evalues(target, control, queries, params, threads)
+        # exclude exact (distance-0 / self) hits -- queries may be members of target/control
+        ev = evalues(target, control, queries, params, threads, exclude_exact=True)
 
-        nuniq = [len(r) for r in res]
-        total_unique = sum(nuniq) or 1
-        total_coll = sum(coll)
+        nbr = [sum(1 for h in r if h.score > 0) for r in res]   # neighbours (excl. exact)
+        n_exact = sum(len(r) for r in res) - sum(nbr)
+        total_nbr = sum(nbr) or 1
         Es = sorted(e["E"] for e in ev)
         med_e = Es[len(Es) // 2] if Es else 0.0
-        fracs = [
-            sum(nu for nu, e in zip(nuniq, ev) if e["E"] < t) / total_unique for t in E_THRESHOLDS
-        ]
+        e_fracs = [sum(b for b, e in zip(nbr, ev) if e["E"] < t) / total_nbr for t in E_THRESHOLDS]
+        rej = bh_reject([e["p_enrichment"] for e in ev], 0.05)
+        bh_frac = sum(b for b, r in zip(nbr, rej) if r) / total_nbr
         qps = len(queries) / dt if dt else float("inf")
-        row = [label, sum(nuniq) + total_coll, total_coll, sum(nuniq), f"{med_e:.3g}"]
-        row += [f"{f:.3f}" for f in fracs] + [f"{qps:,.0f}"]
+        row = [label, sum(nbr), n_exact, sum(coll), f"{med_e:.3g}"]
+        row += [f"{f:.3f}" for f in e_fracs] + [f"{bh_frac:.3f}", f"{qps:,.0f}"]
         print("\t".join(str(x) for x in row), flush=True)
 
 

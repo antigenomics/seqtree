@@ -39,6 +39,23 @@ def test_planted_cluster_is_significant_background_is_not():
     assert rb["p_enrichment"] > 0.01     # not significant
 
 
+def test_exclude_exact_drops_self_hit():
+    rng = random.Random(7)
+    q = "CASSPGTEAFF"
+    mut = []
+    for _ in range(2):
+        s = list(q)
+        s[rng.randrange(len(q))] = rng.choice(AA)
+        mut.append("".join(s))
+    target = seqtree.Index.build([q] + mut, alphabet="aa")  # q is a member of the target
+    control = seqtree.Index.build(_rand(5000, rng), alphabet="aa")
+    p = seqtree.SearchParams(max_subs=1, engine="seqtm")
+
+    full = evalues(target, control, [q], p, exclude_exact=False)[0]
+    punc = evalues(target, control, [q], p, exclude_exact=True)[0]
+    assert punc["n_target"] == full["n_target"] - 1  # the exact self-match is removed
+
+
 def test_evalue_monotone_in_scope():
     rng = random.Random(1)
     db = _rand(10000, rng)
