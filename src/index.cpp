@@ -3,6 +3,8 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cstring>
+#include <fstream>
 #include <limits>
 #include <mutex>
 #include <stdexcept>
@@ -13,6 +15,76 @@ namespace seqtree {
 
 Index::Index() = default;
 Index::~Index() = default;
+
+namespace {
+constexpr char kMagic[4] = {'S', 'Q', 'T', 'R'};
+constexpr uint32_t kVersion = 1;
+
+template <class T>
+void write_vec(std::ostream& os, const std::vector<T>& v) {
+    uint64_t n = v.size();
+    os.write(reinterpret_cast<const char*>(&n), sizeof n);
+    if (n) os.write(reinterpret_cast<const char*>(v.data()), std::streamsize(n * sizeof(T)));
+}
+template <class T>
+void read_vec(std::istream& is, std::vector<T>& v) {
+    uint64_t n = 0;
+    is.read(reinterpret_cast<char*>(&n), sizeof n);
+    v.resize(n);
+    if (n) is.read(reinterpret_cast<char*>(v.data()), std::streamsize(n * sizeof(T)));
+}
+}  // namespace
+
+void Index::save(const std::string& path) const {
+    std::ofstream os(path, std::ios::binary);
+    if (!os) throw std::runtime_error("seqtree: cannot open '" + path + "' for writing");
+    const Trie& t = *trie_;
+    os.write(kMagic, 4);
+    os.write(reinterpret_cast<const char*>(&kVersion), sizeof kVersion);
+    uint8_t alpha = static_cast<uint8_t>(t.codec.alphabet());
+    os.write(reinterpret_cast<const char*>(&alpha), 1);
+    os.write(reinterpret_cast<const char*>(&t.max_depth), sizeof(uint32_t));
+    write_vec(os, t.nodes);
+    write_vec(os, t.edge_code);
+    write_vec(os, t.edge_child);
+    write_vec(os, t.ref_ids);
+    write_vec(os, t.str_off);
+    uint64_t sd = t.str_data.size();
+    os.write(reinterpret_cast<const char*>(&sd), sizeof sd);
+    if (sd) os.write(t.str_data.data(), std::streamsize(sd));
+    if (!os) throw std::runtime_error("seqtree: write failed for '" + path + "'");
+}
+
+std::unique_ptr<Index> Index::load(const std::string& path) {
+    std::ifstream is(path, std::ios::binary);
+    if (!is) throw std::runtime_error("seqtree: cannot open '" + path + "'");
+    char magic[4] = {0, 0, 0, 0};
+    uint32_t version = 0;
+    is.read(magic, 4);
+    is.read(reinterpret_cast<char*>(&version), sizeof version);
+    if (std::memcmp(magic, kMagic, 4) != 0 || version != kVersion)
+        throw std::runtime_error("seqtree: '" + path + "' is not a v" +
+                                 std::to_string(kVersion) + " seqtree index");
+    uint8_t alpha = 0;
+    is.read(reinterpret_cast<char*>(&alpha), 1);
+
+    std::unique_ptr<Index> idx(new Index());
+    idx->trie_ = std::make_unique<Trie>();
+    Trie& t = *idx->trie_;
+    t.codec = Codec(static_cast<Alphabet>(alpha));
+    is.read(reinterpret_cast<char*>(&t.max_depth), sizeof(uint32_t));
+    read_vec(is, t.nodes);
+    read_vec(is, t.edge_code);
+    read_vec(is, t.edge_child);
+    read_vec(is, t.ref_ids);
+    read_vec(is, t.str_off);
+    uint64_t sd = 0;
+    is.read(reinterpret_cast<char*>(&sd), sizeof sd);
+    t.str_data.resize(sd);
+    if (sd) is.read(&t.str_data[0], std::streamsize(sd));
+    if (!is) throw std::runtime_error("seqtree: truncated or corrupt index '" + path + "'");
+    return idx;
+}
 
 std::unique_ptr<Index> Index::build(std::vector<std::string> refs, Alphabet a) {
     std::unique_ptr<Index> idx(new Index());

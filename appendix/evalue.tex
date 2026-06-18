@@ -1,0 +1,330 @@
+\documentclass[11pt]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{mathtools}
+\usepackage[hidelinks]{hyperref}
+
+\newtheorem{theorem}{Theorem}
+\newtheorem{lemma}{Lemma}
+\newtheorem{proposition}{Proposition}
+\newtheorem{corollary}{Corollary}
+\theoremstyle{definition}
+\newtheorem{definition}{Definition}
+\newtheorem{assumption}{Assumption}
+\theoremstyle{remark}
+\newtheorem{remark}{Remark}
+
+\DeclareMathOperator{\Poisson}{Poisson}
+\DeclareMathOperator{\Binomial}{Binomial}
+\DeclareMathOperator{\Var}{Var}
+\DeclareMathOperator{\dTV}{d_{\mathrm{TV}}}
+\newcommand{\Pgen}{P_{\mathrm{gen}}}
+\newcommand{\Pzero}{P_{0}}
+\newcommand{\ball}[2]{B_{#1}(#2)}
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\E}{\mathbb{E}}
+\newcommand{\Prob}{\mathbb{P}}
+\newcommand{\one}{\mathbf{1}}
+
+\title{A control-calibrated E-value for fuzzy TCR sequence search\\ over biologically redundant reference sets}
+\author{seqtree --- technical appendix}
+\date{}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+We derive a BLAST-style E-value~\cite{Karlin1990,Altschul1990} for ``hits'' returned by fuzzy
+search over T-cell receptor (TCR) CDR3 sequences, adapted to the defining difficulty of immune
+repertoires: the reference set is highly \emph{redundant}, and the redundancy is biological
+(convergent V(D)J recombination, public clones, clonal expansion) rather than statistical noise.
+The classical Karlin--Altschul theory assumes a database of independent, identically distributed
+letters; under that null, redundancy-driven near-matches are absurdly significant. We replace the
+i.i.d.-letter null with an \emph{empirical background} $\Pzero$ estimated from a matched control
+repertoire, retain the Poisson/Gumbel limit superstructure with an explicit non-asymptotic error
+bound (Chen--Stein / Le~Cam~\cite{Arratia1990,LeCam1960}), and handle clonal over-dispersion by
+collapsing to unique clonotypes. The resulting E-value is automatically deflated for hits that the
+generation process alone explains and is large only for antigen-driven convergence---formalizing
+and generalizing the neighbourhood-enrichment idea of ALICE~\cite{Pogorelyy2019}. We show the
+classical Karlin--Altschul E-value is the product-measure, ungapped special case.
+\end{abstract}
+
+\section{Introduction: the redundancy problem}
+
+Given a query CDR3 $q$ and a target set $D$ (e.g.\ VDJdb), fuzzy search returns the neighbours of
+$q$ within a fixed scope/budget $\theta$. We want a significance value for such hits. BLAST answers
+this for protein search with the Karlin--Altschul E-value $E = K\,m\,n\,e^{-\lambda^\ast S}$, valid
+when the database is a string of i.i.d.\ letters with background frequencies $p_i$ and
+$\lambda^\ast$ solves $\sum_{ij} p_i p_j e^{\lambda^\ast s_{ij}} = 1$~\cite{Karlin1990,Karlin1993}.
+
+Immune repertoires violate the i.i.d.\ assumption catastrophically. CDR3s are produced by V(D)J
+recombination, whose generation probability $\Pgen$~\cite{Marcou2018,Sethna2019} is sharply
+non-uniform; convergent recombination makes some sequences enormously over-represented; clonal
+expansion and public clones create exact and near duplicates. A query in a common, high-$\Pgen$
+region of sequence space has many neighbours \emph{for purely generative reasons}. An i.i.d.\ null
+would flag these as wildly significant, which is biologically meaningless. The signal we actually
+want is the opposite: \emph{more} neighbours than the background generative process predicts, the
+hallmark of antigen-driven selection.
+
+Our approach: define the null by an empirical background distribution $\Pzero$ that carries the
+generative and baseline-sharing redundancy but no antigen-driven enrichment, estimate the
+null neighbourhood mass from a matched control repertoire (the user-supplied
+\texttt{isalgo/airr\_control} set), and calibrate the E-value against it. This is a rigorous,
+finite-sample generalization of Karlin--Altschul to a non-i.i.d., biologically structured null, and
+a statistical formalization of ALICE-style neighbourhood enrichment~\cite{Pogorelyy2019}.
+
+\section{Setup and notation}\label{sec:setup}
+
+Let $\Sigma$ be the amino-acid alphabet and $\mathcal{X} = \bigcup_{L\ge 0}\Sigma^L$ the space of
+CDR3 sequences. The search engine defines, for a query $q$ and budget $\theta\ge 0$, a non-negative
+score $s_\theta(q,x)$ and a \emph{ball}
+\begin{equation}\label{eq:ball}
+  \ball{\theta}{q} = \{x \in \mathcal{X} : s(q,x) \le \theta\}, \qquad s(q,q)=0,\; s\ge 0.
+\end{equation}
+The score need not be a metric: with a substitution matrix it is the squared-distance penalty
+$\mathrm{pen}(a,b)=s_{aa}+s_{bb}-2s_{ab}$ summed along the optimal alignment (plus gap costs); in
+unit-cost mode it is an edit count. Both define a legitimate ball. We work with two background laws
+on $\mathcal{X}$: the \emph{realized-repertoire background} $\Pzero$ (what a healthy, unselected
+repertoire instantiates) and the \emph{generation law} $\Pgen$ (the V(D)J model). Let
+\begin{equation}\label{eq:pi0}
+  \pi_0(q,\theta) = \Pzero\!\left(\ball{\theta}{q}\right) = \sum_{x \in \ball{\theta}{q}} \Pzero(x),
+  \qquad
+  \pi_{\mathrm{gen}}(q,\theta) = \Pgen\!\left(\ball{\theta}{q}\right).
+\end{equation}
+A control sample $C=(C_1,\dots,C_M)$ and a target set $D$ are given. Crucially, all counts are over
+\emph{distinct clonotypes}: the engine deduplicates hits by reference id, so
+\begin{equation}
+  n_S(q,\theta) = \#\{\,x \in S \text{ distinct} : x \in \ball{\theta}{q}\,\}, \qquad S\in\{C,D\}.
+\end{equation}
+Write $N=|D|$ (unique clonotypes; see \S\ref{sec:overdispersion}).
+
+\begin{assumption}[Exchangeability under $H_0$]\label{ass:exch}
+Under the null, the unique clonotypes of $D$ are exchangeable with marginal law $\Pzero$.
+\end{assumption}
+\begin{assumption}[Independent control draws]\label{ass:indep}
+The unique clonotypes of $C$ are i.i.d.\ (or exchangeable) $\sim \Pzero$.
+\end{assumption}
+\begin{assumption}[Background match]\label{ass:match}
+$C$ and $D$ share the background $\Pzero$ (same generation $+$ sampling process, matched chain,
+species and length composition). All validity is conditional on Assumption~\ref{ass:match}.
+\end{assumption}
+
+\section{Null hypothesis and estimator hierarchy}\label{sec:null}
+
+\begin{definition}[Per-query null]
+$H_0(q)$: the neighbours of $q$ in $D$ arise from $\Pzero$ with no antigen-driven excess, i.e.\
+each $x\in D$ satisfies $\E[\one(x\in\ball{\theta}{q})] = \pi_0(q,\theta)$. The alternative
+$H_1(q)$ posits excess mass $\pi_D(q,\theta) > \pi_0(q,\theta)$.
+\end{definition}
+
+The estimand is the per-query Poisson intensity $\lambda(q,\theta) = N\,\pi_0(q,\theta)$. Two
+estimators of $\pi_0$ target \emph{different} nulls and must not be conflated.
+\begin{itemize}
+  \item \textbf{Control / Monte-Carlo (primary):} $\hat\pi(q,\theta) = n_C(q,\theta)/M$, unbiased
+  for $\Pzero(\ball{\theta}{q})$, with $M\hat\pi \sim \Binomial(M,\pi_0)$ under
+  Assumption~\ref{ass:indep}. It captures the \emph{realized} background, including public-clone
+  sharing and finite-repertoire convergence.
+  \item \textbf{Generation / analytic (cross-check):} $\hat\pi_{\mathrm{gen}}(q,\theta) =
+  \sum_{x\in\ball{\theta}{q}} \Pgen(x)$, computed by enumerating the (small, for small $\theta$)
+  ball with the engine and weighting by OLGA~\cite{Sethna2019}. It targets the pure generation null
+  $\Pgen(\ball{\theta}{q})$, which omits selection and sampling.
+\end{itemize}
+
+\begin{lemma}[The two nulls differ]\label{lem:hierarchy}
+In general $\Pzero \ne \Pgen$: thymic and peripheral selection deplete some motifs while
+finite-sample public-clone sharing enriches others, so neither $\pi_0 \le \pi_{\mathrm{gen}}$ nor
+the reverse holds universally. Hence $\hat\pi_{\mathrm{gen}}$ is used as a variance-reducing control
+variate and as a fallback for queries too rare for the control (\S\ref{sec:precision}), not as a
+substitute for $\hat\pi$.
+\end{lemma}
+
+\section{Poisson approximation with an explicit error bound}\label{sec:poisson}
+
+Fix $q,\theta$. For the unique clonotypes $x_1,\dots,x_N$ of $D$ set
+$X_i=\one(x_i\in\ball{\theta}{q})$, $p_i=\E X_i=\pi_0$, $W=\sum_i X_i$, $\lambda=\sum_i p_i = N\pi_0$,
+and let $Z\sim\Poisson(\lambda)$.
+
+\begin{theorem}[Chen--Stein bound \cite{Arratia1989,Arratia1990}]\label{thm:cs}
+For any dependency neighbourhoods $\{B_i \ni i\}$,
+\begin{equation}\label{eq:cs}
+  \dTV\!\big(\mathcal{L}(W),\Poisson(\lambda)\big) \le b_1+b_2+b_3,
+\end{equation}
+with $b_1=\sum_i\sum_{j\in B_i}p_ip_j$, $b_2=\sum_i\sum_{j\in B_i, j\ne i}\E[X_iX_j]$, and
+$b_3=\sum_i \E\big|\,\E[X_i-p_i\mid \sigma(X_j: j\notin B_i)]\,\big|$.
+\end{theorem}
+
+\begin{corollary}[Le Cam regime \cite{LeCam1960}]\label{cor:lecam}
+If the collapsed clonotypes are independent under $H_0$, take $B_i=\{i\}$; then $b_2=b_3=0$ and
+\begin{equation}\label{eq:lecam}
+  \dTV\!\big(\mathcal{L}(W),\Poisson(\lambda)\big) \le \sum_i p_i^2 = N\pi_0^2 = \lambda\,\pi_0 .
+\end{equation}
+The bound is small precisely in the regime of interest: a rare ball $\pi_0\ll 1$ with moderate
+$\lambda$ gives error $\le \lambda\pi_0 \to 0$.
+\end{corollary}
+
+\begin{corollary}[Void and tail probabilities]\label{cor:void}
+With $w=n_D(q,\theta)$ observed,
+\begin{align}
+  p_{\mathrm{any}}(q,\theta) &= \Prob(W\ge 1) = 1-e^{-\lambda} + O(N\pi_0^2), \label{eq:pany}\\
+  p(q,\theta) &= \Prob(Z \ge w) = 1 - \sum_{k<w} \frac{e^{-\lambda}\lambda^k}{k!},
+  \quad \text{error} \le 2(b_1+b_2+b_3). \label{eq:ptail}
+\end{align}
+\end{corollary}
+
+\begin{remark}[Where biology enters]
+Convergent recombination makes the dependency neighbourhood $B_i$ nontrivial: $j\in B_i$ when $x_i$
+and $x_j$ share a high-$\Pgen$ motif. The term $b_2=\sum_i\sum_{j\in B_i}\E[X_iX_j]$ is the excess
+\emph{pairwise} ball co-occupancy. Under $H_0$ it is controlled by the pairwise ball mass, estimable
+from the control by counting \emph{pairs} of control sequences both in $\ball{\theta}{q}$; the
+Poisson regime holds when this estimate is $\ll\lambda$. The very same $b_2$ is inflated under $H_1$
+(antigen-driven clusters co-occupy the ball), so it is simultaneously the null error term and the
+quantity carrying the signal.
+\end{remark}
+
+\section{Clonal redundancy and over-dispersion}\label{sec:overdispersion}
+
+\begin{proposition}[Collapsing restores Poisson]\label{prop:collapse}
+Let the raw target carry clonotypes with multiplicities (clone sizes) $m_x$. Counting reads/cells in
+the ball gives a compound-Poisson total $T=\sum_{k=1}^{K} m_k$ with $K\sim\Poisson(\lambda)$ and
+$m_k$ i.i.d.\ $\sim G$, so $\E T=\lambda\mu_G$ and $\Var T=\lambda\,\E[m^2]$, with over-dispersion
+index $\Var T/\E T=\E[m^2]/\mu_G\ge 1$. Collapsing to unique clonotypes is the projection $G\equiv1$,
+which removes multiplicity-driven over-dispersion and returns the Poisson count $W$ of
+\S\ref{sec:poisson}. We therefore deduplicate $C$ and $D$ to unique clonotypes by default.
+\end{proposition}
+
+\begin{proposition}[Negative-binomial robustness check]\label{prop:nb}
+If multiplicities must be modelled (e.g.\ read-level tests) and $G$ is geometric, $T$ is
+negative-binomial; report the NB tail $\Prob(\mathrm{NB}\ge w)$ with mean $\lambda\mu_G$ and
+dispersion estimated from observed clone sizes. Under $H_1$ antigen-driven clones are stochastically
+larger, so power is retained; the collapsed Poisson test remains the assumption-light default.
+\end{proposition}
+
+\begin{proposition}[tf--idf is self-information weighting]\label{prop:tfidf}
+Weighting each target hit $x$ by its background self-information $w(x) = -\log\Pzero(\{x\}$-ball$)$
+makes the expected per-hit contribution constant under $H_0$; the inverse-document-frequency weight
+is exactly the inverse background ball mass, and the term frequency is the clone multiplicity. In the
+rare regime the control-set E-value satisfies $E \approx e^{-\sum_{x} \mathrm{idf}(x)}$, so the
+``control-set'' and ``tf--idf'' approaches to redundancy are one object.
+\end{proposition}
+
+\section{The E-value and multiple testing}\label{sec:evalue}
+
+\begin{definition}[E-value]\label{def:evalue}
+For a query family $\mathcal{Q}$, the expected number of background hits is
+\begin{equation}\label{eq:evalue}
+  E_{\mathrm{tot}}(\theta) = \E_{H_0}[\#\text{hits}] = \sum_{q\in\mathcal{Q}} N\,\pi_0(q,\theta)
+  = \sum_{q\in\mathcal{Q}} \lambda(q,\theta).
+\end{equation}
+The per-query specialization $\mathcal{Q}=\{q\}$ gives the BLAST-convention E-value
+$E(q,\theta)=N\pi_0(q,\theta)$, estimated by
+\begin{equation}\label{eq:Ehat}
+  \widehat E(q,\theta) = \frac{N}{M}\, n_C(q,\theta), \qquad p_{\mathrm{any}} = 1-e^{-\widehat E}.
+\end{equation}
+\end{definition}
+
+\begin{proposition}[Assumption-free expectation]\label{prop:linearity}
+Equation~\eqref{eq:evalue} holds by linearity of expectation regardless of any dependence among
+hits (clonal, convergent, or across $\mathcal{Q}$). Consequently $\Prob(\#\text{false hits}\ge 1)\le
+E_{\mathrm{tot}}$ by Markov's inequality, and $E_{\mathrm{tot}}$ bounds the expected number of false
+discoveries. This robustness---no independence needed for the \emph{mean}---is why the E-value, not
+the Poisson tail, is the primary report.
+\end{proposition}
+
+\section{How large must the control be?}\label{sec:precision}
+
+Since $M\hat\pi\sim\Binomial(M,\pi_0)$, $\Var\hat\pi=\pi_0(1-\pi_0)/M$ and the relative error is
+$\mathrm{CV}(\hat\pi)\approx (M\pi_0)^{-1/2}$.
+\begin{proposition}[Resolution]\label{prop:resolution}
+To resolve a target E-value $E^\ast=N\pi_0$ to relative error $\rho$ requires
+\begin{equation}\label{eq:resolution}
+  M \gtrsim \frac{1}{\rho^2\pi_0} = \frac{N}{\rho^2 E^\ast}.
+\end{equation}
+Resolving $E^\ast\sim 1$ to $10\%$ thus needs $M\sim 100\,N$.
+\end{proposition}
+\begin{proposition}[Empty-ball regime]\label{prop:zero}
+If $n_C=0$, the point estimate $\hat\pi=0$ is degenerate; use the rule of three $\pi_0 \lesssim 3/M$
+(95\%), or a $\mathrm{Beta}(n_C+a,\,M-n_C+b)$ posterior, which propagates control uncertainty into a
+Poisson--Gamma (negative-binomial) posterior-predictive p-value for $n_D$. The implementation reports
+the rule-of-three upper bound $\widehat E \le 3N/M$ when $n_C=0$.
+\end{proposition}
+When $M$ is inadequate for a rare $q$, the analytic $\hat\pi_{\mathrm{gen}}$ is exact per query for
+any $M$ and serves as the fallback (Lemma~\ref{lem:hierarchy}).
+
+\section{Composition and length are handled automatically}\label{sec:composition}
+
+\begin{proposition}\label{prop:composition}
+Because $\pi_0(q,\theta)=\Pzero(\ball{\theta}{q})$ is computed for the \emph{specific} query $q$, the
+control estimator $n_C(q,\theta)/M$ conditions on $q$'s length and composition automatically: the
+same biases that make $q$ common make $n_C$ large. This is the finite-sample, composition-exact
+analogue of the Karlin--Altschul $K\,mn$ length normalization, which is needed precisely because the
+i.i.d.\ background is query-independent. The only caveat is statistical: rare $q$ require adequate
+$M$ (\S\ref{sec:precision}), else fall back to $\hat\pi_{\mathrm{gen}}$.
+\end{proposition}
+
+\section{The closest hit: an extreme-value law}\label{sec:gumbel}
+
+\begin{theorem}[Poisson $\Rightarrow$ Gumbel]\label{thm:gumbel}
+Let $\lambda(q,t)=N\,\Pzero(\ball{t}{q})$. By the Poisson approximation applied at each radius,
+\begin{equation}
+  \Prob\!\big(S_{\min}(q) > t\big) \approx e^{-\lambda(q,t)} = e^{-N\Pzero(\ball{t}{q})}.
+\end{equation}
+If $\log\Pzero(\ball{t}{q}) \approx a + \beta t$ (log-linear ball-mass growth, the generic regime),
+then the best score $Y=-S_{\min}$, centred at $u_N=(\log N + a)/\beta$, obeys
+$\Prob(Y-u_N\le y) \to \exp(-e^{-\beta y})$, a Gumbel law with scale $1/\beta$. Here $\beta$ is the
+\emph{empirical} ball-mass log-slope (regress $\log n_C(q,t)$ on $t$), not the Karlin--Altschul
+$\lambda^\ast$. (For lattice scores the Gumbel carries the usual periodic correction.)
+\end{theorem}
+
+\section{Relation to Karlin--Altschul}\label{sec:ka}
+
+\begin{theorem}[KA is the product-measure, ungapped case]\label{thm:reduction}
+If $\Pzero=\bigotimes_\ell p$ is a product measure and $s$ is the ungapped additive score, then
+$\Pzero(\ball{\theta}{q})$ factorizes and, by Cram\'er's theorem, $-\frac1{|q|}\log
+\Pzero(\ball{\theta}{q}) \to \lambda^\ast$, the Karlin--Altschul parameter solving $\sum_{ij}p_ip_j
+e^{\lambda^\ast s_{ij}}=1$. The intensity $\lambda(q,\theta)=N\Pzero(\ball{\theta}{q})$ then reduces
+to $E=K\,m\,n\,e^{-\lambda^\ast S}$ with $K$ the Poisson-clumping constant, recovering
+\cite{Karlin1990,Karlin1993,Altschul1997}.
+\end{theorem}
+Thus the present framework generalizes Karlin--Altschul in three ways: (i) the product measure
+$\bigotimes p$ is replaced by the empirical/generative background $\Pzero$; (ii) gaps and
+matrix-weighted balls are admitted via the engine's score; (iii) the asymptotic constants
+$K,\lambda^\ast$ are replaced by a finite-$N$, finite-$M$ non-asymptotic error bound
+(Theorem~\ref{thm:cs}).
+
+\section{The epitope case: a limitation}\label{sec:epitope}
+
+\begin{remark}
+For TCR CDR3, $\Pzero$ is generation/repertoire-driven and a healthy-donor control instantiates it.
+For \emph{epitopes} (MHC-presented peptides) the relevant background is presentation, not V(D)J
+generation. The machinery of \S\S\ref{sec:setup}--\ref{sec:gumbel} applies verbatim with
+$\Pzero:=\Pzero^{\mathrm{pep}}$ and a presented-peptide control, but: (L1) there is no OLGA-style
+closed-form $\Pgen$, so only the empirical estimator survives; (L2) presentation is HLA-restricted,
+so $\Pzero^{\mathrm{pep}}$ is allele-conditional and the control must be HLA-matched or marginalized
+over an HLA frequency distribution; (L3) anchor-residue structure argues for position-weighted ball
+geometry. We therefore claim soundness for epitopes only to the extent that a faithful
+presented-peptide control is available; no generation-based null is claimed there.
+\end{remark}
+
+\section{Practical defaults and algorithm}\label{sec:practice}
+
+\begin{enumerate}
+  \item Deduplicate $C$ and $D$ to unique clonotypes (Proposition~\ref{prop:collapse}).
+  \item Build a \texttt{seqtree} index of $C$; for each query compute $n_C$ and $n_D$ at scope
+  $\theta$ via batched search.
+  \item Report $\widehat E=(N/M)\,n_C$ (Eq.~\eqref{eq:Ehat}), $p_{\mathrm{any}}=1-e^{-\widehat E}$,
+  and $p_{\mathrm{enrich}}=\Prob(\Poisson(\widehat E)\ge n_D)$; use the rule of three when $n_C=0$
+  (Proposition~\ref{prop:zero}).
+  \item Validate the Poisson regime via the pairwise co-occupancy estimate of $b_2$; if inflated,
+  use the negative-binomial check (Proposition~\ref{prop:nb}).
+  \item Size the control by Eq.~\eqref{eq:resolution}; fall back to OLGA $\hat\pi_{\mathrm{gen}}$ for
+  rare queries.
+\end{enumerate}
+
+This is implemented in \texttt{seqtree.evalues}, a thin layer over batched search; the control
+loader \texttt{seqtree.load\_control} supplies a deduplicated background.
+
+\bibliographystyle{plain}
+\bibliography{refs}
+
+\end{document}

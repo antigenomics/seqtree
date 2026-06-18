@@ -67,13 +67,13 @@ TEST_CASE("matrix-weighted budget (seqtrie)") {
     p.engine = Engine::SeqTrie;
     p.matrix = &blosum;
     p.gap_open = 100;        // make indels irrelevant
-    p.max_score_penalty = 6;
+    p.max_score_penalty = 12;
     auto m = run(*idx, "CAT", p);
-    // CAT=0; CAR: T->R penalty 6; WAT: C->W penalty 13 (excluded)
+    // squared-distance penalties: CAT=0; CAR T->R = 5+5-2*(-1)=12; WAT C->W = 9+11-2*(-2)=24 (excluded)
     CHECK(m.count(0));
     CHECK(m[0].score == 0);
     CHECK(m.count(1));
-    CHECK(m[1].score == 6);
+    CHECK(m[1].score == 12);
     CHECK(!m.count(2));
 }
 
