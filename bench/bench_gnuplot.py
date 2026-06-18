@@ -153,9 +153,12 @@ def render(out: Path, key, panels, width=720, panel_h=360):
             lines.append("set xtics (" + ", ".join(f"'{l}' {v}" for l, v in p["xtics"]) + ")")
         else:
             lines.append("set xtics auto")
+        # An empty series label -> notitle (drops it from the legend, e.g. for the
+        # dotted "predicted" companions that share a colour with their dashed "observed").
         lines.append("plot " + ", ".join(
-            f"'{tsv}' using 1:{i + 2} {stl} title columnheader({i + 2})"
-            for i, (_, _, stl) in enumerate(p["series"])))
+            f"'{tsv}' using 1:{i + 2} {stl} "
+            + (f"title columnheader({i + 2})" if lbl else "notitle")
+            for i, (lbl, _, stl) in enumerate(p["series"])))
     if n > 1:
         lines.append("unset multiplot")
     (out / f"{key}.gp").write_text("\n".join(lines) + "\n")

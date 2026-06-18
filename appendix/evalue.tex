@@ -4,13 +4,7 @@
 \usepackage{amsmath,amssymb,amsthm}
 \usepackage{mathtools}
 \usepackage{graphicx}
-\usepackage[affil-it]{authblk}
 \usepackage[hidelinks]{hyperref}
-
-% Compact author/affiliation block (authblk; affiliations italicised by affil-it).
-\renewcommand\Authfont{\normalsize\bfseries}
-\renewcommand\Affilfont{\small}
-\setlength{\affilsep}{0.6em}
 
 \newtheorem{theorem}{Theorem}
 \newtheorem{lemma}{Lemma}
@@ -36,11 +30,16 @@
 \newcommand{\one}{\mathbf{1}}
 
 \title{A control-calibrated E-value for fuzzy TCR sequence search\\ over biologically redundant reference sets}
-\author[1,2,3]{Mikhail Shugay\thanks{\href{mailto:mikhail.shugay@gmail.com}{mikhail.shugay@gmail.com}}}
-\affil[1]{Institute of Translational Medicine, Russian National Medical State University, Moscow, Russia}
-\affil[2]{Department of Genomics of Adaptive Immunity, Shemyakin--Ovchinnikov Institute of Bioorganic Chemistry RAS, Moscow, Russia}
-\affil[3]{Institute of Molecular Biology NAS RA, Erevan, Armenia}
-\date{\small\textit{seqtree technical appendix}}
+% Affiliations under the author via \date (article-class idiom, no extra packages).
+\author{Mikhail Shugay\textsuperscript{1,2,3}\thanks{Correspondence:
+  \href{mailto:mikhail.shugay@gmail.com}{mikhail.shugay@gmail.com}}}
+\date{%
+  \small
+  \textsuperscript{1}Institute of Translational Medicine, Russian National Medical State University, Moscow, Russia\\
+  \textsuperscript{2}Department of Genomics of Adaptive Immunity, Shemyakin--Ovchinnikov Institute of Bioorganic Chemistry RAS, Moscow, Russia\\
+  \textsuperscript{3}Institute of Molecular Biology NAS RA, Erevan, Armenia\\[6pt]
+  \normalsize\textit{seqtree technical appendix}%
+}
 
 \begin{document}
 \maketitle
@@ -415,11 +414,11 @@ with no change to the search or the background.
 \begin{figure}[t]
   \centering
   \includegraphics[width=\linewidth]{epitope_detection.pdf}
-  \caption{Epitope detection complexity (\texttt{bench/bench\_epitope.py}). Within-set neighbour
-  structure (top) and the subsampled fraction called significant (Benjamini--Hochberg, FDR $<0.05$)
-  versus sampled depth $n$ (bottom), for the convergent GIL and the diffuse NLV A*02 repertoires at
-  scope $\theta=1$. GIL's dominant cluster is recovered an order of magnitude sooner than NLV's
-  diffuse one, matching Eq.~\eqref{eq:phi}.}
+  \caption{Epitope detection complexity (\texttt{bench/bench\_epitope.py}): fraction called
+  significant (Benjamini--Hochberg, FDR $<0.05$) versus sampled depth $n$ for the convergent GIL
+  and the diffuse NLV A*02 repertoires. \textbf{Dashed} = observed; \textbf{dotted} = the
+  degree-distribution prediction of Eq.~\eqref{eq:phi}; colour denotes the epitope (NLV / GIL).
+  GIL's dominant cluster is recovered an order of magnitude sooner than NLV's diffuse one.}
   \label{fig:epitope}
 \end{figure}
 

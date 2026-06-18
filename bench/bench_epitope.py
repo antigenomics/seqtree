@@ -33,7 +33,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import seqtree as st
 from seqtree.evalue import evalues
 
-from bench_gnuplot import render, style  # shared gnuplot helpers
+from bench_gnuplot import render  # shared gnuplot helper
 
 AA = set("ACDEFGHIKLMNPQRSTVWY")
 EPITOPES = {"NLV (NLVPMVATV)": "NLVPMVATV", "GIL (GILGFVFTL)": "GILGFVFTL"}
@@ -146,8 +146,12 @@ def main():
                   f"{len(sizes)}\t{sizes[0]}\t{sing_frac:.3f}")
             obs = [detect_fraction(members, control, scope, d, random.Random(args.seed + d)) for d in depths]
             pred = [predicted_fraction(deg, K, d) for d in depths]
-            obs_series.append((f"{name} observed", obs, style(COLOR[name], "seqtm")))
-            pred_series.append((f"{name} predicted", pred, style(COLOR[name], "seqtrie")))
+            # observed = dashed, predicted = dotted (same colour per epitope); legend shows
+            # only the two epitopes (NLV / GIL), predicted lines are unlabelled.
+            short = name.split()[0]
+            c = COLOR[name]
+            obs_series.append((short, obs, f"with linespoints lw 2 lc rgb '{c}' dt 2 pt 7 ps 0.6"))
+            pred_series.append(("", pred, f"with lines lw 2 lc rgb '{c}' dt 3"))
         panels.append({"title": f"epitope detection vs sampling depth (scope {scope}, BH FDR<0.05)",
                        "xlabel": "sampled TCRs (depth n)", "ylabel": "fraction significant",
                        "xs": depths, "logx": True,
