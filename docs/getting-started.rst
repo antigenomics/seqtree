@@ -5,11 +5,16 @@ Install
 -------
 
 Prebuilt wheels are published on `PyPI <https://pypi.org/project/seqtree/>`_ for CPython
-3.10–3.13 (Linux, macOS, Windows):
+3.10–3.13 on **Linux x86-64**, **macOS arm64 (Apple Silicon)**, and **Windows x86-64**:
 
 .. code-block:: console
 
    pip install seqtree
+
+.. note::
+
+   There are no Intel/x86-64 macOS wheels — Intel Macs build from source (below), which only needs
+   a C++17 compiler and CMake.
 
 To build the C++17/20 core + pybind11 binding from a clone instead:
 

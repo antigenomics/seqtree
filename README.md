@@ -23,11 +23,23 @@ Two search engines over one trie:
 `(ref_id, score, n_subs, n_ins, n_dels)`. Downstream libraries map `ref_id` back
 to their own payloads (V gene, MHC, counts) and filter.
 
+Beyond search, seqtree ships:
+
+- **Substitution matrices** — built-in `BLOSUM62` and `PAM50`, plus custom matrices via
+  `SubstitutionMatrix.from_similarity` (Gram-distance penalty `s(a,a)+s(b,b)−2·s(a,b)`).
+- **E-values / significance** — calibrate hit counts against a background control repertoire
+  (`load_control` + `evalues`), the TCRNET approach on a finite-sample footing. See the
+  [E-value guide](https://antigenomics.github.io/seqtree/evalue.html).
+
 ## Install
 
 ```fish
-pip install seqtree       # prebuilt wheels for CPython 3.10–3.13 (Linux/macOS/Windows)
+pip install seqtree       # prebuilt wheels for CPython 3.10–3.13
 ```
+
+Prebuilt wheels cover **Linux x86-64**, **macOS arm64 (Apple Silicon)**, and **Windows x86-64**.
+There are **no Intel/x86-64 macOS wheels** — Intel Macs build from source (see below), which just
+needs a C++17 compiler and CMake (pulled in automatically by the build).
 
 ## Build from source
 
@@ -61,6 +73,13 @@ print(aln.aligned_query, aln.aligned_ref, aln.ops)
 
 # batch-vs-batch (auto-indexes the larger set)
 pairs = seqtree.pairwise_batch(query_set, db_set, p, alphabet="aa")
+
+# E-values against a background control repertoire (TCRNET-style significance)
+control = seqtree.load_control("human_trb_aa", size=1_000_000)
+target = seqtree.Index.build(vdjdb_cdr3s, alphabet="aa")
+for q, r in zip(queries, seqtree.evalues(target, control, queries, p)):
+    if r["p_enrichment"] < 1e-3:
+        print(q, r["E"], r["n_target"], r["n_control"])
 ```
 
 ## Tests
@@ -75,13 +94,16 @@ pytest tests/python              # Python tests
 ## Benchmarks
 
 ```fish
-python bench/bench.py                                   # recall vs ground truth (real VDJdb data)
-python bench/bench_gnuplot.py                           # max-edit-3 throughput → SVG figures (needs gnuplot)
-env RUN_BENCHMARK=1 python bench/bench.py --sizes 1000000 --queries 1000000 --threads 16
+python bench/bench_gnuplot.py        # throughput / scaling / matrix / collisions → SVG (needs gnuplot)
+python bench/bench.py                # recall vs ground truth (real VDJdb data)
+python bench/bench_evalue.py         # true E-value benchmark (target vs background control)
+python bench/bench_evalue_matrix.py  # significance across reference/control/query/scope grid
+python bench/bench_epitope.py        # epitope detection-complexity (GIL vs NLV)
 ```
 
-`bench/bench_gnuplot.py` renders queries/ms vs reference-set size (both engines), peak RSS, and
-alignment-fetch cost. See [docs/benchmarks.rst](docs/benchmarks.rst).
+Figures (throughput, scaling, matrix-scoring overhead, collisions, E-value matrix, epitope
+detection) and the full methodology are in the [benchmarks docs](https://antigenomics.github.io/seqtree/benchmarks.html).
+Set `RUN_BENCHMARK=1` for the large tiers.
 
 ## Development
 
@@ -91,5 +113,6 @@ This repo follows **git-flow**:
 - `dev` — integration branch for day-to-day work.
 - feature branches branch off `dev` and merge back via PR; releases merge `dev` → `master`.
 
-Roadmap (affine gaps, position-specific matrices, e-value / significance via
-control-set and tf-idf, succinct memory packing) lives in [docs/roadmap.rst](docs/roadmap.rst).
+Roadmap (affine gaps, position-specific matrices, succinct memory packing) lives in
+[docs/roadmap.rst](docs/roadmap.rst). Control-set E-values already ship — see the
+[E-value guide](https://antigenomics.github.io/seqtree/evalue.html).

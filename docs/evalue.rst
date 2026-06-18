@@ -7,6 +7,13 @@ V(D)J recombination, public clones, and clonal expansion mean a query in a commo
 sequence space has many neighbours for purely generative reasons. A naive BLAST E-value (an
 i.i.d.-letter null) would call these wildly significant.
 
+.. admonition:: Full derivation
+
+   This page summarises the method; the complete derivation — theorems, finite-sample bounds, the
+   selection Q-factor, multiple-testing correction, and the epitope detection-complexity formalism —
+   is in the technical appendix: :download:`A control-calibrated E-value for fuzzy TCR sequence
+   search (PDF) <_static/evalue-appendix.pdf>` (LaTeX source in ``appendix/evalue.tex``).
+
 seqtree calibrates against a **background control** instead. With a target index of ``N`` unique
 clonotypes (e.g. VDJdb) and a control index of ``M`` unique clonotypes from an unselected
 repertoire, for a query ``q`` at a fixed scope/budget:
