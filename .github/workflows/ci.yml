@@ -43,3 +43,19 @@ jobs:
         run: pip install olga
       - name: Test
         run: pytest tests/python -q
+
+  appendix:
+    name: Compile E-value appendix
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile LaTeX
+        uses: xu-cheng/latex-action@v3
+        with:
+          root_file: evalue.tex
+          working_directory: appendix
+      - name: Upload PDF
+        uses: actions/upload-artifact@v4
+        with:
+          name: evalue-pdf
+          path: appendix/evalue.pdf

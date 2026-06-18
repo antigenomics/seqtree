@@ -25,6 +25,7 @@ dependencies = []
 test = ["pytest>=7.4"]
 bench = ["huggingface_hub", "pandas", "psutil"]
 docs = ["sphinx", "pydata-sphinx-theme", "nbsphinx"]
+control = ["huggingface_hub"]  # only needed to download controls larger than the bundled subset
 
 [project.urls]
 Homepage = "https://github.com/antigenomics/seqtree"

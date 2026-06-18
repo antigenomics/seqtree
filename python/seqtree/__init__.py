@@ -15,6 +15,8 @@ from ._core import (
     alphabet_symbols,
     amino_acids,
 )
+from .control import load_control
+from .evalue import evalues
 
 __all__ = [
     "Index",
@@ -25,4 +27,6 @@ __all__ = [
     "pairwise_batch",
     "alphabet_symbols",
     "amino_acids",
+    "load_control",
+    "evalues",
 ]

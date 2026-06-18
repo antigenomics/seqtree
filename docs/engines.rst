@@ -47,9 +47,13 @@ Scoring
 -------
 
 Scores are non-negative penalties where ``0`` is an exact match. Similarity matrices such as
-BLOSUM62 are converted at load time via ``pen[a][b] = max(sim[a][a], sim[b][b]) - sim[a][b]`` so
-the identity is ``0`` and every edit adds a non-negative cost, which keeps the budget prune valid.
-With no matrix, the cost is unit (1 per substitution and per gap position; linear gaps in v1).
+BLOSUM62 are converted at load time via the Gram→squared-distance transform
+``pen[a][b] = sim[a][a] + sim[b][b] - 2*sim[a][b]`` — i.e. ``‖φ(a) - φ(b)‖²`` if the score is read
+as an inner product ``sim(a,b) = ⟨φ(a), φ(b)⟩``. It is symmetric, ``0`` on the identity, and
+non-negative for BLOSUM/PAM (the diagonal is each row's maximum), so every edit adds a non-negative
+cost and the budget prune stays valid. Note penalties are roughly twice the scale of the raw score
+gaps, so in matrix mode set ``gap_open`` / ``max_penalty`` accordingly. With no matrix, the cost is
+unit (1 per substitution and per gap position; linear gaps in v1).
 
 Alphabets
 ---------

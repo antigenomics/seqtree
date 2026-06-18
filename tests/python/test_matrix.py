@@ -39,18 +39,18 @@ def test_matrix_size_mismatch_raises():
 
 
 def test_seqtm_matrix_score_is_sum_of_substitution_penalties():
-    # PAM50 penalty(a,b) = max(sim(a,a), sim(b,b)) - sim(a,b).
-    # For A->E: 7-(-1)=8; for P->L: 8-(-6)=14; total 22 for the two-substitution ref.
+    # Squared-distance penalty(a,b) = sim(a,a) + sim(b,b) - 2*sim(a,b).
+    # PAM50: A->E = 5+7-2*(-1)=14; P->L = 8+6-2*(-6)=26; total 40 for the two-substitution ref.
     idx = st.Index.build(["CASSLAPGATNEKLFF", "CASSLELGATNEKLFF"], alphabet="aa")
     p = st.SearchParams(matrix="PAM50", max_subs=3, engine="seqtm")
     score = {h.ref_id: h.score for h in idx.search("CASSLAPGATNEKLFF", p)}
     assert score[0] == 0
-    assert score[1] == 22
+    assert score[1] == 40
 
     # With a gap cost too high to ever use, the C++ global alignment of an equal-length
     # pair must agree with the seqtm Hamming-ball score (best score across alignments).
     pa = st.SearchParams(matrix="PAM50", gap_open=100, engine="seqtm")
-    assert idx.align(1, "CASSLAPGATNEKLFF", pa).score == 22
+    assert idx.align(1, "CASSLAPGATNEKLFF", pa).score == 40
 
 
 def test_collisions_only_with_indels():
