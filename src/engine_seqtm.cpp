@@ -14,6 +14,7 @@ struct TmCtx {
     bool hamming;          // no indels allowed
     Mode mode;
     std::unordered_map<uint32_t, uint32_t>* seen;
+    uint64_t* collisions;
     std::vector<Hit>* out;
 
     int32_t sub_pen(uint8_t a, uint8_t b) const {
@@ -29,8 +30,10 @@ void emit(TmCtx& c, uint32_t node, int32_t pen, int ns, int ni, int nd) {
         if (it == c.seen->end()) {
             c.seen->emplace(ref_id, static_cast<uint32_t>(c.out->size()));
             c.out->push_back(Hit{ref_id, pen, uint16_t(ns), uint16_t(ni), uint16_t(nd)});
-        } else if (pen < (*c.out)[it->second].score) {
-            (*c.out)[it->second] = Hit{ref_id, pen, uint16_t(ns), uint16_t(ni), uint16_t(nd)};
+        } else {  // re-reached via a different edit path: a collision
+            ++*c.collisions;
+            if (pen < (*c.out)[it->second].score)
+                (*c.out)[it->second] = Hit{ref_id, pen, uint16_t(ns), uint16_t(ni), uint16_t(nd)};
         }
     }
 }
@@ -74,7 +77,8 @@ void recurse(TmCtx& c, uint32_t node, int qpos, int ns, int ni, int nd, int32_t 
 void search_seqtm(const Trie& trie, const uint8_t* qcodes, int qlen, const Limits& lim,
                   Mode mode, Scratch& s, std::vector<Hit>& out) {
     s.seen.clear();
-    TmCtx c{trie, qcodes, qlen, lim, lim.max_ins == 0 && lim.max_del == 0, mode, &s.seen, &out};
+    TmCtx c{trie, qcodes, qlen, lim, lim.max_ins == 0 && lim.max_del == 0, mode,
+            &s.seen, &s.collisions, &out};
     recurse(c, /*node=*/0, /*qpos=*/0, 0, 0, 0, 0);
 }
 

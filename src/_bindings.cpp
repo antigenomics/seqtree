@@ -150,6 +150,14 @@ py::list py_search_batch(const Index& idx, const std::vector<std::string>& queri
     return out;
 }
 
+std::vector<uint64_t> py_collisions_batch(const Index& idx, const std::vector<std::string>& queries,
+                                          const PyParams& pp, int threads) {
+    auto mat = make_matrix(pp, idx.alphabet());
+    SearchParams cp = to_cpp(pp, mat ? &*mat : nullptr);
+    py::gil_scoped_release release;
+    return idx.collisions_batch(queries, cp, threads);
+}
+
 py::list py_pairwise_batch(const std::vector<std::string>& a, const std::vector<std::string>& b,
                            const PyParams& pp, const std::string& alphabet, int threads) {
     Alphabet alph = parse_alphabet(alphabet);
@@ -304,7 +312,11 @@ PYBIND11_MODULE(_core, m) {
              "Search many queries in parallel (releases the GIL). ``threads=0`` uses all "
              "cores. Returns one hit list per query, in input order.")
         .def("align", &py_align, py::arg("ref_id"), py::arg("query"), py::arg("params"),
-             "Compute a global alignment between ``query`` and a reference, on demand.");
+             "Compute a global alignment between ``query`` and a reference, on demand.")
+        .def("collisions_batch", &py_collisions_batch, py::arg("queries"), py::arg("params"),
+             py::arg("threads") = 0,
+             "Per-query count of seqtm collisions: how often a reference was re-reached via a "
+             "different edit path during branch-and-bound (0 for seqtrie / substitution-only).");
 
     m.def("pairwise_batch", &py_pairwise_batch, py::arg("a"), py::arg("b"), py::arg("params"),
           py::arg("alphabet") = "aa", py::arg("threads") = 0,

@@ -12,6 +12,7 @@ namespace seqtree {
 struct Scratch {
     std::vector<int32_t>  dp;    // seqtrie: (max_depth+2) * (qlen+1) row buffer
     std::unordered_map<uint32_t, uint32_t> seen;  // seqtm: ref_id -> index in out
+    uint64_t collisions = 0;     // seqtm: times a ref was re-reached via a different edit path
 };
 
 // Resolved, engine-independent limits derived from SearchParams + matrix.

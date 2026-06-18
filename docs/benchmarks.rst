@@ -37,123 +37,135 @@ mutated references with known parents), with throughput and peak RSS:
 TCR-beta benchmark (gnuplot figures)
 ------------------------------------
 
-``bench/bench_gnuplot.py`` is the main benchmark. References are **OLGA-generated human TRB CDR3**
-(amino acid) mixed with **mutated VDJdb CDR3**; queries are **1000 fresh OLGA TRB** sequences, and
-all timings are taken over those 1000 queries. It renders seven single-purpose SVG figures with
-gnuplot; in every figure **seqtm is drawn with a long dash and seqtrie with a dash-dot** line.
+``bench/bench_gnuplot.py`` is the main benchmark. It measures **two reference families separately**,
+so the effect of sequence structure is visible rather than averaged away:
+
+* **olga** — OLGA-generated human TRB CDR3 (a generative model, **no antigen motif**); queried with
+  1000 fresh OLGA TRB sequences.
+* **vdjdb** — VDJdb CDR3 **mutated** (real antigen-specific receptors, **with shared motif**
+  structure); queried with 1000 held-out VDJdb CDR3.
+
+Both families are expanded by substitution-mutation to each target size. Timings are over the 1000
+queries. Figures are **vertically stacked two-panel SVGs**; **seqtm is drawn with a long dash and
+seqtrie with a dash-dot**, and the reference family is encoded by colour.
 
 .. code-block:: fish
 
-   python bench/bench_gnuplot.py                       # fast tier: 10k / 100k, seconds-minutes
+   python bench/bench_gnuplot.py                       # fast tier: 10k / 100k
    env RUN_BENCHMARK=1 python bench/bench_gnuplot.py   # full tier: 10k / 100k / 1M / 10M
 
-Each figure is written to ``bench/figures/<key>.svg`` alongside the ``<key>.tsv`` it was drawn from.
-Requires ``gnuplot`` and ``olga-generate_sequences`` on PATH (``pip install olga``).
+Each figure is written to ``bench/figures/<key>.svg`` (+ per-panel ``.tsv``). Requires ``gnuplot``
+and ``olga-generate_sequences`` on PATH (``pip install olga``). The *scaling*, *matrix* and *per-op*
+figures span all reference sizes; the edit-budget sweeps (*scope*, *selectivity*, *collisions*) run
+at one representative size to stay tractable.
 
 A note on engine semantics: at an edit budget *e*, **seqtm** explores the **Hamming ball**
 (``max_subs=e``, substitutions only — the dominant TCR diversity/error mode) while **seqtrie**
-explores the **edit-distance ball** (``max_total_edits=e``, substitutions *and* indels). They
-therefore answer subtly different questions, which is visible as a higher match count for seqtrie at
-the same *e*.
+explores the **edit-distance ball** (``max_total_edits=e``, substitutions *and* indels). They answer
+subtly different questions, which shows as a higher match count for seqtrie at the same *e*.
 
 Scaling and parallelism
 ~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Throughput (queries per millisecond) versus reference-set size, for both engines at 1, 4, and 8
-threads (fixed scope: 2 substitutions). Batches parallelize near-linearly to 8 cores (~6.5–7×):
+threads (fixed scope: 2 substitutions), with the olga family on top and vdjdb below. Batches
+parallelize near-linearly to 8 cores (~6.5–7×):
 
 .. image:: _static/bench/scaling.svg
-   :alt: throughput vs reference size, per engine and thread count
-   :width: 100%
+   :alt: throughput vs reference size per engine and thread count, olga and vdjdb
+   :width: 80%
 
 Edit budget
 ~~~~~~~~~~~
 
-Cost and selectivity as the edit budget grows from 1 to 5. Throughput is governed by **scope** far
-more than by reference-set size, and the match count grows steeply — by *e* = 5 a CDR3 query already
-pulls hundreds (seqtm) to thousands (seqtrie) of neighbours, so loose budgets are rarely useful:
+Cost (top) and selectivity (bottom) as the edit budget grows from 1 to 5. Throughput is governed by
+**scope** far more than by reference-set size, and the match count grows steeply — by *e* = 5 a query
+already pulls hundreds (seqtm Hamming ball) to thousands (seqtrie edit ball) of neighbours, so loose
+budgets are rarely useful:
 
 .. image:: _static/bench/scope.svg
-   :alt: throughput vs edit budget 1..5
-   :width: 49%
-
-.. image:: _static/bench/selectivity_scope.svg
-   :alt: matches per query vs edit budget 1..5
-   :width: 49%
+   :alt: throughput and matches per query vs edit budget 1..5
+   :width: 80%
 
 Matrix scoring (BLOSUM62 / PAM50 / custom)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-seqtm can score substitutions through a substitution matrix, reporting the best (minimum-penalty)
-score across all alignments to each reference. The **time overhead of matrix scoring is small**
-(within ~5 % of unit cost — one table lookup replaces a character compare). seqtrie selectivity is
-tuned by the ``max_penalty`` budget; PAM50 is stricter than BLOSUM62 at equal budget. Besides the
-built-in ``BLOSUM62`` and ``PAM50``, a custom matrix can be supplied via
-``SubstitutionMatrix.from_similarity`` (row/column order from ``seqtree.amino_acids()``):
+seqtm scores substitutions through a substitution matrix, reporting the best (minimum-penalty) score
+across all alignments to each reference. The **time overhead of matrix scoring is small** (within
+~5–10 % of unit cost — one table lookup replaces a character compare), for both families:
 
-.. image:: _static/bench/matrix_overhead.svg
-   :alt: seqtm throughput, unit vs BLOSUM62 vs PAM50
-   :width: 49%
+.. image:: _static/bench/matrix.svg
+   :alt: seqtm throughput unit vs BLOSUM62 vs PAM50, olga and vdjdb
+   :width: 80%
 
-.. image:: _static/bench/selectivity_score.svg
-   :alt: matches per query vs BLOSUM62/PAM50 penalty budget
-   :width: 49%
+Besides the built-in ``BLOSUM62`` and ``PAM50``, a custom matrix is supplied via
+``SubstitutionMatrix.from_similarity`` (row/column order from ``seqtree.amino_acids()``).
+
+Selectivity and collisions
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Top: matches per query versus the seqtrie ``max_penalty`` budget — PAM50 is stricter than BLOSUM62 at
+equal budget. Bottom: **collisions** — how often seqtm's branch-and-bound re-reaches the *same*
+reference via a *different* edit path (reported by ``Index.collisions_batch``). Substitution-only
+search never collides; once indels are allowed, collisions rise with the edit budget, and the
+motif-rich **vdjdb** family collides far more than **olga** because shared structure makes a
+reference reachable by many distinct edit paths:
+
+.. image:: _static/bench/selectivity_collisions.svg
+   :alt: matches per query vs penalty budget, and seqtm collisions per query vs edit budget
+   :width: 80%
 
 Per-operation costs
 ~~~~~~~~~~~~~~~~~~~~~
 
-Fetching a global-alignment CIGAR (the C++ Needleman–Wunsch in ``Index.align``) is on-demand and
-about a microsecond per call, roughly flat in reference count. Peak resident memory after the index
-build scales with the reference count (the trie is shared by both engines):
+Top: fetching a global-alignment CIGAR (the C++ Needleman–Wunsch in ``Index.align``) is on-demand and
+about a microsecond per call, roughly flat in reference count. Bottom: peak resident memory after the
+index build, which scales with the reference count (the trie is shared by both engines):
 
-.. image:: _static/bench/align_fetch.svg
-   :alt: microseconds per align() CIGAR fetch vs reference size
-   :width: 49%
-
-.. image:: _static/bench/ram.svg
-   :alt: peak RSS after index build vs reference size
-   :width: 49%
+.. image:: _static/bench/perop.svg
+   :alt: align CIGAR fetch cost and peak RSS vs reference size
+   :width: 80%
 
 Indicative numbers
 ~~~~~~~~~~~~~~~~~~~
 
-Apple M3, OLGA TRB + mutated VDJdb references, 1000 OLGA TRB queries (``bench/bench_gnuplot.py``):
+Apple M3, OLGA TRB references, 1000 queries, 8 threads (``bench/bench_gnuplot.py``, full tier):
 
 .. list-table::
    :header-rows: 1
 
    * - metric
-     - 10k refs
-     - 100k refs
-     - notes
-   * - seqtm, 2 subs, 8 threads
-     - ~266 q/ms
-     - ~48 q/ms
-     - Hamming ball
-   * - seqtrie, edits≤2, 8 threads
-     - ~53 q/ms
-     - ~9 q/ms
-     - edit-distance ball
-   * - seqtm 8-thread speed-up
-     - ~6.9×
-     - ~7.1×
-     - vs 1 thread
-   * - matrix-scoring overhead
-     - <5 %
-     - <5 %
-     - PAM50/BLOSUM62 vs unit
-   * - align CIGAR fetch
-     - ~1.0 µs
-     - ~1.0 µs
-     - C++ NW, per call
-   * - peak RSS
-     - ~95 MB
-     - ~185 MB
-     - shared trie, well under 32 GB
+     - 10k
+     - 100k
+     - 1M
+     - 10M
+   * - seqtm, 2 subs (q/ms)
+     - ~271
+     - ~48
+     - ~8.6
+     - ~2.4
+   * - seqtrie, edits≤2 (q/ms)
+     - ~55
+     - ~11
+     - ~1.2
+     - ~0.28
+   * - align CIGAR fetch (µs)
+     - ~0.9
+     - ~1.1
+     - ~1.1
+     - ~1.8
+   * - peak RSS (MB)
+     - ~91
+     - ~183
+     - ~990
+     - ~3170
+
+The 8-thread speed-up is ~6.5–7×; matrix scoring stays within ~5–10 % of unit cost across all sizes.
 
 Takeaway
 ~~~~~~~~
 
 Throughput is governed by **scope** (edit budget) far more than reference-set size, parallelizes
-near-linearly to 8 cores, and matrix scoring is nearly free; enumeration cost ultimately depends on
-reference redundancy — see :doc:`roadmap` for the per-domain consequences.
+near-linearly to 8 cores, and matrix scoring is nearly free. Sequence structure matters: the
+motif-rich vdjdb family is denser and collides more under indels — enumeration cost ultimately
+depends on reference redundancy (see :doc:`roadmap`).

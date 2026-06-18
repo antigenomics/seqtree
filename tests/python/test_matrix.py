@@ -51,3 +51,21 @@ def test_seqtm_matrix_score_is_sum_of_substitution_penalties():
     # pair must agree with the seqtm Hamming-ball score (best score across alignments).
     pa = st.SearchParams(matrix="PAM50", gap_open=100, engine="seqtm")
     assert idx.align(1, "CASSLAPGATNEKLFF", pa).score == 22
+
+
+def test_collisions_only_with_indels():
+    import random
+
+    rng = random.Random(0)
+    aa = "ACDEFGHIKLMNPQRSTVWY"
+    refs = ["".join(rng.choice(aa) for _ in range(14)) for _ in range(5000)]
+    idx = st.Index.build(refs, alphabet="aa")
+    q = [rng.choice(refs) for _ in range(200)]
+    # Substitution-only (Hamming) reaches each reference by exactly one alignment.
+    assert sum(idx.collisions_batch(q, st.SearchParams(max_subs=3, engine="seqtm"))) == 0
+    # seqtrie reaches each reference once (one leaf), so never collides.
+    assert sum(idx.collisions_batch(q, st.SearchParams(max_total_edits=3, engine="seqtrie"))) == 0
+    # Indels create multiple edit paths to the same reference -> collisions.
+    c = idx.collisions_batch(
+        q, st.SearchParams(max_subs=3, max_ins=2, max_dels=2, max_total_edits=3, engine="seqtm"))
+    assert sum(c) > 0

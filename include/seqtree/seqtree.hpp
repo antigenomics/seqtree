@@ -72,6 +72,11 @@ public:
     std::vector<std::vector<Hit>> search_batch(const std::vector<std::string>& queries,
                                                const SearchParams&, int threads = 0) const;
 
+    // Per-query count of seqtm collisions: how often a reference was re-reached via a
+    // different edit path during branch-and-bound (0 for the seqtrie engine / Hamming).
+    std::vector<uint64_t> collisions_batch(const std::vector<std::string>& queries,
+                                           const SearchParams&, int threads = 0) const;
+
     const Trie& trie() const { return *trie_; }
 
 private:
@@ -88,6 +93,9 @@ public:
     std::vector<Hit> search(std::string_view query, const SearchParams&);
     void search_into(std::string_view query, const SearchParams&, std::vector<Hit>& out);
     bool search_top(std::string_view query, const SearchParams&, Hit& out);
+
+    // seqtm collisions from the most recent search_into on this Searcher.
+    uint64_t last_collisions() const;
 
 private:
     const Index& idx_;

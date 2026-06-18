@@ -56,6 +56,7 @@ void Searcher::search_into(std::string_view query, const SearchParams& p, std::v
 
     Limits L = resolve_limits(p);
     out.clear();
+    scratch_->collisions = 0;  // seqtrie leaves it 0; seqtm accumulates per re-reached ref
     if (pick_engine(p) == Engine::SeqTm)
         search_seqtm(idx_.trie(), qcodes_.data(), int(query.size()), L, p.mode, *scratch_, out);
     else
@@ -79,6 +80,8 @@ std::vector<Hit> Searcher::search(std::string_view query, const SearchParams& p)
     search_into(query, p, out);
     return out;
 }
+
+uint64_t Searcher::last_collisions() const { return scratch_->collisions; }
 
 bool Searcher::search_top(std::string_view query, const SearchParams& p, Hit& out) {
     SearchParams q = p;
