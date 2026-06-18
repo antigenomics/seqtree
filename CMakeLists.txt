@@ -7,7 +7,9 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 if(NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE Release)
 endif()
-set(CMAKE_CXX_FLAGS_RELEASE "-O3")
+if(NOT MSVC)
+  set(CMAKE_CXX_FLAGS_RELEASE "-O3")
+endif()  # MSVC Release already uses /O2; -O3 is not a valid MSVC flag
 
 option(SEQTREE_TESTS "Build C++ tests" OFF)
 option(SEQTREE_BENCH "Build C++ benchmarks" OFF)
