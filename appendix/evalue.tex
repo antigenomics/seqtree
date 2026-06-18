@@ -45,9 +45,11 @@ i.i.d.-letter null with an \emph{empirical background} $\Pzero$ estimated from a
 repertoire, retain the Poisson/Gumbel limit superstructure with an explicit non-asymptotic error
 bound (Chen--Stein / Le~Cam~\cite{Arratia1990,LeCam1960}), and handle clonal over-dispersion by
 collapsing to unique clonotypes. The resulting E-value is automatically deflated for hits that the
-generation process alone explains and is large only for antigen-driven convergence---formalizing
-and generalizing the neighbourhood-enrichment idea of ALICE~\cite{Pogorelyy2019}. We show the
-classical Karlin--Altschul E-value is the product-measure, ungapped special case.
+generation process alone explains and is large only for antigen-driven convergence. This puts the TCRNET approach---counting
+sequence neighbours against a real-world control repertoire, first introduced by
+Ritvo~et~al.~\cite{Ritvo2018} and formalized as an annotation framework
+by~\cite{Pogorelyy2019}---on a rigorous, finite-sample footing, and we show the classical
+Karlin--Altschul E-value is its product-measure, ungapped special case.
 \end{abstract}
 
 \section{Introduction: the redundancy problem}
@@ -59,8 +61,9 @@ when the database is a string of i.i.d.\ letters with background frequencies $p_
 $\lambda^\ast$ solves $\sum_{ij} p_i p_j e^{\lambda^\ast s_{ij}} = 1$~\cite{Karlin1990,Karlin1993}.
 
 Immune repertoires violate the i.i.d.\ assumption catastrophically. CDR3s are produced by V(D)J
-recombination, whose generation probability $\Pgen$~\cite{Marcou2018,Sethna2019} is sharply
-non-uniform; convergent recombination makes some sequences enormously over-represented; clonal
+recombination, whose generation probability $\Pgen$, first derived and inferred from sequence
+repertoires by Murugan~et~al.~\cite{Murugan2012}, is sharply non-uniform; convergent recombination
+makes some sequences enormously over-represented; clonal
 expansion and public clones create exact and near duplicates. A query in a common, high-$\Pgen$
 region of sequence space has many neighbours \emph{for purely generative reasons}. An i.i.d.\ null
 would flag these as wildly significant, which is biologically meaningless. The signal we actually
@@ -72,7 +75,8 @@ generative and baseline-sharing redundancy but no antigen-driven enrichment, est
 null neighbourhood mass from a matched control repertoire (the user-supplied
 \texttt{isalgo/airr\_control} set), and calibrate the E-value against it. This is a rigorous,
 finite-sample generalization of Karlin--Altschul to a non-i.i.d., biologically structured null, and
-a statistical formalization of ALICE-style neighbourhood enrichment~\cite{Pogorelyy2019}.
+the statistical formalization of TCRNET-style neighbour counting against a real
+control~\cite{Ritvo2018,Pogorelyy2019}.
 
 \section{Setup and notation}\label{sec:setup}
 
@@ -127,9 +131,23 @@ estimators of $\pi_0$ target \emph{different} nulls and must not be conflated.
   sharing and finite-repertoire convergence.
   \item \textbf{Generation / analytic (cross-check):} $\hat\pi_{\mathrm{gen}}(q,\theta) =
   \sum_{x\in\ball{\theta}{q}} \Pgen(x)$, computed by enumerating the (small, for small $\theta$)
-  ball with the engine and weighting by OLGA~\cite{Sethna2019}. It targets the pure generation null
-  $\Pgen(\ball{\theta}{q})$, which omits selection and sampling.
+  ball with the engine and weighting by the V(D)J generation probability of the Murugan~et~al.\
+  model~\cite{Murugan2012}. It targets the pure generation null $\Pgen(\ball{\theta}{q})$, which
+  omits selection and sampling.
 \end{itemize}
+
+\begin{remark}[Thymic-selection correction]\label{rem:thymic}
+The generation probability $\Pgen$ overcounts relative to the naive-repertoire frequency because
+only a fraction of generated receptors survive thymic selection. On average this fraction is
+approximately constant, so an effective pre-immune frequency is well approximated by
+$f(x) \approx q\,\Pgen(x)$ with a global thymic-selection factor $q \approx 1/2.7$; baseline
+antigen-specific T-cell frequencies estimated this way agree with observed
+repertoires~\cite{Pogorelyy2018}. Because $q$ is (to first order) sequence-independent, it cancels in
+ratios and in the control-calibrated estimator $\hat\pi$ of \S\ref{sec:null}; it matters only when an
+\emph{absolute} generation-based frequency is needed (e.g.\ the analytic
+$\hat\pi_{\mathrm{gen}}$ fallback for rare queries, \S\ref{sec:precision}), where one uses
+$q\,\Pgen$ in place of $\Pgen$.
+\end{remark}
 
 \begin{lemma}[The two nulls differ]\label{lem:hierarchy}
 In general $\Pzero \ne \Pgen$: thymic and peripheral selection deplete some motifs while
@@ -298,8 +316,8 @@ $K,\lambda^\ast$ are replaced by a finite-$N$, finite-$M$ non-asymptotic error b
 For TCR CDR3, $\Pzero$ is generation/repertoire-driven and a healthy-donor control instantiates it.
 For \emph{epitopes} (MHC-presented peptides) the relevant background is presentation, not V(D)J
 generation. The machinery of \S\S\ref{sec:setup}--\ref{sec:gumbel} applies verbatim with
-$\Pzero:=\Pzero^{\mathrm{pep}}$ and a presented-peptide control, but: (L1) there is no OLGA-style
-closed-form $\Pgen$, so only the empirical estimator survives; (L2) presentation is HLA-restricted,
+$\Pzero:=\Pzero^{\mathrm{pep}}$ and a presented-peptide control, but: (L1) there is no closed-form
+V(D)J-style generation model $\Pgen$, so only the empirical estimator survives; (L2) presentation is HLA-restricted,
 so $\Pzero^{\mathrm{pep}}$ is allele-conditional and the control must be HLA-matched or marginalized
 over an HLA frequency distribution; (L3) anchor-residue structure argues for position-weighted ball
 geometry. We therefore claim soundness for epitopes only to the extent that a faithful
@@ -317,8 +335,9 @@ presented-peptide control is available; no generation-based null is claimed ther
   (Proposition~\ref{prop:zero}).
   \item Validate the Poisson regime via the pairwise co-occupancy estimate of $b_2$; if inflated,
   use the negative-binomial check (Proposition~\ref{prop:nb}).
-  \item Size the control by Eq.~\eqref{eq:resolution}; fall back to OLGA $\hat\pi_{\mathrm{gen}}$ for
-  rare queries.
+  \item Size the control by Eq.~\eqref{eq:resolution}; fall back to the model-based
+  $\hat\pi_{\mathrm{gen}}=\sum_{\ball{\theta}{q}} q\,\Pgen$ (Murugan model, thymic factor
+  $q\approx1/2.7$) for rare queries.
 \end{enumerate}
 
 This is implemented in \texttt{seqtree.evalues}, a thin layer over batched search; the control

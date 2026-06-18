@@ -34,6 +34,26 @@ mutated references with known parents), with throughput and peak RSS:
    python bench/bench.py
    env RUN_BENCHMARK=1 python bench/bench.py --sizes 1000000 --queries 1000000 --threads 16
 
+E-value benchmark
+-----------------
+
+``bench/bench_evalue.py`` is the **true E-value benchmark**. For a target repertoire (VDJdb,
+antigen-selected) scored against the ``airr_control`` background, at each scope/budget it reports the
+total edit paths explored, the number of **collisions** (references re-reached via a different edit
+path — non-zero only for ``seqtm`` with indels), the number of **unique hits**, and the **fraction of
+unique hits whose query E-value falls below a threshold**:
+
+.. code-block:: fish
+
+   python bench/bench_evalue.py
+   env RUN_BENCHMARK=1 python bench/bench_evalue.py --target-size 200000 --control-size 2000000
+
+The discriminating result is the contrast between query sets: antigen-selected VDJdb queries produce
+orders of magnitude more unique hits and are almost entirely significant at ``E < 1``, whereas
+background (control) queries produce almost none and are not significant. The smallest resolvable
+E-value is :math:`N/M`, so finer thresholds (``E < 0.01``) require a control much larger than the
+target (the ``RUN_BENCHMARK`` tier uses :math:`M = 2{,}000{,}000`).
+
 TCR-beta benchmark (gnuplot figures)
 ------------------------------------
 
