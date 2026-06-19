@@ -64,6 +64,15 @@ def test_find_mimics_evalue():
         assert 0.0 <= r["p_enrichment"] <= 1.0 and r["E"] >= 0.0
 
 
+def test_presentation_features():
+    # class I: N-pocket P1-P3 + C-pocket P(Omega-1),POmega
+    assert layout.presentation_features("EAAGIGILTV", "mhc1") == ["EAA" + "TV"]
+    # class II: core anchors P1,P4,P6,P9 over every 9-mer window
+    feats = layout.presentation_features("PKYVKQNTLKLAT", "mhc2")
+    assert all(len(f) == 4 for f in feats)
+    assert feats[0] == "P" + "V" + "Q" + "L"  # PKYVKQNTL -> P,V,Q,L
+
+
 def test_assign_allele():
     # peptides with A*02:01-like anchors (P2=L, PΩ=V) vs B*07-like (P2=P, PΩ=L)
     recs = ([{"epitope": "ALAAAAAAV", "mhc": "HLA-A*02:01", "mhc_class": "MHCI"} for _ in range(5)]

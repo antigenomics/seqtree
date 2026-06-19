@@ -60,3 +60,8 @@ presentation prior, not a trained predictor):
 .. code-block:: python
 
    store.assign_allele("KLEEEEEEV", "mhc1")   # -> [(allele, score, n_match, n_allele), ...]
+
+A neighbour-voting variant (``bench/bench_mhc_guess.py``) attaches an **aggregate E-value /
+confidence** to the guess and shows that length-matched random peptides get a much higher E-value, so
+they are rejected as noise by a threshold — see :doc:`benchmarks`. This works on anchor (presentation)
+features only; TCR-facing homology carries no allele information.

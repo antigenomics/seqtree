@@ -64,6 +64,29 @@ def kmers(pep: str, k: int, spec: AnchorSpec | None = None) -> list[str]:
     return [s[i:i + k] for i in range(len(s) - k + 1)]
 
 
+def presentation_features(pep: str, cls: str) -> list[str]:
+    """Short binding-motif signatures (anchor / pocket residues) for the reverse
+    problem -- peptide -> presenting allele. These KEEP the anchors and drop the
+    TCR-facing positions (the opposite of :func:`kmers`), so peptides binding the
+    same allele share a signature. A peptide may yield several (class-II registers).
+
+    class I: N-pocket P1-P3 + C-pocket P(Ω-1),PΩ -> one 5-residue signature.
+    class II: core anchors P1,P4,P6,P9 over every 9-mer window -> one per register.
+    """
+    p = pep.strip().upper()
+    L = len(p)
+    if cls == "mhc1":
+        if L < 4:
+            return [p]
+        return [p[0] + p[1] + p[2] + p[-2] + p[-1]]
+    if cls == "mhc2":
+        if L < 9:
+            return [p]
+        feats = [p[s] + p[s + 3] + p[s + 5] + p[s + 8] for s in range(L - 9 + 1)]
+        return list(dict.fromkeys(feats))
+    return [p]
+
+
 def weight_profile(length: int, spec: AnchorSpec, mode: str = "tcr_facing",
                    hotspot: tuple = (), hotspot_weight: int = 1) -> list[int]:
     """Per-position weights for a PositionalMatrix over a length-`length` frame.

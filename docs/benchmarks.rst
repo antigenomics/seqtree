@@ -103,6 +103,28 @@ from repertoire structure. See ``appendix/evalue.tex`` §"Epitope detection comp
    :alt: significant fraction vs sampled depth for GIL and NLV epitopes
    :width: 80%
 
+MHC-allele guessing
+~~~~~~~~~~~~~~~~~~~~
+
+``bench/bench_mhc_guess.py`` evaluates the reverse problem — *peptide → presenting allele* — for
+class I and class II. Each held-out peptide's **presentation** (anchor) signature is widened until it
+has 10–100 non-exact neighbours; the neighbours' alleles are voted, and the top allele's count is
+tested against the background allele frequency to give an **aggregate E-value / confidence**:
+
+.. code-block:: fish
+
+   python bench/bench_mhc_guess.py --pmhc /path/to/pmhc_full.tsv.gz
+
+On ``pmhc_data`` (alleles with ≥200 peptides) top-1 accuracy is ~0.29 for class I (129 alleles,
+≈38× chance) and ~0.34 for class II; real presented peptides have a much lower aggregate E-value than
+length-matched **random** peptides (≈0.18 vs 0.61 class I; AUROC ≈0.68), so random noise is rejected
+by an E-value threshold. This works only with *anchor* features — TCR-facing homology carries no
+allele information (AUROC ≈0.5), confirming MHC restriction lives in the anchors.
+
+.. image:: _static/bench/mhc_guess.svg
+   :alt: allele-guess confidence (real vs random) vs E-value threshold, class I and II
+   :width: 80%
+
 TCR-beta benchmark (gnuplot figures)
 ------------------------------------
 
