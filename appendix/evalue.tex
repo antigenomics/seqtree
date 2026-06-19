@@ -1,19 +1,38 @@
 \documentclass[11pt]{article}
 
 \usepackage[margin=1in]{geometry}
-\usepackage{amsmath,amssymb,amsthm}
+\usepackage{amsmath,amsthm}
 \usepackage{mathtools}
 \usepackage{graphicx}
+\usepackage{dsfont}  % \mathds{1} indicator (OldStandard-Math lacks a bold digit 1)
+% Old-style journal look (after tex.stackexchange.com/q/645339, "Old LaTeX
+% Template"): the OldStandard text face with a matching OpenType math font,
+% small-caps headings, run-in paragraph leaders, and a lightly leaded body.
+% This requires lualatex -- the compiler is pinned in .latexmkrc / the Makefile.
+\usepackage{OldStandard}
+\usepackage{unicode-math}
+\setmathfont{OldStandard-Math.otf}
+\usepackage{titlesec}
 \usepackage[hidelinks]{hyperref}
 
+\linespread{1.15}
+\setlength{\parindent}{2em}
+\titleformat{\section}{\normalfont\large\scshape\bfseries}{\thesection.}{0.6em}{}
+\titleformat{\subsection}{\normalfont\scshape\bfseries}{\thesubsection.}{0.5em}{}
+\titleformat{\paragraph}[runin]{\bfseries\scshape}{}{0pt}{}[.]
+\titlespacing*{\paragraph}{\parindent}{0.4em}{0.6em}
+
+% theorem heads in small caps; plain statements italic, remarks/definitions upright
+\newtheoremstyle{oldplain}{}{}{\itshape}{}{\scshape}{.}{.5em}{}
+\newtheoremstyle{oldrem}{}{}{\normalfont}{}{\scshape}{.}{.5em}{}
+\theoremstyle{oldplain}
 \newtheorem{theorem}{Theorem}
 \newtheorem{lemma}{Lemma}
 \newtheorem{proposition}{Proposition}
 \newtheorem{corollary}{Corollary}
-\theoremstyle{definition}
+\theoremstyle{oldrem}
 \newtheorem{definition}{Definition}
 \newtheorem{assumption}{Assumption}
-\theoremstyle{remark}
 \newtheorem{remark}{Remark}
 
 \DeclareMathOperator{\Poisson}{Poisson}
@@ -27,9 +46,10 @@
 \newcommand{\R}{\mathbb{R}}
 \newcommand{\E}{\mathbb{E}}
 \newcommand{\Prob}{\mathbb{P}}
-\newcommand{\one}{\mathbf{1}}
+\newcommand{\one}{\mathds{1}}
 
-\title{A control-calibrated E-value for fuzzy TCR sequence search\\ over biologically redundant reference sets}
+\title{\scshape A control-calibrated E-value for fuzzy TCR sequence search over
+biologically redundant reference sets}
 % Affiliations under the author via \date (article-class idiom, no extra packages).
 \author{Mikhail Shugay\textsuperscript{1,2,3}\thanks{Correspondence:
   \href{mailto:mikhail.shugay@gmail.com}{mikhail.shugay@gmail.com}}}
@@ -59,7 +79,12 @@ generation process alone explains and is large only for antigen-driven convergen
 sequence neighbours against a real-world control repertoire, first introduced by
 Ritvo~et~al.~\cite{Ritvo2018} and formalized as an annotation framework
 by~\cite{Pogorelyy2019}---on a rigorous, finite-sample footing, and we show the classical
-Karlin--Altschul E-value is its product-measure, ungapped special case.
+Karlin--Altschul E-value is its product-measure, ungapped special case. The framework is not tied to
+TCRs: \S\ref{sec:epitope} extends it to presentation-aware E-values for peptide--MHC (pMHC) epitope
+homology, molecular mimicry, and allele guessing, while \S\ref{sec:related} reduces it to two
+elementary tasks that need only its combinatorial skeleton---unique-molecular-identifier (UMI) and
+barcode collapse, whose chance false-merge rate is a birthday-problem calculation, and tree
+clustering of CDR3 nucleotide reads to correct PCR and sequencing errors.
 \end{abstract}
 
 \section{Introduction: the redundancy problem}
@@ -466,7 +491,7 @@ $M$ (\S\ref{sec:precision}), else fall back to $\hat\pi_{\mathrm{gen}}$.
 
 \section{The closest hit: an extreme-value law}\label{sec:gumbel}
 
-\begin{theorem}[Poisson $\Rightarrow$ Gumbel]\label{thm:gumbel}
+\begin{theorem}[From Poisson to Gumbel]\label{thm:gumbel}
 Let $\lambda(q,t)=N\,\Pzero(\ball{t}{q})$. By the Poisson approximation applied at each radius,
 \begin{equation}
   \Prob\!\big(S_{\min}(q) > t\big) \approx e^{-\lambda(q,t)} = e^{-N\Pzero(\ball{t}{q})}.
@@ -502,7 +527,7 @@ framework with $\Pzero := \Pzero^{\mathrm{pep}}(\cdot\mid a)$ per allele $a$, an
 
 \subsection{Anchor decomposition and TCR-facing masking}
 A presented peptide factorizes $\sigma=(\sigma_A,\sigma_T)$ into MHC-facing anchors $A(a,L)$
-(class~I: $\{\mathrm{P2},\mathrm{P\Omega}\}$; class~II core: $\{\mathrm{P1,P4,P6,P9}\}$) and
+(class~I: $\{\mathrm{P2},\mathrm{P}\Omega\}$; class~II core: $\{\mathrm{P1,P4,P6,P9}\}$) and
 TCR-facing positions $T$. Presentation fixes $\sigma_A$; recognition reads $\sigma_T$
 ---Dolton~et~al.~\cite{Dolton2023} show one HLA-A\*02:01 TCR cross-reacting with three epitopes via the
 shared central motif x-x-x-A/G-I/L-G-I-x-x-x, the anchors irrelevant. With masking
@@ -539,7 +564,7 @@ common in the allele's presented peptidome and elevates surprisingly shared ones
 neoantigen-fitness cross-reactivity distance of Łuksza~et~al.~\cite{Luksza2017} and the
 close-to-self ``shell'' picture of~\cite{TiffeauMayer2026} to a calibrated E-value.
 
-\subsection{Reverse problem: peptide $\to$ presenting allele}
+\subsection{Reverse problem: peptide to presenting allele}
 Flipping the weights ($w_i=1$ on anchors, $0$ on TCR-facing --- the \emph{presentation} mode) scores
 the binding motif. For a peptide of unknown restriction we widen the scope on its anchor signature
 until it has $10$--$100$ non-exact neighbours and vote their alleles. Two scores read off this tally:
@@ -556,15 +581,41 @@ not a substitute for a trained predictor.
 The class-II binding core is a 9-mer with anchors at P1/P4/P6/P9, but its register inside a longer
 peptide is unknown; deconvolution tools resolve it by clustering (GibbsCluster~\cite{Andreatta2017},
 NNAlign\_MA~\cite{Alvarez2019}). For the reverse problem we use a one-pass proxy
-(\texttt{layout.presentation\_features(register=\textquotesingle anchored\textquotesingle)}): pick the
-single 9-mer window whose P1 is a large hydrophobic and whose P4/P6/P9 avoid Pro/Gly, and take that
+(\texttt{layout.presentation\_features} with \texttt{register=\textquotesingle anchored\textquotesingle}):
+pick the single 9-mer window whose P1 is a large hydrophobic and whose P4/P6/P9 avoid Pro/Gly, and take that
 core's $\{$P1,P4,P6,P9$\}$ as the signature. Committing to one register (vs.\ pooling all windows)
 makes an allele's peptides share a consistent anchor signature and is what lifts class-II ROC-AUC into
 the $0.9$ range (Table~\ref{tab:mhcguess}).
 
-\paragraph{Empirical (\texttt{bench/bench\_mhc\_guess.py}).} On VDJdb/IEDB \texttt{pmhc\_data},
-evaluated as a per-(peptide, allele) binary task --- exactly how \texttt{vdjmatch} scores TCR-antigen
-specificity --- and split by species, the vote-fraction ranking recovers the restricting allele with
+\paragraph{Two reference sets.} \texttt{pmhc\_data} ships in two tiers. The \emph{full} set is every
+IEDB-positive epitope--allele assay; the \emph{shortlist} keeps only epitope--allele pairs supported
+by $\ge2$ publications --- a higher-confidence but smaller subset that suppresses single-report
+artefacts at the cost of thinner mouse and class-II panels. Table~\ref{tab:pmhcsets} gives the scope
+of both. The ROC/PR below are computed on the \emph{full} set; the shortlist is the conservative
+alternative and is reported here for scope only.
+
+\begin{table}[ht]\centering\small
+\begin{tabular}{llrrrr}
+\hline
+ & & \multicolumn{2}{c}{full (IEDB$+$)} & \multicolumn{2}{c}{shortlist ($\ge2$ refs)}\\
+class & species & epitopes & alleles & epitopes & alleles\\
+\hline
+MHC-I  & human & 437{,}850 & 203 & 137{,}627 & 107\\
+MHC-I  & mouse &  57{,}892 &   9 &   6{,}903 &   8\\
+MHC-II & human & 198{,}921 &  19 &  28{,}859 &  11\\
+MHC-II & mouse &  12{,}018 &  13 &   2{,}564 &   8\\
+\hline
+\end{tabular}
+\caption{Scope of the two \texttt{pmhc\_data} tiers by class and species: unique epitopes and distinct
+restricting alleles. The benchmark guessing panel (Table~\ref{tab:mhcguess}) further restricts to
+standard-amino-acid epitopes and to alleles with $\ge100$ (human) / $\ge40$ (mouse) peptides.}
+\label{tab:pmhcsets}
+\end{table}
+
+\paragraph{Empirical (\texttt{bench/bench\_mhc\_guess.py}).} On the full \texttt{pmhc\_data} set
+(VDJdb/IEDB), evaluated as a per-(peptide, allele) binary task --- exactly how \texttt{vdjmatch} scores
+TCR-antigen specificity --- and split by species, the vote-fraction ranking recovers the restricting
+allele with
 ROC-AUC $\approx 0.90$--$0.98$ and PR-AUC far above the prevalence baseline, for both classes and both
 human and mouse (Table~\ref{tab:mhcguess}, Figs.~\ref{fig:mhc1guess}--\ref{fig:mhc2guess}). The
 confidence E-value additionally separates real peptides from length-matched random ``noise''
@@ -664,6 +715,33 @@ downstream in \texttt{vdjmatch} (TCR--antigen specificity) and \texttt{mhcmatch}
 This is implemented in \texttt{seqtree.evalues} (with \texttt{exclude\_exact} for the punctured
 counts), a thin layer over batched search; the control loader \texttt{seqtree.load\_control} supplies
 a deduplicated background.
+
+\section{Related applications}\label{sec:related}
+The construction is not specific to antigen-specificity. The same neighbour-counting machinery---and,
+in places, only its combinatorial skeleton---serves several adjacent tasks.
+
+\paragraph{Peptide--MHC analysis.} The principal extension is the presentation-aware pMHC layer of
+\S\ref{sec:epitope}: anchor-masked, TCR-facing homology for cross-reactivity and molecular mimicry,
+and the inverse anchor-weighted reading for allele guessing, each calibrated against its own
+per-allele null.
+
+\paragraph{UMI and barcode collapse: a birthday problem.} Unique molecular identifiers and cell
+barcodes are random strings of length $L$ over an alphabet of size $A$. Deduplication collapses
+identifiers lying within a small edit budget (sequencing errors)---the fuzzy search of
+\S\ref{sec:setup} on a tiny alphabet. The statistical question is the \emph{dual} of the E-value: not
+``are there more neighbours than chance predicts'' but ``how often do two \emph{distinct} molecules
+collide by chance.'' For $n$ molecules the expected number of colliding pairs is $\binom{n}{2}A^{-L}$
+and $\Prob(\text{any collision})\approx 1-\exp\!\big(-n^2/(2A^L)\big)$---the birthday bound---with the
+edit-distance-$\theta$ variant inflating $A^{-L}$ by the ball size $|\ball{\theta}{q}|$. This fixes
+the safe number of molecules for a given $(A,L,\theta)$ and separates merges that are sequencing
+errors (one true molecule) from chance collisions (two).
+
+\paragraph{CDR3 nucleotide error correction.} PCR and sequencing errors spawn read variants one or
+two substitutions from a true clonotype. Clustering reads by edit distance---the seqtree engine on
+the nucleotide alphabet, with the conserved $3'$ end indexed first so shared suffixes prune early
+(\S\ref{sec:precision})---collapses each error cloud onto its parent. Whether a low-count neighbour is
+an error or a genuine rare clonotype is decided by the same Poisson tail (\S\ref{sec:poisson}), now
+under a per-base error-rate null in place of the control repertoire.
 
 \bibliographystyle{plain}
 \bibliography{refs}
