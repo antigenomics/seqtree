@@ -653,9 +653,12 @@ downstream in \texttt{vdjmatch} (TCR--antigen specificity) and \texttt{mhcmatch}
   Benjamini--Hochberg to the $p_{\mathrm{enrich}}$ for FDR control (Proposition~\ref{prop:multiple}).
   \item Validate the Poisson regime via the pairwise co-occupancy estimate of $b_2$; if inflated,
   use the negative-binomial check (Proposition~\ref{prop:nb}).
-  \item Size the control by Eq.~\eqref{eq:resolution}; fall back to the model-based
-  $\hat\pi_{\mathrm{gen}}=\sum_{\ball{\theta}{q}} q\,\Pgen$ (Murugan model, thymic factor
-  $q\approx1/2.7$) for rare queries.
+  \item Size the control by Eq.~\eqref{eq:resolution}; for rare queries fall back to the model-based
+  $\hat\pi_{\mathrm{gen}}=\Pgen(\ball{\theta}{q})$ (the Murugan~et~al.\ generation
+  model~\cite{Murugan2012}), optionally reweighted per sequence by the Elhanati~et~al.\ selection
+  factor $Q(\sigma)$ ($\langle Q\rangle_{\Pgen}=1$, Eq.~\eqref{eq:qfactor}) for the post-selection
+  null --- no global thymic scalar enters, as the average acceptance $\alpha\lesssim Q_{\max}^{-1}
+  \approx1/7$ is sequence-independent and cancels in the calibrated $\hat\pi$ (Remark~\ref{rem:thymic}).
 \end{enumerate}
 
 This is implemented in \texttt{seqtree.evalues} (with \texttt{exclude\_exact} for the punctured
