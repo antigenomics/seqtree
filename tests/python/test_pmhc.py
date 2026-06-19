@@ -67,10 +67,13 @@ def test_find_mimics_evalue():
 def test_presentation_features():
     # class I: N-pocket P1-P3 + C-pocket P(Omega-1),POmega
     assert layout.presentation_features("EAAGIGILTV", "mhc1") == ["EAA" + "TV"]
-    # class II: core anchors P1,P4,P6,P9 over every 9-mer window
-    feats = layout.presentation_features("PKYVKQNTLKLAT", "mhc2")
-    assert all(len(f) == 4 for f in feats)
-    assert feats[0] == "P" + "V" + "Q" + "L"  # PKYVKQNTL -> P,V,Q,L
+    # class II register trick: anchored picks the single best 9-mer core register
+    # (P1 hydrophobic) -> one P1,P4,P6,P9 signature. YVKQNTLKL wins (P1=Y) -> YQTL.
+    assert layout.presentation_features("PKYVKQNTLKLAT", "mhc2") == ["YQTL"]
+    # register='all' keeps every window's signature (register-agnostic)
+    allw = layout.presentation_features("PKYVKQNTLKLAT", "mhc2", register="all")
+    assert all(len(f) == 4 for f in allw)
+    assert "PVQL" in allw  # window 0: PKYVKQNTL -> P,V,Q,L
 
 
 def test_assign_allele():

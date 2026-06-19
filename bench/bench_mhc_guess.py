@@ -1,21 +1,21 @@
 #!/usr/bin/env python3
-"""MHC-allele guessing benchmark (class I and class II).
+"""MHC-allele guessing benchmark with ROC + PR curves, split by species.
 
-Reverse problem: can the alleles of a peptide's nearest TCR-/sequence-neighbours predict
-its own restricting allele? For each held-out peptide we widen the scope until it has
-10-100 non-exact homologs, tally their alleles, and test each allele's count against the
-background allele frequency (binomial tail). The guessed allele is the most enriched; the
-**aggregate E-value** = (#alleles tested) x p_top (Bonferroni over the allele panel), and
-confidence = 1 - min(1, E).
-
-A random-peptide arm (length-matched, uniform residues) is the noise control: random
-peptides should get few/again-random neighbours -> high E -> filtered out. We report top-1
-accuracy, the real-vs-random E-value separation (AUROC), and a fraction-confident-vs-E-value
-curve (the figure). Output: TSV table + bench/figures/mhc_guess.svg.
+Reverse problem (peptide -> presenting allele), evaluated like vdjmatch evaluates
+TCR-antigen specificity: a per-(peptide, allele) binary task. For each held-out peptide
+we widen the scope on its *presentation* (anchor) signature until it has 10-100 non-exact
+neighbours, vote the neighbours' alleles, and score each panel allele by the enrichment of
+its vote vs the background frequency (-log10 binomial tail). Positives = the peptide's true
+allele(s) (multi-label, since peptides can be promiscuous); negatives = the rest. We report
+ROC-AUC and PR-AUC for MHC-I and MHC-II, **human and mouse separately**, plus top-1 accuracy
+and a real-vs-random noise-rejection AUROC. Class-II uses the register trick (single best
+9-mer core register, layout.presentation_features(register='anchored')).
 
     python bench/bench_mhc_guess.py --pmhc /Users/mikesh/hf/pmhc_data/pmhc_full.tsv.gz
 
-Needs gnuplot + the pmhc_data table (local path or HuggingFace download).
+Targets (aspirational; tuned later in the mhcmatch package, as vdjmatch tunes TCR specificity):
+ROC-AUC ~0.90 (MHC-I), ~0.80 (MHC-II). Output: TSV table + bench/figures/mhc1_rocpr.svg,
+mhc2_rocpr.svg. Needs gnuplot + the pmhc_data table.
 """
 import argparse
 import csv
@@ -23,197 +23,236 @@ import gzip
 import math
 import os
 import random
-from collections import Counter
+from collections import Counter, defaultdict
 from pathlib import Path
 
 from seqtree import KmerIndex, SearchParams, layout
-from bench_gnuplot import render, style  # shared gnuplot helpers
 
 AA = "ACDEFGHIKLMNPQRSTVWY"
-COLOR = {"real": "#d62728", "random": "#1f77b4"}
-# scope ladder on the presentation (anchor) signature: max substitutions, strict -> loose
 SCOPES = [0, 1, 2, 3]
+SPECIES = {"HomoSapiens": "human", "MusMusculus": "mouse"}
+# frontend-design: one hue per species, dashed grey references, white background.
+COLOR = {"human": "#2563eb", "mouse": "#f59e0b"}
+MIN_ALLELE = {"human": 100, "mouse": 40}
 
 
 def binom_sf(k, n, p):
-    """P(Binomial(n, p) >= k), exact (n <= ~100 here)."""
     if k <= 0:
         return 1.0
     if p <= 0:
         return 0.0
     if p >= 1:
         return 1.0
-    s = 0.0
-    for i in range(k, n + 1):
-        s += math.comb(n, i) * p**i * (1 - p) ** (n - i)
-    return min(1.0, s)
+    return min(1.0, sum(math.comb(n, i) * p**i * (1 - p) ** (n - i) for i in range(k, n + 1)))
 
 
-def guess(index, peptide_allele, cls, query, allele_freq, n_alleles, lo=10, hi=100):
-    """Guess the restricting allele from presentation-signature neighbours.
+def auc(xs, ys):
+    return sum((xs[i] - xs[i - 1]) * (ys[i] + ys[i - 1]) / 2 for i in range(1, len(xs)))
 
-    Widen the scope (subs on the anchor signature) until the query has >= lo non-exact
-    neighbours; tally their alleles; test the top allele's count vs background (binomial);
-    return (guessed_allele, k, n, aggregate_E). `peptide_allele[pid]` maps neighbours to
-    alleles. Excludes peptides identical to the query (self)."""
-    feats = layout.presentation_features(query, cls)
+
+def roc_pr(scored):
+    """scored: list of (score, label in {0,1}); higher score = more confident.
+    Returns (roc_xs, roc_ys, roc_auc, pr_xs, pr_ys, pr_auc)."""
+    scored = sorted(scored, key=lambda x: -x[0])
+    P = sum(l for _, l in scored)
+    N = len(scored) - P
+    if P == 0 or N == 0:
+        return [0, 1], [0, 1], 0.5, [0, 1], [P / max(1, P + N)] * 2, P / max(1, P + N)
+    tp = fp = 0
+    roc_x, roc_y, pr_r, pr_p = [0.0], [0.0], [0.0], [1.0]
+    i = 0
+    while i < len(scored):
+        j = i
+        while j < len(scored) and scored[j][0] == scored[i][0]:
+            j += 1
+        for t in range(i, j):
+            if scored[t][1]:
+                tp += 1
+            else:
+                fp += 1
+        roc_x.append(fp / N)
+        roc_y.append(tp / P)
+        pr_r.append(tp / P)
+        pr_p.append(tp / (tp + fp) if tp + fp else 1.0)
+        i = j
+    return roc_x, roc_y, auc(roc_x, roc_y), pr_r, pr_p, auc(pr_r, pr_p)
+
+
+def load_rows(path):
+    csv.field_size_limit(10**7)
+    op = gzip.open if str(path).endswith(".gz") else open
+    out = []
+    with op(path, "rt") as fh:
+        for r in csv.DictReader(fh, delimiter="\t"):
+            cls = {"MHCI": "mhc1", "MHCII": "mhc2"}.get(str(r.get("mhc_class")))
+            sp = SPECIES.get(str(r.get("mhc_species")))
+            ep, a = str(r.get("epitope", "")).strip().upper(), str(r.get("mhc_a", "")).strip()
+            if cls and sp and ep and a and all(c in AA for c in ep):
+                out.append((ep, a, cls, sp))
+    return out
+
+
+def eval_panel(cls, species, rows, n_queries, rng):
+    by_allele = Counter(a for _, a in rows)
+    keep = {a for a, c in by_allele.items() if c >= MIN_ALLELE[species]}
+    rows = [(e, a) for e, a in rows if a in keep]
+    rows = list(dict.fromkeys(rows))
+    if len(keep) < 2 or len(rows) < 200:
+        return None
+    panel = sorted(keep)
+    total = len(rows)
+    allele_freq = {a: by_allele[a] / total for a in keep}
+    pep_alleles = defaultdict(set)
+    for e, a in rows:
+        pep_alleles[e].add(a)
+
+    allele_to_id, allele_ids, pid_meta, feats = {}, [], [], []
+    for e, a in rows:
+        allele_to_id.setdefault(a, len(allele_to_id))
+        allele_ids.append(allele_to_id[a])
+        pid_meta.append((a, e))
+        feats.append(layout.presentation_features(e, cls, register="anchored"))
+    index = KmerIndex.build(feats, alphabet="aa", allele_ids=allele_ids)
+
+    test_eps = list(dict.fromkeys(e for e, _ in rows))
+    rng.shuffle(test_eps)
+    test_eps = test_eps[:n_queries]
+    lengths = [len(e) for e, _ in rows]
+
+    scored, top1_ok, n_eval, real_conf = [], 0, 0, []
+    for ep in test_eps:
+        tally = guess_tally(index, pid_meta, cls, ep)
+        if tally is None:
+            continue
+        n_eval += 1
+        n = sum(tally.values())
+        # ranking score = neighbour vote fraction (posterior P(allele | neighbours)); robust to
+        # panel skew. confidence = enrichment vs background (-log10 binomial tail) -> noise rejection.
+        vote = {a: k / n for a, k in tally.items()}
+        enr = {a: -math.log10(max(binom_sf(k, n, allele_freq[a]), 1e-300)) for a, k in tally.items()}
+        truth = pep_alleles[ep]
+        for a in panel:
+            scored.append((vote.get(a, 0.0), 1 if a in truth else 0))
+        best = max(panel, key=lambda a: vote.get(a, 0.0))
+        top1_ok += best in truth
+        real_conf.append(max(enr.values()) if enr else 0.0)
+
+    rand_conf = []
+    for _ in range(len(test_eps)):
+        rp = "".join(rng.choice(AA) for _ in range(rng.choice(lengths)))
+        tally = guess_tally(index, pid_meta, cls, rp)
+        if not tally:
+            rand_conf.append(0.0)
+            continue
+        n = sum(tally.values())
+        rand_conf.append(max(-math.log10(max(binom_sf(k, n, allele_freq[a]), 1e-300))
+                             for a, k in tally.items()))
+
+    rx, ry, r_auc, px, py, p_auc = roc_pr(scored)
+    noise_auc = auc(*_roc_only(real_conf, rand_conf))
+    return {"alleles": len(keep), "n_eval": n_eval, "top1": top1_ok / max(1, n_eval),
+            "roc_auc": r_auc, "pr_auc": p_auc, "pr_base": sum(l for _, l in scored) / max(1, len(scored)),
+            "noise_auc": noise_auc, "roc": (rx, ry), "pr": (px, py)}
+
+
+def guess_tally(index, pid_meta, cls, query, lo=10, hi=100):
+    feats = layout.presentation_features(query, cls, register="anchored")
     cands = []
     for sc in SCOPES:
         p = SearchParams(max_subs=sc, engine="seqtm")
-        cands = index.seed_and_gather([feats], p, 1, -1, 1)[0]
-        cands = [c for c in cands if peptide_allele[c.peptide_id][1] != query]  # drop self
+        cands = [c for c in index.seed_and_gather([feats], p, 1, -1, 1)[0]
+                 if pid_meta[c.peptide_id][1] != query]
         if len(cands) >= lo:
             break
     if not cands:
         return None
-    cands = cands[:hi]
-    cnt = Counter(peptide_allele[c.peptide_id][0] for c in cands)
-    n = sum(cnt.values())
-    best = None
-    for allele, k in cnt.items():
-        f = allele_freq.get(allele, 1.0 / max(1, n_alleles))
-        pv = binom_sf(k, n, f)
-        if best is None or pv < best[3]:
-            best = (allele, k, n, pv)
-    allele, k, n, pv = best
-    E = min(n_alleles * pv, float(n_alleles))  # Bonferroni aggregate E-value over the panel
-    return allele, k, n, E
+    return Counter(pid_meta[c.peptide_id][0] for c in cands[:hi])
 
 
-def auroc(scores_pos, scores_neg):
-    """AUROC with `scores` higher = more confident (here: -log10 E)."""
-    labelled = [(s, 1) for s in scores_pos] + [(s, 0) for s in scores_neg]
-    labelled.sort(key=lambda x: x[0])
-    npos = len(scores_pos)
-    nneg = len(scores_neg)
-    if npos == 0 or nneg == 0:
-        return float("nan")
-    rank_sum = 0
+def _roc_only(pos, neg):
+    scored = sorted([(s, 1) for s in pos] + [(s, 0) for s in neg], key=lambda x: -x[0])
+    P, N = len(pos), len(neg)
+    if P == 0 or N == 0:
+        return [0, 1], [0, 1]
+    tp = fp = 0
+    xs, ys = [0.0], [0.0]
     i = 0
-    while i < len(labelled):
+    while i < len(scored):
         j = i
-        while j < len(labelled) and labelled[j][0] == labelled[i][0]:
+        while j < len(scored) and scored[j][0] == scored[i][0]:
             j += 1
-        avg_rank = (i + 1 + j) / 2.0
         for t in range(i, j):
-            if labelled[t][1] == 1:
-                rank_sum += avg_rank
+            tp += scored[t][1]
+            fp += 1 - scored[t][1]
+        xs.append(fp / N)
+        ys.append(tp / P)
         i = j
-    return (rank_sum - npos * (npos + 1) / 2.0) / (npos * nneg)
+    return xs, ys
 
 
-def load_rows(path, cls_key):
-    csv.field_size_limit(10**7)
-    op = gzip.open if str(path).endswith(".gz") else open
-    want = "MHCI" if cls_key == "mhc1" else "MHCII"
-    out = []
-    with op(path, "rt") as fh:
-        for r in csv.DictReader(fh, delimiter="\t"):
-            if str(r.get("mhc_class")) == want and r.get("epitope") and r.get("mhc_a"):
-                out.append((r["epitope"].strip().upper(), r["mhc_a"].strip()))
-    return out
+def render_rocpr(out, key, title, curves):
+    """curves: {species: result}. Two panels (ROC, PR), one line per species + references."""
+    def tsv(name, xs, ys):
+        (out / name).write_text("x\ty\n" + "\n".join(f"{x:g}\t{y:g}" for x, y in zip(xs, ys)) + "\n")
 
-
-def run_class(cls, rows, n_queries, rng):
-    # keep alleles with a solid background; dedup peptides to unique clonotypes
-    by_allele = Counter(a for _, a in rows)
-    keep = {a for a, c in by_allele.items() if c >= 200}
-    rows = [(e, a) for e, a in rows if a in keep and all(c in AA for c in e)]
-    rows = list(dict.fromkeys(rows))  # unique (epitope, allele)
-    if not rows:
-        return None
-    total = len(rows)
-    n_keep = len(keep)
-    allele_freq = {a: by_allele[a] / total for a in keep}
-    lengths = [len(e) for e, _ in rows]
-
-    # presentation-feature index: anchors kept, TCR-facing dropped
-    allele_to_id = {}
-    allele_ids = []
-    peptide_allele = []  # pid -> (allele, epitope)
-    feats = []
-    for e, a in rows:
-        allele_to_id.setdefault(a, len(allele_to_id))
-        allele_ids.append(allele_to_id[a])
-        peptide_allele.append((a, e))
-        feats.append(layout.presentation_features(e, cls))
-    index = KmerIndex.build(feats, alphabet="aa", allele_ids=allele_ids)
-
-    test = rng.sample(rows, min(n_queries, len(rows)))
-    real_E, correct, n_eval = [], 0, 0
-    conf_correct = conf_n = 0  # accuracy among confident calls (aggregate E < 1)
-    for ep, true_allele in test:
-        g = guess(index, peptide_allele, cls, ep, allele_freq, n_keep)
-        if g is None:
-            continue
-        n_eval += 1
-        real_E.append(g[3])
-        ok = g[0] == true_allele
-        correct += ok
-        if g[3] < 1.0:
-            conf_n += 1
-            conf_correct += ok
-    # random arm: length-matched uniform peptides (the noise control)
-    rand_E = []
-    for _ in range(len(test)):
-        L = rng.choice(lengths)
-        rp = "".join(rng.choice(AA) for _ in range(L))
-        g = guess(index, peptide_allele, cls, rp, allele_freq, n_keep)
-        if g is not None:
-            rand_E.append(g[3])
-
-    def nlog(es):
-        return [-math.log10(max(e, 1e-12)) for e in es]
-
-    acc = correct / n_eval if n_eval else 0.0
-    acc_conf = conf_correct / conf_n if conf_n else float("nan")
-    roc = auroc(nlog(real_E), nlog(rand_E))
-    return {"store_n": index.num_peptides(), "alleles": n_keep, "n_eval": n_eval,
-            "acc": acc, "acc_conf": acc_conf, "frac_conf": conf_n / n_eval if n_eval else 0.0,
-            "auroc": roc, "real_E": real_E, "rand_E": rand_E,
-            "mean_real_E": sum(real_E) / len(real_E) if real_E else float("nan"),
-            "mean_rand_E": sum(rand_E) / len(rand_E) if rand_E else float("nan")}
+    lines = ["set terminal svg size 760,380 font 'Helvetica,12' background rgb 'white'",
+             f"set output '{key}.svg'", "set datafile separator '\\t'", "set multiplot layout 1,2",
+             "set grid lc rgb '#e5e7eb'", "set key bottom right box lc rgb '#d1d5db'",
+             "set size square", "set xrange [0:1]", "set yrange [0:1.02]"]
+    # ROC panel
+    lines += [f"set title '{title} - ROC'", "set xlabel 'false positive rate'",
+              "set ylabel 'true positive rate'"]
+    plots = ["x with lines lc rgb '#9ca3af' dt 2 notitle"]
+    for sp, r in curves.items():
+        tsv(f"{key}_{sp}_roc.tsv", *r["roc"])
+        plots.append(f"'{key}_{sp}_roc.tsv' u 1:2 w l lw 2.5 lc rgb '{COLOR[sp]}' "
+                     f"title '{sp} (AUC {r['roc_auc']:.2f})'")
+    lines.append("plot " + ", ".join(plots))
+    # PR panel
+    lines += [f"set title '{title} - precision-recall'", "set xlabel 'recall'",
+              "set ylabel 'precision'", "set key top right box lc rgb '#d1d5db'"]
+    plots = []
+    for sp, r in curves.items():
+        tsv(f"{key}_{sp}_pr.tsv", *r["pr"])
+        plots.append(f"'{key}_{sp}_pr.tsv' u 1:2 w l lw 2.5 lc rgb '{COLOR[sp]}' "
+                     f"title '{sp} (AUC {r['pr_auc']:.2f})'")
+        plots.append(f"{r['pr_base']:g} w l lc rgb '{COLOR[sp]}' dt 3 notitle")
+    lines.append("plot " + ", ".join(plots))
+    lines.append("unset multiplot")
+    (out / f"{key}.gp").write_text("\n".join(lines) + "\n")
+    import subprocess
+    subprocess.run(["gnuplot", f"{key}.gp"], cwd=out, check=True)
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--pmhc", default="/Users/mikesh/hf/pmhc_data/pmhc_full.tsv.gz")
-    ap.add_argument("--queries", type=int, default=1000)
+    ap.add_argument("--queries", type=int, default=800)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--out", default="bench/figures")
     args = ap.parse_args()
     if not os.path.exists(args.pmhc):
         raise SystemExit(f"pmhc table not found: {args.pmhc}")
     rng = random.Random(args.seed)
+    rows_all = load_rows(args.pmhc)
 
-    thr = [10.0, 1.0, 0.1, 0.01, 0.001]  # E-value thresholds for the confident-fraction curve
-    panels, summary = [], {}
-    for cls, label in (("mhc1", "MHC class I"), ("mhc2", "MHC class II")):
-        res = run_class(cls, load_rows(args.pmhc, cls), args.queries, rng)
-        if res is None:
-            print(f"# {cls}: no data"); continue
-        summary[cls] = res
-        # fraction with aggregate E <= threshold (confident), real vs random
-        def frac_at(es):
-            return [sum(1 for e in es if e <= t) / max(1, len(es)) for t in thr]
-        panels.append({
-            "title": f"{label}: allele-guess confidence (E<=thr), real vs random  "
-                     f"[top-1 acc {res['acc']:.2f}, AUROC {res['auroc']:.2f}]",
-            "xlabel": "aggregate E-value threshold", "ylabel": "fraction confident",
-            "xs": thr, "logx": True,
-            "series": [("real (presented)", frac_at(res["real_E"]), style(COLOR["real"], "seqtm")),
-                       ("random peptides", frac_at(res["rand_E"]), style(COLOR["random"], "seqtrie"))]})
-
-    print("class\tstore_n\talleles\tn_eval\ttop1_acc\tacc@E<1\tfrac@E<1\tAUROC\tmeanE_real\tmeanE_rand")
-    for cls, r in summary.items():
-        print(f"{cls}\t{r['store_n']}\t{r['alleles']}\t{r['n_eval']}\t{r['acc']:.3f}\t"
-              f"{r['acc_conf']:.3f}\t{r['frac_conf']:.3f}\t{r['auroc']:.3f}\t"
-              f"{r['mean_real_E']:.3g}\t{r['mean_rand_E']:.3g}")
-    if panels:
-        out = Path(args.out)
-        out.mkdir(parents=True, exist_ok=True)
-        render(out, "mhc_guess", panels)
-        print(f"\nWrote {out}/mhc_guess.svg")
+    print("class\tspecies\talleles\tn_eval\ttop1\tROC_AUC\tPR_AUC\tPR_base\tnoise_AUROC")
+    out = Path(args.out)
+    out.mkdir(parents=True, exist_ok=True)
+    for cls, label in (("mhc1", "MHC-I"), ("mhc2", "MHC-II")):
+        curves = {}
+        for sp in ("human", "mouse"):
+            rows = [(e, a) for e, a, c, s in rows_all if c == cls and s == sp]
+            res = eval_panel(cls, sp, rows, args.queries, rng)
+            if res is None:
+                print(f"{cls}\t{sp}\t(insufficient data)")
+                continue
+            curves[sp] = res
+            print(f"{cls}\t{sp}\t{res['alleles']}\t{res['n_eval']}\t{res['top1']:.3f}\t"
+                  f"{res['roc_auc']:.3f}\t{res['pr_auc']:.3f}\t{res['pr_base']:.3g}\t{res['noise_auc']:.3f}")
+        if curves:
+            render_rocpr(out, f"{cls}_rocpr", f"{label} allele guessing", curves)
+            print(f"# wrote {out}/{cls}_rocpr.svg")
 
 
 if __name__ == "__main__":
