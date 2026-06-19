@@ -7,7 +7,7 @@ Reference sets (target D, all built to the same size N so E=(N/M)*n_control is c
   vdjdb+noise  -- half VDJdb, half uniform-random noise (clusters diluted 2x)
   olga+noise   -- half OLGA, half uniform-random noise
 Background controls: OLGA-generated, sizes 1M / 2M / 10M (from bench/gen_olga.py cache).
-Query sets: vdjdb or olga. Scope: 1..3 substitutions.
+Query sets: vdjdb or olga. Scope: 1/2/3 substitutions and 1-2 substitutions + 1 indel.
 
 For each (ref, query, control, scope) it reports mean neighbours (exact excluded), median
 E-value, and the fraction of neighbours called significant at a fixed E<1 cutoff and after
@@ -35,6 +35,15 @@ from bench_evalue import bh_reject
 from bench_gnuplot import mutate, render, style, vdjdb_cdr3
 
 AA = "ACDEFGHIKLMNPQRSTVWY"
+# Search scope conditions: pure-substitution and substitution+single-indel budgets.
+# Each entry is (label, SearchParams kwargs); a single indel = up to one insertion OR one deletion.
+SCOPES = [
+    ("1 sub",         dict(max_subs=1, max_total_edits=1)),
+    ("2 sub",         dict(max_subs=2, max_total_edits=2)),
+    ("3 sub",         dict(max_subs=3, max_total_edits=3)),
+    ("1 sub+1 indel", dict(max_subs=1, max_ins=1, max_dels=1, max_total_edits=2)),
+    ("2 sub+1 indel", dict(max_subs=2, max_ins=1, max_dels=1, max_total_edits=3)),
+]
 REF_SETS = ("vdjdb", "olga", "vdjdb+noise", "olga+noise")
 COLOR_REF = {"vdjdb": "#d62728", "olga": "#1f77b4", "vdjdb+noise": "#ff9896", "olga+noise": "#aec7e8"}
 CONTROLS = {"1M": "bench/cache/olga_1M.txt.gz", "2M": "bench/cache/olga_2M.txt.gz",
@@ -63,9 +72,9 @@ def make_ref(kind, size, vdjdb_pool, olga_pool, rng):
     return list(dict.fromkeys(base))  # unique clonotypes
 
 
-def neighbour_counts(idx, queries, scope, threads):
+def neighbour_counts(idx, queries, scope_kw, threads):
     """Per-query count of distinct hits with positive distance (exact/self excluded)."""
-    res = idx.search_batch(queries, st.SearchParams(max_subs=scope, engine="seqtm"), threads)
+    res = idx.search_batch(queries, st.SearchParams(engine="seqtm", **scope_kw), threads)
     return [sum(1 for h in r if h.score > 0) for r in res]
 
 
@@ -73,7 +82,6 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--size", type=int, default=20000, help="reference set size N")
     ap.add_argument("--queries", type=int, default=1000)
-    ap.add_argument("--scopes", type=int, nargs="*", default=[1, 2, 3])
     ap.add_argument("--threads", type=int, default=0)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--out", default="bench/figures")
@@ -99,8 +107,8 @@ def main():
     n_ctrl = {qs: {c: {} for c in ctrl_names} for qs in qsets}
     for qs, qq in qsets.items():
         for c in ctrl_names:
-            for sc in args.scopes:
-                n_ctrl[qs][c][sc] = neighbour_counts(controls[c], qq, sc, args.threads)
+            for lbl, kw in SCOPES:
+                n_ctrl[qs][c][lbl] = neighbour_counts(controls[c], qq, kw, args.threads)
         print(f"# control counts done for query={qs}", flush=True)
 
     # build references and precompute n_target[ref][qset][scope]
@@ -109,8 +117,8 @@ def main():
     n_tgt = {r: {qs: {} for qs in qsets} for r in REF_SETS}
     for r in REF_SETS:
         for qs, qq in qsets.items():
-            for sc in args.scopes:
-                n_tgt[r][qs][sc] = neighbour_counts(refs[r], qq, sc, args.threads)
+            for lbl, kw in SCOPES:
+                n_tgt[r][qs][lbl] = neighbour_counts(refs[r], qq, kw, args.threads)
     print(f"# reference sizes: " + ", ".join(f"{r}={len(refs[r])}" for r in REF_SETS), flush=True)
 
     # assemble table
@@ -121,9 +129,9 @@ def main():
         for qs in qsets:
             for c in ctrl_names:
                 M = len(controls[c])
-                for sc in args.scopes:
-                    nt = n_tgt[r][qs][sc]
-                    nc = n_ctrl[qs][c][sc]
+                for lbl, _ in SCOPES:
+                    nt = n_tgt[r][qs][lbl]
+                    nc = n_ctrl[qs][c][lbl]
                     Es, ps = [], []
                     for a, b in zip(nt, nc):
                         E = (3.0 if b == 0 else float(b)) * N / M
@@ -134,19 +142,21 @@ def main():
                     rej = bh_reject(ps, 0.05)
                     frac_bh = sum(a for a, rj in zip(nt, rej) if rj) / total
                     med_e = sorted(Es)[len(Es) // 2]
-                    table[(r, qs, c, sc)] = frac_bh
-                    print(f"{r}\t{qs}\t{c}\t{sc}\t{N}\t{M}\t{sum(nt)/len(nt):.2f}\t"
+                    table[(r, qs, c, lbl)] = frac_bh
+                    print(f"{r}\t{qs}\t{c}\t{lbl}\t{N}\t{M}\t{sum(nt)/len(nt):.2f}\t"
                           f"{med_e:.3g}\t{frac_e:.3f}\t{frac_bh:.3f}", flush=True)
 
     # figure: one panel per query set; x=scope, y=fracSig(BH); line per ref set; largest control
     cbig = ctrl_names[-1]
+    labels = [lbl for lbl, _ in SCOPES]
+    xs = list(range(1, len(labels) + 1))
     panels = []
     for qs in qsets:
         panels.append({
             "title": f"query={qs}: significant fraction vs scope (control OLGA {cbig}, BH FDR<0.05)",
-            "xlabel": "scope (substitutions)", "ylabel": "fraction significant",
-            "xs": args.scopes, "xtics": [(str(s), s) for s in args.scopes],
-            "series": [(r, [table[(r, qs, cbig, sc)] for sc in args.scopes], style(COLOR_REF[r], "seqtm"))
+            "xlabel": "search scope", "ylabel": "fraction significant", "yrange": (0, 1),
+            "xs": xs, "xtics": [(lbl, i + 1) for i, lbl in enumerate(labels)],
+            "series": [(r, [table[(r, qs, cbig, lbl)] for lbl in labels], style(COLOR_REF[r], "seqtm"))
                        for r in REF_SETS]})
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
