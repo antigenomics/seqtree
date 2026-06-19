@@ -4,7 +4,7 @@ build-backend = "scikit_build_core.build"
 
 [project]
 name = "seqtree"
-version = "0.0.3b0"
+version = "0.0.3b1"
 description = "Fast fuzzy search over biological sequences (C++ core, Python bindings)"
 readme = "README.md"
 requires-python = ">=3.10"

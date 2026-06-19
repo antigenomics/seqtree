@@ -84,3 +84,16 @@ def test_assign_allele():
     store = pmhc.PMHCStore.from_records(recs, k=4)
     ranked = store.assign_allele("KLEEEEEEV", "mhc1")  # P2=L, PΩ=V -> A*02:01-like
     assert ranked[0][0] == "HLA-A*02:01"
+
+
+def test_filter_nonbinders():
+    # same A*02:01 (P2=L,PΩ=V) vs B*07 (P2=P,PΩ=L) fixture as allele assignment
+    recs = ([{"epitope": "ALAAAAAAV", "mhc": "HLA-A*02:01", "mhc_class": "MHCI"} for _ in range(5)]
+            + [{"epitope": "APRRRRRRL", "mhc": "HLA-B*07:02", "mhc_class": "MHCI"} for _ in range(5)])
+    store = pmhc.PMHCStore.from_records(recs, k=4)
+    # a true A*02:01-like binder: its allele scores > 0 (enriched over background)
+    binder = {a: s for a, s, *_ in store.assign_allele("KLEEEEEEV", "mhc1")}
+    assert binder["HLA-A*02:01"] > 0
+    # a non-binder: anchors (P2=W, PΩ=K) match no allele's signature -> all scores <= 0
+    nonbinder = store.assign_allele("KWEEEEEEK", "mhc1")
+    assert all(score <= 0 for _, score, _, _ in nonbinder)

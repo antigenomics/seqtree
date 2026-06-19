@@ -8,8 +8,13 @@ neighbours, vote the neighbours' alleles, and score each panel allele by the enr
 its vote vs the background frequency (-log10 binomial tail). Positives = the peptide's true
 allele(s) (multi-label, since peptides can be promiscuous); negatives = the rest. We report
 ROC-AUC and PR-AUC for MHC-I and MHC-II, **human and mouse separately**, plus top-1 accuracy
-and a real-vs-random noise-rejection AUROC. Class-II uses the register trick (single best
-9-mer core register, layout.presentation_features(register='anchored')).
+and a real-vs-random AUROC -- the latter is the **non-binder filter** (a peptide binding no MHC
+gets a high E-value and is rejected). Class-II uses the register trick (single best 9-mer core
+register, layout.presentation_features(register='anchored')); it is also promiscuous, so allele
+assignment is multi-label (positives = every observed restricting allele).
+
+This is a reference benchmark for the E-value methodology; the production allele-guessing and
+non-binder filtering live downstream in vdjmatch and mhcmatch.
 
     python bench/bench_mhc_guess.py --pmhc /Users/mikesh/hf/pmhc_data/pmhc_full.tsv.gz
 

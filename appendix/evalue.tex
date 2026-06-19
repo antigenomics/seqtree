@@ -607,17 +607,37 @@ inflates both its baseline and its scores.}
   \label{fig:mhc2guess}
 \end{figure}
 
+\paragraph{Filtering non-binders.}
+The same per-allele E-value rejects \emph{non-binders} at two granularities. A peptide that binds
+\emph{no} MHC has a large best-over-panel E-value (no allele's anchor signature is enriched over the
+marginal background) and is dropped; this is precisely the real-vs-random noise-rejection AUROC of
+Table~\ref{tab:mhcguess}. A peptide that simply does not bind a \emph{specific} allele $a$ has
+$E_a>\alpha$ even when it binds something else, so $a$ is excluded as a restriction element. The two
+filters compose: rank by vote fraction, threshold by $E_a$.
+
+\paragraph{Class-II promiscuity.}
+Class-II binding is far more degenerate than class-I: shared, loosely specified P1/P4/P6/P9 pockets
+and an open groove let one peptide be presented by \emph{many} alleles. Allele assignment is therefore
+genuinely multi-label --- the true set for a peptide is several alleles, not one --- which is how the
+benchmark scores it (positives $=$ every observed restricting allele) and why class-II PR baselines
+sit above class-I. Operationally, a class-II non-binder filter must test ``binds none of the panel''
+rather than ``binds exactly one,'' and the global $E_{\mathrm{glob}}$ is the natural statistic for it.
+
 \subsection{Implementation and limitations}
 Implemented in \texttt{seqtree.pmhc} (anchor-masked TCR-facing k-mer homology via the C++
 \texttt{KmerIndex} seed-and-gather; \texttt{find\_mimics}; \texttt{assign\_allele}) and
 \texttt{seqtree.pmhc\_evalue}; the positive control is the recovery of the A\*02:01 trio of
 \cite{Dolton2023} as mutual TCR-facing homologs. Anchor positions are parametrized (presets per
-class, overridable); class-II registers are handled register-agnostically (all-window k-mers).
-Alternative CDR3 build strategies, e.g.\ the bilateral run-peeling decomposition
-of~\cite{Konstantinovsky2026}, plug into the same layer. \emph{Limitation:} we do not model
-MHC-groove/peptide-context similarity across alleles --- distinct alleles are distinct nulls,
+class, overridable); class-II homology is register-agnostic (all-window k-mers), while the reverse
+allele-guessing problem uses the register trick (one core register, after the deconvolution idea of
+\cite{Andreatta2017,Alvarez2019}). Alternative CDR3 build strategies, e.g.\ the bilateral run-peeling
+decomposition of~\cite{Konstantinovsky2026}, plug into the same layer. \emph{Limitation:} we do not
+model MHC-groove/peptide-context similarity across alleles --- distinct alleles are distinct nulls,
 searched independently (never pooled); ``compatible allele'' is a user input, and validity is
-conditional on a faithful per-allele presented control.
+conditional on a faithful per-allele presented control. The \texttt{seqtree} code here is a
+\emph{reference implementation and benchmark} of the E-value methodology; the production allele
+guessing and non-binder filtering, with an optimized index and tuned ROC/PR thresholds, are built
+downstream in \texttt{vdjmatch} (TCR--antigen specificity) and \texttt{mhcmatch} (peptide--MHC).
 
 \section{Practical defaults and algorithm}\label{sec:practice}
 
