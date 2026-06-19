@@ -148,7 +148,8 @@ def render(out: Path, key, panels, width=720, panel_h=360):
         lines += [f'set title "{p["title"]}"', f"set xlabel '{p['xlabel']}'",
                   f"set ylabel '{p['ylabel']}'",
                   "set logscale x" if p.get("logx") else "unset logscale x",
-                  "set logscale y" if p.get("logy") else "unset logscale y"]
+                  "set logscale y" if p.get("logy") else "unset logscale y",
+                  f"set yrange [{p['yrange'][0]}:{p['yrange'][1]}]" if p.get("yrange") else "set yrange [*:*]"]
         if p.get("xtics"):
             lines.append("set xtics (" + ", ".join(f"'{l}' {v}" for l, v in p["xtics"]) + ")")
         else:

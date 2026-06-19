@@ -383,10 +383,11 @@ Two thresholding regimes for a family of $|\mathcal{Q}|$ tested queries:
 
 \begin{figure}[ht]\centering
   \includegraphics[width=\linewidth]{evalue_matrix.pdf}
-  \caption{Control-calibrated significance across reference structure and scope
+  \caption{Control-calibrated significance across reference structure and search scope
   (\texttt{bench/bench\_evalue\_matrix.py}): fraction of unique hits called significant
-  (Benjamini--Hochberg FDR$<0.05$) vs scope, for VDJdb / OLGA / $+$noise references against an OLGA
-  background, query = VDJdb (left) and OLGA (right). Antigen-selected VDJdb is enriched and survives
+  (Benjamini--Hochberg FDR$<0.05$) vs scope --- $1$/$2$/$3$ substitutions and $1$--$2$ substitutions
+  $+$ one indel --- for VDJdb / OLGA / $+$noise references against an OLGA background, query $=$ VDJdb
+  (top) and OLGA (bottom), both panels on $[0,1]$. Antigen-selected VDJdb is enriched and survives
   noise dilution; the unstructured OLGA nulls sit at zero --- the multiple-testing correction is what
   separates them (a fixed $E<1$ cutoff over-calls).}
   \label{fig:matrix}
@@ -452,9 +453,10 @@ with no change to the search or the background.
   \includegraphics[width=\linewidth]{epitope_detection.pdf}
   \caption{Epitope detection complexity (\texttt{bench/bench\_epitope.py}): fraction called
   significant (Benjamini--Hochberg, FDR $<0.05$) versus sampled depth $n$ for the convergent GIL
-  and the diffuse NLV A*02 repertoires. \textbf{Dashed} = observed; \textbf{dotted} = the
-  degree-distribution prediction of Eq.~\eqref{eq:phi}; colour denotes the epitope (NLV / GIL).
-  GIL's dominant cluster is recovered an order of magnitude sooner than NLV's diffuse one.}
+  and the diffuse NLV A*02 repertoires. \textbf{Dashed} = observed with a \textbf{shaded $95\%$
+  confidence band} ($30$ independent subsamples per depth); \textbf{dotted} = the degree-distribution
+  prediction of Eq.~\eqref{eq:phi}; colour denotes the epitope (NLV / GIL). GIL's dominant cluster is
+  recovered an order of magnitude sooner than NLV's diffuse one.}
   \label{fig:epitope}
 \end{figure}
 
@@ -616,30 +618,37 @@ standard-amino-acid epitopes and to alleles with $\ge100$ (human) / $\ge40$ (mou
 (VDJdb/IEDB), evaluated as a per-(peptide, allele) binary task --- exactly how \texttt{vdjmatch} scores
 TCR-antigen specificity --- and split by species, the vote-fraction ranking recovers the restricting
 allele with
-ROC-AUC $\approx 0.90$--$0.98$ and PR-AUC far above the prevalence baseline, for both classes and both
-human and mouse (Table~\ref{tab:mhcguess}, Figs.~\ref{fig:mhc1guess}--\ref{fig:mhc2guess}). The
+ROC-AUC $\approx 0.90$--$0.99$ and PR-AUC far above the prevalence baseline, for both classes, both
+species, and both dataset tiers (Table~\ref{tab:mhcguess}, Figs.~\ref{fig:mhc1guess}--\ref{fig:mhc2guess};
+the ROC/PR \emph{curves} are shown for the full set). The
 confidence E-value additionally separates real peptides from length-matched random ``noise''
 (noise-rejection AUROC column). This works only with \emph{presentation} (anchor) features: the
 TCR-facing homology used for cross-reactivity carries no allele information (AUROC $\approx0.5$),
 confirming that MHC restriction lives in the anchors, not the TCR-facing surface.
 
 \begin{table}[ht]\centering\small
-\begin{tabular}{llrrrrr}
+\begin{tabular}{lllrrrrr}
 \hline
-class & species & alleles & top-1 acc & ROC-AUC & PR-AUC (base) & noise AUROC\\
+class & species & set & alleles & top-1 acc & ROC-AUC & PR-AUC (base) & noise AUROC\\
 \hline
-MHC-I  & human & 129 & 0.58 & 0.92 & 0.47 (0.012) & 0.69\\
-MHC-I  & mouse &   7 & 0.69 & 0.90 & 0.71 (0.205) & 0.62\\
-MHC-II & human &  11 & 0.70 & 0.94 & 0.72 (0.100) & 0.55\\
-MHC-II & mouse &   9 & 0.89 & 0.98 & 0.92 (0.113) & 0.39\\
+MHC-I  & human & full       & 129 & 0.58 & 0.92 & 0.47 (0.012) & 0.69\\
+MHC-I  & human & $\ge2$ refs &  82 & 0.72 & 0.97 & 0.71 (0.015) & 0.64\\
+MHC-I  & mouse & full       &   7 & 0.69 & 0.90 & 0.71 (0.205) & 0.62\\
+MHC-I  & mouse & $\ge2$ refs &   4 & 0.83 & 0.95 & 0.88 (0.265) & 0.37\\
+MHC-II & human & full       &  11 & 0.70 & 0.94 & 0.72 (0.100) & 0.55\\
+MHC-II & human & $\ge2$ refs &   8 & 0.57 & 0.91 & 0.64 (0.130) & 0.54\\
+MHC-II & mouse & full       &   9 & 0.89 & 0.98 & 0.92 (0.113) & 0.39\\
+MHC-II & mouse & $\ge2$ refs &   2 & 0.98 & 0.99 & 0.99 (0.500) & 0.46\\
 \hline
 \end{tabular}
-\caption{Allele guessing from presentation-signature neighbours, per-(peptide, allele) ROC/PR
-($\sim$600 held-out peptides per cell; alleles with $\ge100$ human / $\ge40$ mouse peptides).
-Ranking by neighbour vote fraction gives ROC-AUC $0.90$--$0.98$ and PR-AUC well above the prevalence
-baseline (in parentheses). The confidence E-value separates presented peptides from random noise
-(last column). Mouse MHC-II is dominated by I-A\textsuperscript{b} ($\sim$92\% of peptides), which
-inflates both its baseline and its scores.}
+\caption{Allele guessing from presentation-signature neighbours, per-(peptide, allele) ROC/PR,
+for both \texttt{pmhc\_data} tiers (full and the $\ge2$-publication shortlist). About $600$ held-out
+query peptides per class$\times$species group; the guessing panel keeps alleles with $\ge100$ (human)
+/ $\ge40$ (mouse) peptides. Ranking by neighbour vote fraction gives ROC-AUC $0.90$--$0.99$ and
+PR-AUC well above the prevalence baseline (in parentheses); the higher-confidence shortlist matches or
+exceeds the full set on ROC despite far smaller panels. The confidence E-value separates presented
+peptides from length-matched random noise (last column). Mouse class-II panels are tiny (full $9$
+alleles, shortlist $2$) and dominated by I-A\textsuperscript{b}, inflating both baseline and scores.}
 \label{tab:mhcguess}
 \end{table}
 

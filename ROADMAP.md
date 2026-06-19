@@ -130,9 +130,9 @@ additions below.
 
 ### 3.3 MHC pseudosequence → clustering & promiscuity
 - **Pseudosequence:** represent each allele by the polymorphic residues that line the peptide-binding
-  groove (the NetMHCpan-style pseudosequence — the peptide-contacting positions; _agent: cite
-  NetMHCpan-4.1, verify DOI before use_). This turns "allele" from an opaque label into a short
-  sequence the **same seqtree engine** can compare.
+  groove (the pseudosequence of peptide-contacting positions, as used for per-allele MHC binding
+  prediction by Glynn, Ghersi & Singh, *PNAS* 2025, [doi:10.1073/pnas.2405106122](https://doi.org/10.1073/pnas.2405106122)).
+  This turns "allele" from an opaque label into a short sequence the **same seqtree engine** can compare.
 - **Cluster MHCs** by pseudosequence distance (seqtree fuzzy search on the pseudosequence "alphabet"
   of groove residues) → groups of functionally similar alleles. This is the principled way to express
   **cross-allele similarity**, which `seqtree.pmhc` deliberately does *not* model (appendix §Impl.
