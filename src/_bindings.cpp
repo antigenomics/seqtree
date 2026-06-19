@@ -20,8 +20,9 @@ struct PyParams {
     int gap_open = 1, gap_extend = 1;
     std::string matrix;          // named builtin: "" (unit), "blosum62", "pam50"
     std::optional<SubstitutionMatrix> matrix_obj;  // explicit/custom matrix (overrides name)
+    std::optional<PositionalMatrix> pos_matrix_obj;  // per-position penalties (Hamming path)
     std::string engine = "auto"; // auto | seqtrie | seqtm
-    std::string mode = "all";    // all | top
+    std::string mode = "all";    // all | top | local
 };
 
 std::string lower(std::string s) {
@@ -49,7 +50,8 @@ Mode parse_mode(const std::string& m) {
     std::string l = lower(m);
     if (l == "all") return Mode::AllHits;
     if (l == "top") return Mode::TopHit;
-    throw py::value_error("unknown mode '" + m + "' (use 'all' or 'top')");
+    if (l == "local") return Mode::Local;
+    throw py::value_error("unknown mode '" + m + "' (use 'all', 'top', or 'local')");
 }
 
 // Symbols in codec code order for an alphabet (custom matrices must match this order).
@@ -111,6 +113,7 @@ SearchParams to_cpp(const PyParams& pp, const SubstitutionMatrix* mat) {
     p.gap_open = pp.gap_open;
     p.gap_extend = pp.gap_extend;
     p.matrix = mat;
+    p.pos_matrix = pp.pos_matrix_obj ? &*pp.pos_matrix_obj : nullptr;
     return p;
 }
 
@@ -214,6 +217,26 @@ PYBIND11_MODULE(_core, m) {
             return "SubstitutionMatrix(size=" + std::to_string(s.size()) + ")";
         });
 
+    py::class_<PositionalMatrix>(m, "PositionalMatrix",
+                                 "Per-position penalties pen(pos, a, b) over a fixed frame width. "
+                                 "Build from a base SubstitutionMatrix and per-position integer "
+                                 "weights: weight 0 masks the position (free, not counted as a "
+                                 "substitution -- e.g. an anchor); >1 up-weights it (e.g. a TCR "
+                                 "hotspot). Used on the seqtm Hamming path when width == query "
+                                 "length.")
+        .def_static("from_weights", &PositionalMatrix::from_weights,
+                    py::arg("base"), py::arg("weights"),
+                    "pen[pos][a][b] = weights[pos] * base.penalty(a, b); weight 0 masks the "
+                    "position. len(weights) is the frame width.")
+        .def("size", &PositionalMatrix::size)
+        .def("width", &PositionalMatrix::width)
+        .def("masked", &PositionalMatrix::masked, py::arg("pos"))
+        .def("penalty", &PositionalMatrix::penalty, py::arg("pos"), py::arg("a"), py::arg("b"))
+        .def("__repr__", [](const PositionalMatrix& p) {
+            return "PositionalMatrix(size=" + std::to_string(p.size()) +
+                   ", width=" + std::to_string(p.width()) + ")";
+        });
+
     m.def("alphabet_symbols", [](const std::string& a) { return alphabet_symbols(parse_alphabet(a)); },
           py::arg("alphabet") = "aa",
           "Symbols in code order for an alphabet; custom matrices must follow this order.");
@@ -252,6 +275,17 @@ PYBIND11_MODULE(_core, m) {
                 return py::cast(p.matrix);
             },
             [](PyParams& p, const py::object& m) { set_matrix(p, m); })
+        .def_property(
+            "pos_matrix",
+            [](const PyParams& p) -> py::object {
+                if (p.pos_matrix_obj) return py::cast(*p.pos_matrix_obj);
+                return py::none();
+            },
+            [](PyParams& p, const py::object& m) {
+                if (m.is_none()) p.pos_matrix_obj.reset();
+                else if (py::isinstance<PositionalMatrix>(m)) p.pos_matrix_obj = m.cast<PositionalMatrix>();
+                else throw py::type_error("pos_matrix must be a PositionalMatrix or None");
+            })
         .def_readwrite("gap_open", &PyParams::gap_open)
         .def_readwrite("gap_extend", &PyParams::gap_extend)
         .def_property("engine", [](const PyParams& p) { return p.engine; },

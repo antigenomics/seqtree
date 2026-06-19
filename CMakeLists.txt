@@ -20,6 +20,7 @@ find_package(Threads REQUIRED)
 add_library(seqtree_core STATIC
   src/codec.cpp
   src/substitution_matrix.cpp
+  src/positional_matrix.cpp
   src/trie.cpp
   src/index.cpp
   src/engine_seqtm.cpp
@@ -45,6 +46,7 @@ if(SEQTREE_TESTS)
     tests/cpp/test_engines.cpp
     tests/cpp/test_edge.cpp
     tests/cpp/test_serialize.cpp
+    tests/cpp/test_positional.cpp
   )
   target_include_directories(seqtree_tests PRIVATE tests/cpp src)
   target_link_libraries(seqtree_tests PRIVATE seqtree_core)

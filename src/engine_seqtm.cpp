@@ -12,14 +12,18 @@ struct TmCtx {
     int qlen;
     Limits lim;
     bool hamming;          // no indels allowed
+    bool posmode;          // per-position penalties active (Hamming, width == qlen)
     Mode mode;
     std::unordered_map<uint32_t, uint32_t>* seen;
     uint64_t* collisions;
     std::vector<Hit>* out;
 
-    int32_t sub_pen(uint8_t a, uint8_t b) const {
+    int32_t sub_pen(int qpos, uint8_t a, uint8_t b) const {
+        if (posmode) return lim.posmat->penalty(uint16_t(qpos), a, b);
         return lim.unit ? (a == b ? 0 : 1) : lim.mat->penalty(a, b);
     }
+    // A masked position (anchor) is free: it neither adds penalty nor counts as a substitution.
+    bool pos_masked(int qpos) const { return posmode && lim.posmat->masked(uint16_t(qpos)); }
 };
 
 void emit(TmCtx& c, uint32_t node, int32_t pen, int ns, int ni, int nd) {
@@ -51,10 +55,10 @@ void recurse(TmCtx& c, uint32_t node, int qpos, int ns, int ni, int nd, int32_t 
         uint32_t child = c.trie.edge_child[ei];
 
         if (qpos < c.qlen) {  // substitution / match: consume query + ref char
-            bool mism = c.q[qpos] != code;
-            int nns = ns + (mism ? 1 : 0);
-            int32_t npen = pen + c.sub_pen(c.q[qpos], code);
-            if (nns <= c.lim.max_sub && tot + (mism ? 1 : 0) <= c.lim.max_tot && npen <= c.lim.budget)
+            bool counts = (c.q[qpos] != code) && !c.pos_masked(qpos);  // masked anchors are free
+            int nns = ns + (counts ? 1 : 0);
+            int32_t npen = pen + c.sub_pen(qpos, c.q[qpos], code);
+            if (nns <= c.lim.max_sub && tot + (counts ? 1 : 0) <= c.lim.max_tot && npen <= c.lim.budget)
                 recurse(c, child, qpos + 1, nns, ni, nd, npen);
         }
         if (!c.hamming) {  // insertion: consume ref char only
@@ -77,7 +81,9 @@ void recurse(TmCtx& c, uint32_t node, int qpos, int ns, int ni, int nd, int32_t 
 void search_seqtm(const Trie& trie, const uint8_t* qcodes, int qlen, const Limits& lim,
                   Mode mode, Scratch& s, std::vector<Hit>& out) {
     s.seen.clear();
-    TmCtx c{trie, qcodes, qlen, lim, lim.max_ins == 0 && lim.max_del == 0, mode,
+    bool hamming = lim.max_ins == 0 && lim.max_del == 0;
+    bool posmode = lim.posmat != nullptr && hamming && lim.posmat->width() == uint16_t(qlen);
+    TmCtx c{trie, qcodes, qlen, lim, hamming, posmode, mode,
             &s.seen, &s.collisions, &out};
     recurse(c, /*node=*/0, /*qpos=*/0, 0, 0, 0, 0);
 }
