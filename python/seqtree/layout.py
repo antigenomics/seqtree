@@ -64,14 +64,30 @@ def kmers(pep: str, k: int, spec: AnchorSpec | None = None) -> list[str]:
     return [s[i:i + k] for i in range(len(s) - k + 1)]
 
 
-def presentation_features(pep: str, cls: str) -> list[str]:
+_MHC2_P1 = set("FILMVWY")  # pocket-1 strongly favours large hydrophobics (DR/DP/mouse)
+
+
+def _core_anchor_score(core: str) -> float:
+    """Crude register-likelihood of a 9-mer core: P1 hydrophobic dominates, P4/P6/P9
+    disfavour Pro/Gly (a 1-pass proxy for the GibbsCluster/NNAlign register inference)."""
+    s = 2.0 if core[0] in _MHC2_P1 else 0.0
+    for i in (3, 5, 8):
+        if core[i] not in "PG":
+            s += 0.25
+    return s
+
+
+def presentation_features(pep: str, cls: str, register: str = "anchored") -> list[str]:
     """Short binding-motif signatures (anchor / pocket residues) for the reverse
     problem -- peptide -> presenting allele. These KEEP the anchors and drop the
     TCR-facing positions (the opposite of :func:`kmers`), so peptides binding the
-    same allele share a signature. A peptide may yield several (class-II registers).
+    same allele share a signature.
 
     class I: N-pocket P1-P3 + C-pocket P(Ω-1),PΩ -> one 5-residue signature.
-    class II: core anchors P1,P4,P6,P9 over every 9-mer window -> one per register.
+    class II: core anchors P1,P4,P6,P9 of the 9-mer core. ``register='anchored'`` (the
+    register trick) picks the single best register by ``_core_anchor_score`` so the
+    signature is consistent across peptides of an allele; ``register='all'`` keeps every
+    register (register-agnostic, noisier).
     """
     p = pep.strip().upper()
     L = len(p)
@@ -82,8 +98,11 @@ def presentation_features(pep: str, cls: str) -> list[str]:
     if cls == "mhc2":
         if L < 9:
             return [p]
-        feats = [p[s] + p[s + 3] + p[s + 5] + p[s + 8] for s in range(L - 9 + 1)]
-        return list(dict.fromkeys(feats))
+        windows = [p[s:s + 9] for s in range(L - 9 + 1)]
+        if register == "anchored":
+            best = max(windows, key=_core_anchor_score)
+            return [best[0] + best[3] + best[5] + best[8]]
+        return list(dict.fromkeys(w[0] + w[3] + w[5] + w[8] for w in windows))
     return [p]
 
 
