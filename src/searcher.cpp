@@ -20,9 +20,10 @@ Limits resolve_limits(const SearchParams& p) {
     // which ignores per-type caps -- can be driven by max_total_edits alone.
     int sum = int(p.max_substitutions) + int(p.max_insertions) + int(p.max_deletions);
     L.max_tot = (p.max_total_edits > 0) ? int(p.max_total_edits) : sum;
+    L.posmat = p.pos_matrix;  // per-position penalties (seqtm Hamming path only)
     if (p.max_score_penalty > 0) L.budget = p.max_score_penalty;
-    else if (L.unit) L.budget = L.max_tot;  // unit cost: one penalty per edit
-    else L.budget = std::numeric_limits<int32_t>::max() / 4;  // matrix mode: rely on count caps
+    else if (L.unit && L.posmat == nullptr) L.budget = L.max_tot;  // unit cost: one penalty per edit
+    else L.budget = std::numeric_limits<int32_t>::max() / 4;  // matrix/positional: rely on count caps
     L.max_hits = p.max_hits;
     return L;
 }
@@ -57,7 +58,8 @@ void Searcher::search_into(std::string_view query, const SearchParams& p, std::v
     Limits L = resolve_limits(p);
     out.clear();
     scratch_->collisions = 0;  // seqtrie leaves it 0; seqtm accumulates per re-reached ref
-    if (pick_engine(p) == Engine::SeqTm)
+    // seqtm handles Local and positional scoring; seqtrie is the matrix-budget DP path.
+    if (p.mode == Mode::Local || p.pos_matrix != nullptr || pick_engine(p) == Engine::SeqTm)
         search_seqtm(idx_.trie(), qcodes_.data(), int(query.size()), L, p.mode, *scratch_, out);
     else
         search_seqtrie(idx_.trie(), qcodes_.data(), int(query.size()), L, *scratch_, out);

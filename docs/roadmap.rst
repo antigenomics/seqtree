@@ -1,16 +1,20 @@
 Roadmap
 =======
 
-The v1 core ships both engines, scope + budget search, BLOSUM62 / PAM50 / custom matrices
-(Gram-distance penalty) with linear gaps, top / all hits, on-demand alignment, parallel batch and
-batch-of-batches, auto-selecting pairwise search, and **control-set E-values** for significance (see
-:doc:`evalue`). Planned next:
+The core ships both engines, scope + budget search, BLOSUM62 / PAM50 / custom matrices
+(Gram-distance penalty) with linear gaps, **position-aware scoring** (``PositionalMatrix``, for
+anchor masking + PSSMs), top / all hits, on-demand alignment, parallel batch and batch-of-batches,
+auto-selecting pairwise search, a C++ **k-mer seed index** (``KmerIndex``), **control-set E-values**
+for significance (see :doc:`evalue`), and **pMHC epitope homology search** with presentation-aware
+E-values and neoantigen mimic discovery (see :doc:`pmhc`). Planned next:
 
 1. **Alignment polish** — affine gaps (gap open vs extend), CIGAR-style output, batch alignment.
-2. **Position-specific scoring matrices** — ``penalty(pos, a, b)``; consume per-position PWMs.
-3. **Significance, continued.** Control-set E-values ship (``load_control`` + ``evalues``); a
-   *tf-idf redundancy weighting* — down-weighting hits to common / clustered motifs intrinsically,
-   without an external control set — is still under consideration.
+2. **Graded / native pMHC scoring** — ``PositionalMatrix`` already supports per-position PSSMs and
+   graded TCR-hotspot weights; remaining work is a native local/best-window engine mode and
+   predictor-driven proteome-to-presented-peptide pipelines for full mimic scans.
+3. **Significance, continued.** Control-set + presentation-aware E-values ship; a *tf-idf redundancy
+   weighting* — down-weighting hits to common / clustered motifs without an external control set — is
+   still under consideration.
 4. **Memory** — succinct (LOUDS) trie / packed reference strings if reference counts reach the
    10M+ range; memory-mapped frozen index for zero-copy load.
 5. **Batch-of-batches & distribution** — streaming query batches and optional process-level fan-out.

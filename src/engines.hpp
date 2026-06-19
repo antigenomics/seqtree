@@ -22,6 +22,7 @@ struct Limits {
     int32_t gap;           // linear gap cost per indel
     bool    unit;          // true => unit cost, false => use matrix
     const SubstitutionMatrix* mat;
+    const PositionalMatrix* posmat;  // optional per-position penalties (Hamming path only)
     uint32_t max_hits;     // 0 => unlimited
 };
 
