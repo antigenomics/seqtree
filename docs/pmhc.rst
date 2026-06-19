@@ -65,3 +65,32 @@ A neighbour-voting variant (``bench/bench_mhc_guess.py``) attaches an **aggregat
 confidence** to the guess and shows that length-matched random peptides get a much higher E-value, so
 they are rejected as noise by a threshold — see :doc:`benchmarks`. This works on anchor (presentation)
 features only; TCR-facing homology carries no allele information.
+
+Filtering non-binders
+---------------------
+
+The per-allele E-value also doubles as a **non-binder filter**, at two granularities:
+
+- **Binds no MHC.** A peptide whose best per-allele E-value stays high across the whole panel
+  (equivalently, ``assign_allele`` returns no allele scoring above the marginal background) is flagged
+  as a non-binder and dropped. The real-vs-random arm of ``bench/bench_mhc_guess.py`` measures exactly
+  this: it is the noise-rejection AUROC in :doc:`benchmarks`.
+- **Does not bind a specific MHC.** For a candidate allele ``a``, a per-allele E-value ``E_a`` above a
+  threshold ``α`` means the peptide's anchors are atypical of ``a``'s motif, so ``a`` is excluded as a
+  restriction element even if the peptide binds *something* else.
+
+.. note::
+
+   **MHC class II is promiscuous.** A single class-II peptide is routinely presented by many alleles
+   (shared, degenerate P1/P4/P6/P9 pockets and an open-ended groove), so allele assignment is
+   genuinely **multi-label**: the "true" set for a peptide is several alleles, not one. The benchmark
+   treats it as such (positives = every observed restricting allele), which is why class-II
+   precision–recall baselines sit higher than class I. A non-binder filter for class II should
+   therefore test *"binds none of the panel"* rather than *"binds exactly one"*.
+
+.. note::
+
+   This module is a **reference implementation and benchmark** for the E-value methodology. The
+   production allele-guessing and non-binder filtering — with the optimized index, tuned thresholds,
+   and ROC/PR calibration — live in the downstream ``vdjmatch`` (TCR–antigen specificity) and
+   ``mhcmatch`` (peptide–MHC) packages.

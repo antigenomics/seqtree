@@ -106,24 +106,33 @@ from repertoire structure. See ``appendix/evalue.tex`` §"Epitope detection comp
 MHC-allele guessing
 ~~~~~~~~~~~~~~~~~~~~
 
-``bench/bench_mhc_guess.py`` evaluates the reverse problem — *peptide → presenting allele* — for
-class I and class II. Each held-out peptide's **presentation** (anchor) signature is widened until it
-has 10–100 non-exact neighbours; the neighbours' alleles are voted, and the top allele's count is
-tested against the background allele frequency to give an **aggregate E-value / confidence**:
+``bench/bench_mhc_guess.py`` evaluates the reverse problem — *peptide → presenting allele* — as a
+per-(peptide, allele) binary task (exactly how ``vdjmatch`` scores TCR-antigen specificity), for
+class I and class II, **human and mouse separately**. Each held-out peptide's **presentation**
+(anchor) signature is widened until it has 10–100 non-exact neighbours; the neighbours' alleles are
+voted. Two scores come off the tally: the **vote fraction** ``k_a/n`` ranks alleles (a posterior,
+robust to panel skew), and the per-allele **E-value** (binomial enrichment vs background) gives a
+confidence that rejects random noise. Class II uses the **register trick** — commit to the single
+best 9-mer core register (``layout.presentation_features(register="anchored")``) so an allele's
+peptides share a consistent P1/P4/P6/P9 signature:
 
 .. code-block:: fish
 
    python bench/bench_mhc_guess.py --pmhc /path/to/pmhc_full.tsv.gz
 
-On ``pmhc_data`` (alleles with ≥200 peptides) top-1 accuracy is ~0.29 for class I (129 alleles,
-≈38× chance) and ~0.34 for class II; real presented peptides have a much lower aggregate E-value than
-length-matched **random** peptides (≈0.18 vs 0.61 class I; AUROC ≈0.68), so random noise is rejected
-by an E-value threshold. This works only with *anchor* features — TCR-facing homology carries no
-allele information (AUROC ≈0.5), confirming MHC restriction lives in the anchors.
+On ``pmhc_data`` the vote-fraction ranking gives **ROC-AUC ≈ 0.90–0.98** with PR-AUC far above the
+prevalence baseline, for both classes and both species (MHC-I human 0.92 / mouse 0.90; MHC-II human
+0.94 / mouse 0.98), and top-1 accuracy 0.58–0.89. The confidence E-value separates real peptides from
+length-matched **random** peptides. This works only with *anchor* features — TCR-facing homology
+carries no allele information (AUROC ≈0.5), confirming MHC restriction lives in the anchors.
 
-.. image:: _static/bench/mhc_guess.svg
-   :alt: allele-guess confidence (real vs random) vs E-value threshold, class I and II
-   :width: 80%
+.. image:: _static/bench/mhc1_rocpr.svg
+   :alt: MHC-I allele-guessing ROC and precision-recall, human vs mouse
+   :width: 95%
+
+.. image:: _static/bench/mhc2_rocpr.svg
+   :alt: MHC-II allele-guessing ROC and precision-recall, human vs mouse
+   :width: 95%
 
 TCR-beta benchmark (gnuplot figures)
 ------------------------------------

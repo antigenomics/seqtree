@@ -141,7 +141,13 @@ class PMHCStore:
     def assign_allele(self, query, cls, top=5):
         """Rank alleles by how typical the query's ANCHOR signature is among each
         allele's presented peptides (a lightweight presentation prior, not NetMHCpan).
-        Returns [(allele, score, n_match, n_allele)] sorted by score desc."""
+        Returns [(allele, score, n_match, n_allele)] sorted by score desc.
+
+        ``score`` is the log-odds of presentation by the allele vs the marginal
+        background, so it doubles as a non-binder filter: ``score <= 0`` means the
+        anchors are not enriched for that allele (a non-binder for it), and if every
+        allele scores ``<= 0`` the peptide binds nothing in the panel. Class II is
+        promiscuous, so expect several alleles with ``score > 0`` (multi-label)."""
         ci = self._cls[cls]
         spec = layout.DEFAULTS[cls] if not spec_has_anchors(ci.spec) else ci.spec
         q = query.strip().upper()

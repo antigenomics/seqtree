@@ -67,10 +67,13 @@ def test_find_mimics_evalue():
 def test_presentation_features():
     # class I: N-pocket P1-P3 + C-pocket P(Omega-1),POmega
     assert layout.presentation_features("EAAGIGILTV", "mhc1") == ["EAA" + "TV"]
-    # class II: core anchors P1,P4,P6,P9 over every 9-mer window
-    feats = layout.presentation_features("PKYVKQNTLKLAT", "mhc2")
-    assert all(len(f) == 4 for f in feats)
-    assert feats[0] == "P" + "V" + "Q" + "L"  # PKYVKQNTL -> P,V,Q,L
+    # class II register trick: anchored picks the single best 9-mer core register
+    # (P1 hydrophobic) -> one P1,P4,P6,P9 signature. YVKQNTLKL wins (P1=Y) -> YQTL.
+    assert layout.presentation_features("PKYVKQNTLKLAT", "mhc2") == ["YQTL"]
+    # register='all' keeps every window's signature (register-agnostic)
+    allw = layout.presentation_features("PKYVKQNTLKLAT", "mhc2", register="all")
+    assert all(len(f) == 4 for f in allw)
+    assert "PVQL" in allw  # window 0: PKYVKQNTL -> P,V,Q,L
 
 
 def test_assign_allele():
@@ -81,3 +84,16 @@ def test_assign_allele():
     store = pmhc.PMHCStore.from_records(recs, k=4)
     ranked = store.assign_allele("KLEEEEEEV", "mhc1")  # P2=L, PΩ=V -> A*02:01-like
     assert ranked[0][0] == "HLA-A*02:01"
+
+
+def test_filter_nonbinders():
+    # same A*02:01 (P2=L,PΩ=V) vs B*07 (P2=P,PΩ=L) fixture as allele assignment
+    recs = ([{"epitope": "ALAAAAAAV", "mhc": "HLA-A*02:01", "mhc_class": "MHCI"} for _ in range(5)]
+            + [{"epitope": "APRRRRRRL", "mhc": "HLA-B*07:02", "mhc_class": "MHCI"} for _ in range(5)])
+    store = pmhc.PMHCStore.from_records(recs, k=4)
+    # a true A*02:01-like binder: its allele scores > 0 (enriched over background)
+    binder = {a: s for a, s, *_ in store.assign_allele("KLEEEEEEV", "mhc1")}
+    assert binder["HLA-A*02:01"] > 0
+    # a non-binder: anchors (P2=W, PΩ=K) match no allele's signature -> all scores <= 0
+    nonbinder = store.assign_allele("KWEEEEEEK", "mhc1")
+    assert all(score <= 0 for _, score, _, _ in nonbinder)

@@ -541,55 +541,103 @@ close-to-self ``shell'' picture of~\cite{TiffeauMayer2026} to a calibrated E-val
 
 \subsection{Reverse problem: peptide $\to$ presenting allele}
 Flipping the weights ($w_i=1$ on anchors, $0$ on TCR-facing --- the \emph{presentation} mode) scores
-the binding motif. For a peptide of unknown restriction, the per-allele anchor-signature value $E_a$
-ranks alleles and a global $E_{\mathrm{glob}}=\sum_a E_a$ (Poisson over the allele panel) reports the
-expected number of panel alleles presenting it by chance --- a lightweight presentation prior, not a
-substitute for a trained predictor.
+the binding motif. For a peptide of unknown restriction we widen the scope on its anchor signature
+until it has $10$--$100$ non-exact neighbours and vote their alleles. Two scores read off this tally:
+a \emph{ranking} score, the neighbour vote fraction $\hat p(a\mid q)=k_a/n$ (a posterior over the
+panel, used to rank alleles), and a \emph{confidence} score, the per-allele anchor-signature E-value
+$E_a$ from the binomial tail against the background frequency, which separates real peptides from
+noise. The distinction matters: enrichment-vs-background \emph{penalises} the dominant true allele on
+skewed panels (its expected count is large), so the vote fraction --- not $E_a$ --- is the correct
+ranking statistic. A global $E_{\mathrm{glob}}=\sum_a E_a$ (Poisson over the allele panel) reports the
+expected number of panel alleles presenting the peptide by chance: a lightweight presentation prior,
+not a substitute for a trained predictor.
 
-\paragraph{Empirical (\texttt{bench/bench\_mhc\_guess.py}).} On VDJdb/IEDB \texttt{pmhc\_data}
-(alleles with $\ge200$ peptides), widening the scope on the anchor signature until each held-out
-peptide has $10$--$100$ non-exact neighbours and voting their alleles recovers the restricting allele
-far above chance, and the aggregate E-value cleanly separates real peptides from length-matched
-random ``noise'' (Table~\ref{tab:mhcguess}, Fig.~\ref{fig:mhcguess}). Crucially, this works only with
-\emph{presentation} (anchor) features: the TCR-facing homology used for cross-reactivity carries no
-allele information (AUROC $\approx0.5$), confirming that MHC restriction lives in the anchors, not the
-TCR-facing surface.
+\paragraph{Class-II register trick.}
+The class-II binding core is a 9-mer with anchors at P1/P4/P6/P9, but its register inside a longer
+peptide is unknown; deconvolution tools resolve it by clustering (GibbsCluster~\cite{Andreatta2017},
+NNAlign\_MA~\cite{Alvarez2019}). For the reverse problem we use a one-pass proxy
+(\texttt{layout.presentation\_features(register=\textquotesingle anchored\textquotesingle)}): pick the
+single 9-mer window whose P1 is a large hydrophobic and whose P4/P6/P9 avoid Pro/Gly, and take that
+core's $\{$P1,P4,P6,P9$\}$ as the signature. Committing to one register (vs.\ pooling all windows)
+makes an allele's peptides share a consistent anchor signature and is what lifts class-II ROC-AUC into
+the $0.9$ range (Table~\ref{tab:mhcguess}).
+
+\paragraph{Empirical (\texttt{bench/bench\_mhc\_guess.py}).} On VDJdb/IEDB \texttt{pmhc\_data},
+evaluated as a per-(peptide, allele) binary task --- exactly how \texttt{vdjmatch} scores TCR-antigen
+specificity --- and split by species, the vote-fraction ranking recovers the restricting allele with
+ROC-AUC $\approx 0.90$--$0.98$ and PR-AUC far above the prevalence baseline, for both classes and both
+human and mouse (Table~\ref{tab:mhcguess}, Figs.~\ref{fig:mhc1guess}--\ref{fig:mhc2guess}). The
+confidence E-value additionally separates real peptides from length-matched random ``noise''
+(noise-rejection AUROC column). This works only with \emph{presentation} (anchor) features: the
+TCR-facing homology used for cross-reactivity carries no allele information (AUROC $\approx0.5$),
+confirming that MHC restriction lives in the anchors, not the TCR-facing surface.
 
 \begin{table}[ht]\centering\small
-\begin{tabular}{lrrrrr}
+\begin{tabular}{llrrrrr}
 \hline
-class & alleles & top-1 acc & chance & AUROC (real/random) & mean $E$ (real / random)\\
+class & species & alleles & top-1 acc & ROC-AUC & PR-AUC (base) & noise AUROC\\
 \hline
-MHC-I  & 129 & 0.29 & 0.008 & 0.68 & 0.18 / 0.61\\
-MHC-II & 15  & 0.34 & 0.067 & 0.58 & 1.2\phantom{0} / 1.5\phantom{0}\\
+MHC-I  & human & 129 & 0.58 & 0.92 & 0.47 (0.012) & 0.69\\
+MHC-I  & mouse &   7 & 0.69 & 0.90 & 0.71 (0.205) & 0.62\\
+MHC-II & human &  11 & 0.70 & 0.94 & 0.72 (0.100) & 0.55\\
+MHC-II & mouse &   9 & 0.89 & 0.98 & 0.92 (0.113) & 0.39\\
 \hline
 \end{tabular}
-\caption{Allele guessing from presentation-signature neighbours ($\sim$800 held-out peptides per
-class). Top-1 accuracy is $\sim$5--40$\times$ chance ($1/$alleles); the aggregate E-value separates
-presented peptides (low $E$) from random peptides (high $E$), so the latter are rejected as noise by
-an $E$ threshold.}
+\caption{Allele guessing from presentation-signature neighbours, per-(peptide, allele) ROC/PR
+($\sim$600 held-out peptides per cell; alleles with $\ge100$ human / $\ge40$ mouse peptides).
+Ranking by neighbour vote fraction gives ROC-AUC $0.90$--$0.98$ and PR-AUC well above the prevalence
+baseline (in parentheses). The confidence E-value separates presented peptides from random noise
+(last column). Mouse MHC-II is dominated by I-A\textsuperscript{b} ($\sim$92\% of peptides), which
+inflates both its baseline and its scores.}
 \label{tab:mhcguess}
 \end{table}
 
 \begin{figure}[ht]\centering
-  \includegraphics[width=\linewidth]{mhc_guess.pdf}
-  \caption{MHC-allele guessing (\texttt{bench/bench\_mhc\_guess.py}): fraction of peptides called
-  confident vs the aggregate E-value threshold, for real presented peptides (red) and length-matched
-  random peptides (blue), MHC-I (left) and MHC-II (right). The gap is the noise-rejection margin.}
-  \label{fig:mhcguess}
+  \includegraphics[width=\linewidth]{mhc1_rocpr.pdf}
+  \caption{MHC-I allele guessing: ROC (left) and precision--recall (right) for the per-(peptide,
+  allele) task, human and mouse separately. Diagonal = chance (ROC); dashed = prevalence baseline
+  (PR). AUCs in legend.}
+  \label{fig:mhc1guess}
 \end{figure}
+
+\begin{figure}[ht]\centering
+  \includegraphics[width=\linewidth]{mhc2_rocpr.pdf}
+  \caption{MHC-II allele guessing (register trick, single best 9-mer core register): ROC and
+  precision--recall, human and mouse separately. Same conventions as Fig.~\ref{fig:mhc1guess}.}
+  \label{fig:mhc2guess}
+\end{figure}
+
+\paragraph{Filtering non-binders.}
+The same per-allele E-value rejects \emph{non-binders} at two granularities. A peptide that binds
+\emph{no} MHC has a large best-over-panel E-value (no allele's anchor signature is enriched over the
+marginal background) and is dropped; this is precisely the real-vs-random noise-rejection AUROC of
+Table~\ref{tab:mhcguess}. A peptide that simply does not bind a \emph{specific} allele $a$ has
+$E_a>\alpha$ even when it binds something else, so $a$ is excluded as a restriction element. The two
+filters compose: rank by vote fraction, threshold by $E_a$.
+
+\paragraph{Class-II promiscuity.}
+Class-II binding is far more degenerate than class-I: shared, loosely specified P1/P4/P6/P9 pockets
+and an open groove let one peptide be presented by \emph{many} alleles. Allele assignment is therefore
+genuinely multi-label --- the true set for a peptide is several alleles, not one --- which is how the
+benchmark scores it (positives $=$ every observed restricting allele) and why class-II PR baselines
+sit above class-I. Operationally, a class-II non-binder filter must test ``binds none of the panel''
+rather than ``binds exactly one,'' and the global $E_{\mathrm{glob}}$ is the natural statistic for it.
 
 \subsection{Implementation and limitations}
 Implemented in \texttt{seqtree.pmhc} (anchor-masked TCR-facing k-mer homology via the C++
 \texttt{KmerIndex} seed-and-gather; \texttt{find\_mimics}; \texttt{assign\_allele}) and
 \texttt{seqtree.pmhc\_evalue}; the positive control is the recovery of the A\*02:01 trio of
 \cite{Dolton2023} as mutual TCR-facing homologs. Anchor positions are parametrized (presets per
-class, overridable); class-II registers are handled register-agnostically (all-window k-mers).
-Alternative CDR3 build strategies, e.g.\ the bilateral run-peeling decomposition
-of~\cite{Konstantinovsky2026}, plug into the same layer. \emph{Limitation:} we do not model
-MHC-groove/peptide-context similarity across alleles --- distinct alleles are distinct nulls,
+class, overridable); class-II homology is register-agnostic (all-window k-mers), while the reverse
+allele-guessing problem uses the register trick (one core register, after the deconvolution idea of
+\cite{Andreatta2017,Alvarez2019}). Alternative CDR3 build strategies, e.g.\ the bilateral run-peeling
+decomposition of~\cite{Konstantinovsky2026}, plug into the same layer. \emph{Limitation:} we do not
+model MHC-groove/peptide-context similarity across alleles --- distinct alleles are distinct nulls,
 searched independently (never pooled); ``compatible allele'' is a user input, and validity is
-conditional on a faithful per-allele presented control.
+conditional on a faithful per-allele presented control. The \texttt{seqtree} code here is a
+\emph{reference implementation and benchmark} of the E-value methodology; the production allele
+guessing and non-binder filtering, with an optimized index and tuned ROC/PR thresholds, are built
+downstream in \texttt{vdjmatch} (TCR--antigen specificity) and \texttt{mhcmatch} (peptide--MHC).
 
 \section{Practical defaults and algorithm}\label{sec:practice}
 
