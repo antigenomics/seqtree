@@ -51,6 +51,35 @@ private:
     std::vector<int32_t> pen_;
 };
 
+// Per-position substitution penalties pen(pos, a, b) over a fixed frame width W.
+// Two construction modes: a base SubstitutionMatrix scaled by per-position integer
+// weights (weight 0 == masked/free, e.g. anchors; >1 == up-weighted, e.g. a TCR
+// hotspot), or a full per-position PSSM table. masked(pos) reports weight-0 columns
+// so they neither count as substitutions nor add penalty.
+class PositionalMatrix {
+public:
+    // pen[pos][a][b] = weights[pos] * base.penalty(a, b); weights has length width.
+    static PositionalMatrix from_weights(const SubstitutionMatrix& base,
+                                         const std::vector<int32_t>& weights);
+    // Full table: data is row-major [width][size][size]; masked[] optional (len width).
+    static PositionalMatrix from_tables(uint8_t size, uint16_t width,
+                                        const std::vector<int32_t>& data,
+                                        const std::vector<uint8_t>& masked = {});
+
+    uint8_t  size()  const { return size_; }
+    uint16_t width() const { return width_; }
+    bool     masked(uint16_t pos) const { return masked_[pos] != 0; }
+    int32_t  penalty(uint16_t pos, uint8_t a, uint8_t b) const {
+        return pen_[(size_t(pos) * size_ + a) * size_ + b];
+    }
+
+private:
+    uint8_t  size_  = 0;
+    uint16_t width_ = 0;
+    std::vector<int32_t> pen_;     // [width * size * size]
+    std::vector<uint8_t> masked_;  // [width]
+};
+
 // Immutable after build. Lock-free for concurrent reads; share one Index across
 // threads, give each thread its own Searcher.
 class Index {

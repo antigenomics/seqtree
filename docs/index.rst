@@ -63,5 +63,6 @@ map ``ref_id`` back to their own payloads (V gene, MHC, read counts) and filter 
    engines
    api
    evalue
+   pmhc
    benchmarks
    roadmap

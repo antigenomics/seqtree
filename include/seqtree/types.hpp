@@ -12,9 +12,12 @@ enum class Alphabet : uint8_t { AminoAcid, Nucleotide, NucleotideIUPAC };
 // indel work and seqtrie for matrix-weighted budgets (see searcher.cpp).
 enum class Engine : uint8_t { Auto, SeqTrie, SeqTm };
 
-enum class Mode : uint8_t { AllHits, TopHit };
+// AllHits/TopHit are global (whole-query) matches; Local returns, per reference,
+// the best-scoring fixed-width window of the query (trim/shift, e.g. class-II core).
+enum class Mode : uint8_t { AllHits, TopHit, Local };
 
 class SubstitutionMatrix;  // defined in seqtree.hpp
+class PositionalMatrix;    // defined in seqtree.hpp; per-position penalties pen(pos,a,b)
 
 // All limits are caps; 0 on a per-type cap means "zero of that type allowed".
 // max_total_edits == 0 means "no separate total cap" (derive from per-type sum).
@@ -31,6 +34,10 @@ struct SearchParams {
 
     int32_t  max_score_penalty = 0;            // explicit budget; <=0 => derived
     const SubstitutionMatrix* matrix = nullptr; // null => unit cost
+    // Optional per-position penalties; used only on the substitution/Hamming path
+    // (no indels), where query position is unambiguous. Masked positions (weight 0)
+    // are free and do not count as substitutions. Overrides `matrix` when set.
+    const PositionalMatrix* pos_matrix = nullptr;
     int32_t  gap_open   = 1;                    // linear gap cost per indel (v1)
     int32_t  gap_extend = 1;                    // reserved for affine gaps (roadmap)
 

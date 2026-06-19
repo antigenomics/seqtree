@@ -11,19 +11,31 @@ from ._core import (
     Hit,
     Alignment,
     SubstitutionMatrix,
+    PositionalMatrix,
+    KmerIndex,
+    Candidate,
     pairwise_batch,
     alphabet_symbols,
     amino_acids,
 )
 from .control import load_control
 from .evalue import evalues
+from . import layout, pmhc
+from .pmhc import PMHCStore, find_mimics
 
 __all__ = [
+    "layout",
+    "pmhc",
+    "PMHCStore",
+    "find_mimics",
     "Index",
     "SearchParams",
     "Hit",
     "Alignment",
     "SubstitutionMatrix",
+    "PositionalMatrix",
+    "KmerIndex",
+    "Candidate",
     "pairwise_batch",
     "alphabet_symbols",
     "amino_acids",
