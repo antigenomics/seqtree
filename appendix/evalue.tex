@@ -483,19 +483,69 @@ matrix-weighted balls are admitted via the engine's score; (iii) the asymptotic 
 $K,\lambda^\ast$ are replaced by a finite-$N$, finite-$M$ non-asymptotic error bound
 (Theorem~\ref{thm:cs}).
 
-\section{The epitope case: a limitation}\label{sec:epitope}
+\section{Epitopes: presentation-aware E-values and molecular mimicry}\label{sec:epitope}
 
-\begin{remark}
-For TCR CDR3, $\Pzero$ is generation/repertoire-driven and a healthy-donor control instantiates it.
-For \emph{epitopes} (MHC-presented peptides) the relevant background is presentation, not V(D)J
-generation. The machinery of \S\S\ref{sec:setup}--\ref{sec:gumbel} applies verbatim with
-$\Pzero:=\Pzero^{\mathrm{pep}}$ and a presented-peptide control, but: (L1) there is no closed-form
-V(D)J-style generation model $\Pgen$, so only the empirical estimator survives; (L2) presentation is HLA-restricted,
-so $\Pzero^{\mathrm{pep}}$ is allele-conditional and the control must be HLA-matched or marginalized
-over an HLA frequency distribution; (L3) anchor-residue structure argues for position-weighted ball
-geometry. We therefore claim soundness for epitopes only to the extent that a faithful
-presented-peptide control is available; no generation-based null is claimed there.
-\end{remark}
+For TCR CDR3 the background is V(D)J generation; for epitopes (MHC-presented peptides) it is
+\emph{presentation}, which is allele-conditional and constrains the anchor positions. We adapt the
+framework with $\Pzero := \Pzero^{\mathrm{pep}}(\cdot\mid a)$ per allele $a$, anchor-masked.
+
+\subsection{Anchor decomposition and TCR-facing masking}
+A presented peptide factorizes $\sigma=(\sigma_A,\sigma_T)$ into MHC-facing anchors $A(a,L)$
+(class~I: $\{\mathrm{P2},\mathrm{P\Omega}\}$; class~II core: $\{\mathrm{P1,P4,P6,P9}\}$) and
+TCR-facing positions $T$. Presentation fixes $\sigma_A$; recognition reads $\sigma_T$
+---Dolton~et~al.~\cite{Dolton2023} show one HLA-A\*02:01 TCR cross-reacting with three epitopes via the
+shared central motif x-x-x-A/G-I/L-G-I-x-x-x, the anchors irrelevant. With masking
+$\mu_a(\sigma)=\sigma_T$, define the TCR-facing ball
+$B^T_\theta(q)=\{\sigma:\sigma_A\in\mathrm{motif}(a),\ s_T(q_T,\sigma_T)\le\theta\}$, where $s_T$
+zeroes the anchors (a per-position \texttt{PositionalMatrix}). Significance is computed on $\mu_a$
+only: shared anchors are presentation, not recognition, and would inflate every within-allele hit.
+
+\subsection{Per-allele E-value}
+Null mass $\pi^{\mathrm{pep}}_0(q,\theta;a)=\Pzero^{\mathrm{pep}}(B^T_\theta(q)\mid a)$. With a
+per-allele anchor-masked presented control $C_a$ of size $M_a$ and a target presented peptidome of
+size $N_a$,
+\begin{equation}\label{eq:epitope-evalue}
+  \widehat E(q,\theta;a)=\frac{N_a}{M_a}\,n_{C_a}(q_T,\theta),\quad
+  p_{\mathrm{any}}=1-e^{-\widehat E},\quad
+  p_{\mathrm{enrich}}=\Prob\!\big(\Poisson(\widehat E)\ge n^{T}_D\big),
+\end{equation}
+i.e.\ \texttt{evalues} (Def.~\ref{def:evalue}) on anchor-masked, allele-restricted indices. The
+analytic fallback for rare alleles uses the maximum-entropy presented distribution of
+Tiffeau-Mayer~et~al.~\cite{TiffeauMayer2026},
+$\Pzero^{\mathrm{pep}}\propto\exp(\sum_i h_i(\sigma_i)+\sum_{i<j}J_{ij}(\sigma_i,\sigma_j))$,
+conditioned on $\sigma_A\in\mathrm{motif}(a)$; its 2-point couplings make the co-occupancy term $b_2$
+(Thm~\ref{thm:cs}) generically nonzero, so the E-value mean stays robust (Prop.~\ref{prop:linearity})
+while the tail takes the $b_2$ / negative-binomial correction (Prop.~\ref{prop:nb}).
+
+\subsection{Cross-reactivity distance and mimicry significance}
+The recognition distance is TCR-facing and position-weighted,
+$d_{\mathrm{TCR}}(p,q)=\sum_i w_i\,\mathrm{pen}(p_i,q_i)$ with $w_i=0$ on anchors and peaked on the
+central hotspot --- exactly a \texttt{PositionalMatrix} on the seqtm Hamming path. A self or bacterial
+peptide $p$ is a candidate cross-reactive mimic of neoantigen $n$ iff (i) $p$ is presented by the
+same (compatible) allele, (ii) $d_{\mathrm{TCR}}(p,n)\le\theta$, and (iii) the hit is significant
+against the per-allele presented background, $\widehat E\le\alpha$. Condition (iii) deflates motifs
+common in the allele's presented peptidome and elevates surprisingly shared ones, connecting the
+neoantigen-fitness cross-reactivity distance of Łuksza~et~al.~\cite{Luksza2017} and the
+close-to-self ``shell'' picture of~\cite{TiffeauMayer2026} to a calibrated E-value.
+
+\subsection{Reverse problem: peptide $\to$ presenting allele}
+Flipping the weights ($w_i=1$ on anchors, $0$ on TCR-facing --- the \emph{presentation} mode) scores
+the binding motif. For a peptide of unknown restriction, the per-allele anchor-signature value $E_a$
+ranks alleles and a global $E_{\mathrm{glob}}=\sum_a E_a$ (Poisson over the allele panel) reports the
+expected number of panel alleles presenting it by chance --- a lightweight presentation prior, not a
+substitute for a trained predictor.
+
+\subsection{Implementation and limitations}
+Implemented in \texttt{seqtree.pmhc} (anchor-masked TCR-facing k-mer homology via the C++
+\texttt{KmerIndex} seed-and-gather; \texttt{find\_mimics}; \texttt{assign\_allele}) and
+\texttt{seqtree.pmhc\_evalue}; the positive control is the recovery of the A\*02:01 trio of
+\cite{Dolton2023} as mutual TCR-facing homologs. Anchor positions are parametrized (presets per
+class, overridable); class-II registers are handled register-agnostically (all-window k-mers).
+Alternative CDR3 build strategies, e.g.\ the bilateral run-peeling decomposition
+of~\cite{Konstantinovsky2026}, plug into the same layer. \emph{Limitation:} we do not model
+MHC-groove/peptide-context similarity across alleles --- distinct alleles are distinct nulls,
+searched independently (never pooled); ``compatible allele'' is a user input, and validity is
+conditional on a faithful per-allele presented control.
 
 \section{Practical defaults and algorithm}\label{sec:practice}
 
