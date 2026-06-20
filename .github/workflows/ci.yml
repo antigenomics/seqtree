@@ -44,6 +44,32 @@ jobs:
       - name: Test
         run: pytest tests/python -q
 
+  benchmarks:
+    name: Benchmark tables + plots (oracle + perf)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install gnuplot
+        run: sudo apt-get update && sudo apt-get install -y gnuplot
+      - name: Install package (compiles seqtree from this repo state)
+        run: pip install -e ".[test]"
+      # Regenerate the deterministic table on the freshly compiled seqtree and assert
+      # it matches the committed oracle (ints exact, metrics within 1e-9); a real change
+      # means rerunning bench/tables/make_tables.sh and committing the new oracle. The
+      # perf test checks build/search time + peak RSS stay within threshold of baseline.
+      - name: Oracle + perf regression
+        env:
+          RUN_PERF: "1"
+        run: pytest tests/python/test_oracle_tables.py tests/python/test_perf_regression.py -q -s
+      # Smoke the full shell pipeline: tables produced by shell+python, plots by shell+python.
+      - name: Tables and plots pipeline
+        run: |
+          bash bench/tables/make_tables.sh
+          bash bench/plots/make_plots.sh
+
   appendix:
     name: Compile E-value appendix
     runs-on: ubuntu-latest

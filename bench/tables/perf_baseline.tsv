@@ -1,0 +1,5 @@
+# perf: n_refs=50000 n_queries=5000 length=14 scope=2subs threads=1 best_of=3
+metric	value
+build_ms	42.2
+search_ms	272.3
+peak_rss_mb	138.7

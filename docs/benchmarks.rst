@@ -5,6 +5,36 @@ Several harnesses ship with the repo, covering raw throughput, recall, E-value s
 epitope-detection formalism. Most bootstrap realistic TCR CDR3 sequences from OLGA (if installed) and
 otherwise fall back to seeded random sequences. Figures are rendered to SVG with gnuplot.
 
+Reproducible tables and the CI oracle
+-------------------------------------
+
+Benchmarks are split into two stages so results are reproducible and regression-checked:
+
+#. **Table producers** (``bench/tables/*.py``, driven by ``bench/tables/make_tables.sh``) run the
+   *compiled seqtree from the current repo* on a fully seeded synthetic workload — no network, no
+   OLGA — and write TSV tables. Because every number is integer-derived, the output is identical on
+   every platform and doubles as a committed **oracle**.
+#. **Plot scripts** (``bench/plots/*.py``, driven by ``bench/plots/make_plots.sh``) read those TSVs
+   and render SVGs. They never run seqtree, so plotting never re-measures anything.
+
+.. code-block:: fish
+
+   bash bench/tables/make_tables.sh --perf   # regenerate tables + perf baseline
+   bash bench/plots/make_plots.sh            # render figures from the tables
+
+CI regenerates the table on the freshly built extension and fails if it differs from the committed
+oracle (``tests/python/test_oracle_tables.py``); a deliberate change means rerunning the driver and
+committing the new table. A separate perf check (``test_perf_regression.py``, ``RUN_PERF=1``) asserts
+build/search time and peak RSS stay within a threshold of ``perf_baseline.tsv`` — loose on time
+(runners vary) and tight on memory (machine-independent).
+
+The retrieval table scores **BLOSUM62-weighted** ``seqtrie`` search against brute-force Hamming-near
+ground truth and sweeps the penalty budget into a precision/recall/F1 curve:
+
+.. image:: _static/bench/retrieval_pr.svg
+   :alt: precision-recall and precision/recall/F1 vs penalty budget for BLOSUM62 retrieval
+   :width: 70%
+
 C++ (raw throughput + scaling)
 ------------------------------
 
