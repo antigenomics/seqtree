@@ -25,7 +25,8 @@ to their own payloads (V gene, MHC, counts) and filter.
 
 Beyond search, seqtree ships:
 
-- **Substitution matrices** — built-in `BLOSUM62` and `PAM50`, plus custom matrices via
+- **Substitution matrices** — built-in `identity`, `BLOSUM62`, `PAM250`, `PAM100`, and `structural`
+  (TeXshade sidechain volume + hydropathy), plus custom matrices via
   `SubstitutionMatrix.from_similarity` (Gram-distance penalty `s(a,a)+s(b,b)−2·s(a,b)`).
 - **E-values / significance** — calibrate hit counts against a background control repertoire
   (`load_control` + `evalues`), the TCRNET approach on a finite-sample footing. See the

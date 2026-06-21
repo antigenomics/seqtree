@@ -217,24 +217,25 @@ budgets are rarely useful:
    :alt: throughput and matches per query vs edit budget 1..5
    :width: 80%
 
-Matrix scoring (BLOSUM62 / PAM50 / custom)
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Matrix scoring (BLOSUM62 / PAM250 / custom)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 seqtm scores substitutions through a substitution matrix, reporting the best (minimum-penalty) score
 across all alignments to each reference. The **time overhead of matrix scoring is small** (within
 ~5–10 % of unit cost — one table lookup replaces a character compare), for both families:
 
 .. image:: _static/bench/matrix.svg
-   :alt: seqtm throughput unit vs BLOSUM62 vs PAM50, olga and vdjdb
+   :alt: seqtm throughput unit vs BLOSUM62 vs PAM250, olga and vdjdb
    :width: 80%
 
-Besides the built-in ``BLOSUM62`` and ``PAM50``, a custom matrix is supplied via
+The built-in matrices are ``identity``, ``BLOSUM62``, ``PAM250``, ``PAM100`` and ``structural``
+(TeXshade sidechain volume + hydropathy); a custom matrix is supplied via
 ``SubstitutionMatrix.from_similarity`` (row/column order from ``seqtree.amino_acids()``).
 
 Selectivity and collisions
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Top: matches per query versus the seqtrie ``max_penalty`` budget — PAM50 is stricter than BLOSUM62 at
+Top: matches per query versus the seqtrie ``max_penalty`` budget — PAM250 is stricter than BLOSUM62 at
 equal budget. Bottom: **collisions** — how often seqtm's branch-and-bound re-reaches the *same*
 reference via a *different* edit path (reported by ``Index.collisions_batch``). Substitution-only
 search never collides; once indels are allowed, collisions rise with the edit budget, and the

@@ -12,7 +12,7 @@ written to ``bench/figures/<key>.svg`` (+ ``<key>_<panel>.tsv``):
 
   scaling                 throughput vs reference size, per engine x threads (top olga / bottom vdjdb)
   scope                   throughput + matches per query vs edit budget 1..5
-  matrix                  seqtm throughput: unit vs BLOSUM62 vs PAM50 (top olga / bottom vdjdb)
+  matrix                  seqtm throughput: unit vs BLOSUM62 vs PAM250 (top olga / bottom vdjdb)
   selectivity_collisions  matches vs penalty budget (top); seqtm collisions vs edit budget (bottom)
   perop                   align() CIGAR fetch us/call (top); peak RSS (bottom)
 
@@ -43,7 +43,7 @@ DATASETS = ("olga", "vdjdb")
 
 COLOR_DS = {"olga": "#1f77b4", "vdjdb": "#d62728"}      # dataset -> colour
 COLOR_ENG = {"seqtm": "#d62728", "seqtrie": "#1f77b4"}  # engine -> colour (scaling panels)
-COLOR_M = {"unit": "#2ca02c", "BLOSUM62": "#1f77b4", "PAM50": "#d62728"}
+COLOR_M = {"unit": "#2ca02c", "BLOSUM62": "#1f77b4", "PAM250": "#d62728"}
 DT = {"seqtm": "(25,12)", "seqtrie": "(16,8,3,8)"}      # engine -> dashtype (long-dash / dash-dot)
 PT = {1: 6, 4: 4, 8: 8}                                 # threads -> point type
 
@@ -203,12 +203,12 @@ def main():
 
     # accumulators
     scaling = {ds: {(e, t): [] for e in ("seqtm", "seqtrie") for t in args.threads} for ds in DATASETS}
-    mat = {ds: {m: [] for m in ("unit", "BLOSUM62", "PAM50")} for ds in DATASETS}
+    mat = {ds: {m: [] for m in ("unit", "BLOSUM62", "PAM250")} for ds in DATASETS}
     rss = {ds: [] for ds in DATASETS}
     align = {ds: [] for ds in DATASETS}
     scope_q = {ds: {"seqtm": [], "seqtrie": []} for ds in DATASETS}    # throughput vs edits
     scope_h = {ds: {"seqtm": [], "seqtrie": []} for ds in DATASETS}    # matches/q vs edits
-    sel_sc = {ds: {"BLOSUM62": [], "PAM50": []} for ds in DATASETS}    # matches/q vs penalty
+    sel_sc = {ds: {"BLOSUM62": [], "PAM250": []} for ds in DATASETS}    # matches/q vs penalty
     coll = {ds: [] for ds in DATASETS}                                 # collisions/q vs edits
 
     for ds in DATASETS:
@@ -224,7 +224,7 @@ def main():
                 for t in args.threads:
                     q, _ = qpms(idx, queries, st.SearchParams(max_subs=2, max_total_edits=2, engine=eng), t)
                     scaling[ds][(eng, t)].append(round(q, 3))
-            for m in ("unit", "BLOSUM62", "PAM50"):
+            for m in ("unit", "BLOSUM62", "PAM250"):
                 kw = dict(max_subs=3, engine="seqtm")
                 if m != "unit":
                     kw["matrix"] = m
@@ -249,8 +249,8 @@ def main():
                     coll[ds].append(round(sum(c) / len(queries), 2))
                 for p in penalties:
                     _, hb = qpms(idx, queries, st.SearchParams(matrix="BLOSUM62", max_penalty=p, gap_open=8, engine="seqtrie"), tmax)
-                    _, hp = qpms(idx, queries, st.SearchParams(matrix="PAM50", max_penalty=p, gap_open=8, engine="seqtrie"), tmax)
-                    sel_sc[ds]["BLOSUM62"].append(round(hb, 2)); sel_sc[ds]["PAM50"].append(round(hp, 2))
+                    _, hp = qpms(idx, queries, st.SearchParams(matrix="PAM250", max_penalty=p, gap_open=8, engine="seqtrie"), tmax)
+                    sel_sc[ds]["BLOSUM62"].append(round(hb, 2)); sel_sc[ds]["PAM250"].append(round(hp, 2))
                 print(f"# [{ds} {n:,}] sweep done: e5 seqtm {scope_q[ds]['seqtm'][-1]} q/ms, "
                       f"coll/q {coll[ds]}", flush=True)
 
@@ -266,7 +266,7 @@ def main():
         {"title": f"{ds}: seqtm matrix-scoring cost (3 substitutions)", "xlabel": "reference set size",
          "ylabel": "queries / ms", "xs": sizes, "logx": True,
          "series": [(f"seqtm {m}", mat[ds][m], style(COLOR_M[m], "seqtm", 6 + 2 * i))
-                    for i, m in enumerate(("unit", "BLOSUM62", "PAM50"))]}
+                    for i, m in enumerate(("unit", "BLOSUM62", "PAM250"))]}
         for ds in DATASETS])
     render(out, "perop", [
         {"title": "seqtrie global-alignment CIGAR fetch (C++)", "xlabel": "reference set size",
@@ -288,7 +288,7 @@ def main():
         {"title": f"matches per query vs score budget ({sweep_size:,} refs, gap_open=8)",
          "xlabel": "max penalty budget", "ylabel": "matches / query", "xs": penalties, "logy": True,
          "series": [(f"{ds} {m}", sel_sc[ds][m], style(COLOR_DS[ds], "seqtrie", 6 if m == "BLOSUM62" else 8))
-                    for ds in DATASETS for m in ("BLOSUM62", "PAM50")]},
+                    for ds in DATASETS for m in ("BLOSUM62", "PAM250")]},
         {"title": f"seqtm collisions vs edit budget ({sweep_size:,} refs, +/-1 indel)",
          "xlabel": "edit budget", "ylabel": "collisions / query", "xs": edits, "logy": True, "xtics": et,
          "series": [(ds, coll[ds], style(COLOR_DS[ds], "seqtm")) for ds in DATASETS]}])

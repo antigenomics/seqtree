@@ -33,14 +33,15 @@ private:
 // Non-negative substitution penalties indexed by alphabet code; penalty(a,a)==0.
 class SubstitutionMatrix {
 public:
-    // Unit cost: 0 for a match, 1 for a mismatch.
+    // Unit cost: 0 for a match, 1 for a mismatch (this is the "identity" matrix).
     static SubstitutionMatrix unit(uint8_t size);
-    // BLOSUM62 converted to penalties; valid only for the AminoAcid codec order.
+    // Built-in amino-acid matrices (valid only for the AminoAcid codec order).
     static SubstitutionMatrix blosum62();
-    // PAM50 (EMBOSS EPAM50) converted to penalties; AminoAcid codec order.
-    static SubstitutionMatrix pam50();
-    // Convert a similarity matrix (row-major, size*size) to penalties via
-    // pen[a][b] = max(sim[a][a], sim[b][b]) - sim[a][b].
+    static SubstitutionMatrix pam250();   // EMBOSS EPAM250 (NCBI log-odds)
+    static SubstitutionMatrix pam100();   // EMBOSS EPAM100 (NCBI log-odds)
+    static SubstitutionMatrix structural();  // TeXshade volume+hydropathy similarity
+    // Convert a similarity matrix (row-major, size*size) to penalties via the Gram /
+    // squared-distance transform pen[a][b] = sim[a][a] + sim[b][b] - 2*sim[a][b].
     static SubstitutionMatrix from_similarity(uint8_t size, const int32_t* sim);
 
     uint8_t size() const { return size_; }

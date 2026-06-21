@@ -19,7 +19,7 @@ struct PyParams {
     int max_subs = 0, max_ins = 0, max_dels = 0, max_total_edits = 0;
     long max_penalty = 0;
     int gap_open = 1, gap_extend = 1;
-    std::string matrix;          // named builtin: "" (unit), "blosum62", "pam50"
+    std::string matrix;          // named builtin: "" (unit/identity), blosum62/pam250/pam100/structural
     std::optional<SubstitutionMatrix> matrix_obj;  // explicit/custom matrix (overrides name)
     std::optional<PositionalMatrix> pos_matrix_obj;  // per-position penalties (Hamming path)
     std::string engine = "auto"; // auto | seqtrie | seqtm
@@ -63,6 +63,25 @@ std::string alphabet_symbols(Alphabet a) {
     return s;
 }
 
+// Built-in matrix names. "identity" is the unit matrix (any alphabet); the rest are
+// amino-acid only. Keep this list in sync with the SubstitutionMatrix factories.
+constexpr const char* kMatrixNames = "'identity', 'BLOSUM62', 'PAM250', 'PAM100', 'structural'";
+
+bool is_matrix_name(const std::string& l) {
+    return l.empty() || l == "identity" || l == "blosum62" || l == "pam250"
+        || l == "pam100" || l == "structural";
+}
+
+SubstitutionMatrix named_matrix(const std::string& l, Alphabet a) {
+    if (l == "identity") return SubstitutionMatrix::unit(Codec(a).size());
+    if (a != Alphabet::AminoAcid)
+        throw py::value_error(l + " requires the amino-acid alphabet");
+    if (l == "blosum62") return SubstitutionMatrix::blosum62();
+    if (l == "pam250") return SubstitutionMatrix::pam250();
+    if (l == "pam100") return SubstitutionMatrix::pam100();
+    return SubstitutionMatrix::structural();  // l == "structural"
+}
+
 // Returns nullopt for unit cost; throws for an unknown name or alphabet mismatch.
 // An explicit matrix object (custom or built via SubstitutionMatrix factories) wins
 // over the named builtin; we only check that its size matches the alphabet.
@@ -74,26 +93,22 @@ std::optional<SubstitutionMatrix> make_matrix(const PyParams& pp, Alphabet a) {
     }
     if (pp.matrix.empty()) return std::nullopt;
     std::string l = lower(pp.matrix);
-    if (l == "blosum62" || l == "pam50") {
-        if (a != Alphabet::AminoAcid)
-            throw py::value_error(pp.matrix + " requires the amino-acid alphabet");
-        return l == "blosum62" ? SubstitutionMatrix::blosum62() : SubstitutionMatrix::pam50();
-    }
-    throw py::value_error("unknown matrix '" + pp.matrix +
-                          "' (use '', 'BLOSUM62', 'PAM50', or a SubstitutionMatrix)");
+    if (!is_matrix_name(l))
+        throw py::value_error("unknown matrix '" + pp.matrix + "' (use '', " +
+                              kMatrixNames + ", or a SubstitutionMatrix)");
+    return named_matrix(l, a);
 }
 
-// Accept either a builtin name ("", "blosum62", "pam50") or a SubstitutionMatrix.
+// Accept either a builtin name (see kMatrixNames) or a SubstitutionMatrix.
 void set_matrix(PyParams& p, const py::object& m) {
     p.matrix.clear();
     p.matrix_obj.reset();
     if (m.is_none()) return;
     if (py::isinstance<py::str>(m)) {
         std::string name = m.cast<std::string>();
-        std::string l = lower(name);
-        if (!(l.empty() || l == "blosum62" || l == "pam50"))
-            throw py::value_error("unknown matrix '" + name +
-                                  "' (use '', 'BLOSUM62', 'PAM50', or a SubstitutionMatrix)");
+        if (!is_matrix_name(lower(name)))
+            throw py::value_error("unknown matrix '" + name + "' (use '', " +
+                                  kMatrixNames + ", or a SubstitutionMatrix)");
         p.matrix = std::move(name);
     } else if (py::isinstance<SubstitutionMatrix>(m)) {
         p.matrix_obj = m.cast<SubstitutionMatrix>();
@@ -190,11 +205,14 @@ PYBIND11_MODULE(_core, m) {
 
     py::class_<SubstitutionMatrix>(m, "SubstitutionMatrix",
                                    "Non-negative substitution penalties (penalty(a,a)==0). Build a "
-                                   "named builtin (``blosum62``/``pam50``) or a custom one from a "
-                                   "similarity grid whose row/column order matches "
-                                   "``amino_acids()`` (or ``alphabet_symbols(alphabet)``).")
+                                   "named builtin (``blosum62``/``pam250``/``pam100``/``structural``, "
+                                   "or ``unit`` for identity) or a custom one from a similarity grid "
+                                   "whose row/column order matches ``amino_acids()`` (or "
+                                   "``alphabet_symbols(alphabet)``).")
         .def_static("blosum62", &SubstitutionMatrix::blosum62)
-        .def_static("pam50", &SubstitutionMatrix::pam50)
+        .def_static("pam250", &SubstitutionMatrix::pam250)
+        .def_static("pam100", &SubstitutionMatrix::pam100)
+        .def_static("structural", &SubstitutionMatrix::structural)
         .def_static("unit", &SubstitutionMatrix::unit, py::arg("size"))
         .def_static(
             "from_similarity",
@@ -242,12 +260,12 @@ PYBIND11_MODULE(_core, m) {
           py::arg("alphabet") = "aa",
           "Symbols in code order for an alphabet; custom matrices must follow this order.");
     m.def("amino_acids", [] { return alphabet_symbols(Alphabet::AminoAcid); },
-          "The amino-acid symbol order used by BLOSUM62 / PAM50 and custom AA matrices.");
+          "The amino-acid symbol order used by the built-in matrices and custom AA matrices.");
 
     py::class_<PyParams>(m, "SearchParams",
                          "Search scope and budget. Scope: max_subs/max_ins/max_dels (exact, "
                          "seqtm) and max_total_edits. Budget: max_penalty with an optional "
-                         "matrix ('BLOSUM62') and gap costs. engine is 'auto'|'seqtrie'|'seqtm', "
+                         "matrix (identity/BLOSUM62/PAM250/PAM100/structural) and gap costs. engine is 'auto'|'seqtrie'|'seqtm', "
                          "mode is 'all'|'top'.")
         .def(py::init([](int max_subs, int max_ins, int max_dels, int max_total_edits,
                          long max_penalty, py::object matrix, int gap_open, int gap_extend,

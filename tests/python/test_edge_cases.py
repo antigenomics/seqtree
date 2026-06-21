@@ -79,7 +79,7 @@ def test_invalid_mode_setter():
 def test_invalid_matrix():
     # An unknown matrix name is rejected eagerly at construction (like engine/mode).
     with pytest.raises(ValueError):
-        seqtree.SearchParams(matrix="PAM250")
+        seqtree.SearchParams(matrix="PAM30")  # not a built-in
 
 
 def test_blosum_requires_aa():

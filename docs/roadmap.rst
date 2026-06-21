@@ -1,8 +1,9 @@
 Roadmap
 =======
 
-The core ships both engines, scope + budget search, BLOSUM62 / PAM50 / custom matrices
-(Gram-distance penalty) with linear gaps, **position-aware scoring** (``PositionalMatrix``, for
+The core ships both engines, scope + budget search, built-in matrices (identity / BLOSUM62 / PAM250
+/ PAM100 / structural) plus custom ones (Gram-distance penalty) with linear gaps, **position-aware
+scoring** (``PositionalMatrix``, for
 anchor masking + PSSMs), top / all hits, on-demand alignment, parallel batch and batch-of-batches,
 auto-selecting pairwise search, a C++ **k-mer seed index** (``KmerIndex``), **control-set E-values**
 for significance (see :doc:`evalue`), and **pMHC epitope homology search** with presentation-aware
