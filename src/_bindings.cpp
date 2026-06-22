@@ -232,6 +232,23 @@ PYBIND11_MODULE(_core, m) {
             "penalties via max(sim[a,a], sim[b,b]) - sim[a,b]. Row/column order must match the "
             "target alphabet's symbol order (see ``amino_acids()``).")
         .def("size", &SubstitutionMatrix::size)
+        .def(
+            "penalty",
+            [](const SubstitutionMatrix& self, const std::string& a, const std::string& b) {
+                if (a.size() != 1 || b.size() != 1)
+                    throw py::value_error("penalty() takes two single amino-acid characters");
+                static const std::string aa = alphabet_symbols(Alphabet::AminoAcid);
+                auto ia = aa.find(a[0]), ib = aa.find(b[0]);
+                if (ia == std::string::npos || ib == std::string::npos)
+                    throw py::value_error("unknown amino acid; expected one of " + aa);
+                if (ia >= self.size() || ib >= self.size())
+                    throw py::value_error("residue out of range for this matrix's alphabet");
+                return self.penalty(uint8_t(ia), uint8_t(ib));
+            },
+            py::arg("a"), py::arg("b"),
+            "Gram-distance substitution penalty between two amino acids: 0 when identical, "
+            "larger when more dissimilar (s(a,a)+s(b,b)-2 s(a,b)). Characters use the "
+            "``amino_acids()`` order.")
         .def("__repr__", [](const SubstitutionMatrix& s) {
             return "SubstitutionMatrix(size=" + std::to_string(s.size()) + ")";
         });

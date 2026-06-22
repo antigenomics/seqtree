@@ -82,6 +82,21 @@ def test_matrix_size_mismatch_raises():
         idx.search("ACGTACGT", st.SearchParams(matrix=bad, max_total_edits=1, engine="seqtrie"))
 
 
+def test_substitution_matrix_penalty_scalar():
+    # Scalar amino-acid penalty lookup (Gram distance): 0 on identity, larger for dissimilar.
+    bl = st.SubstitutionMatrix.blosum62()
+    assert bl.penalty("L", "L") == 0
+    assert bl.penalty("W", "W") == 0
+    assert bl.penalty("L", "I") < bl.penalty("L", "P")  # conservative < dissimilar
+    # The scalar penalties are exactly the engine's per-position Gram costs: the A->E, P->L
+    # double substitution scores 28 under seqtm (see MATRIX_SCORES["BLOSUM62"]).
+    assert bl.penalty("A", "E") + bl.penalty("P", "L") == 28
+    with pytest.raises(ValueError):
+        bl.penalty("L", "AB")   # not a single residue
+    with pytest.raises(ValueError):
+        bl.penalty("L", "?")    # unknown amino acid
+
+
 def test_collisions_only_with_indels():
     import random
 
