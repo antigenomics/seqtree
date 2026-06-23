@@ -39,7 +39,7 @@ public:
     static SubstitutionMatrix blosum62();
     static SubstitutionMatrix pam250();   // EMBOSS EPAM250 (NCBI log-odds)
     static SubstitutionMatrix pam100();   // EMBOSS EPAM100 (NCBI log-odds)
-    static SubstitutionMatrix structural();  // TeXshade volume+hydropathy similarity
+    static SubstitutionMatrix structural();  // Miyazawa-Jernigan interaction-strength similarity
     // Convert a similarity matrix (row-major, size*size) to penalties via the Gram /
     // squared-distance transform pen[a][b] = sim[a][a] + sim[b][b] - 2*sim[a][b].
     static SubstitutionMatrix from_similarity(uint8_t size, const int32_t* sim);

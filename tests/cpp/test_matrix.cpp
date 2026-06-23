@@ -34,6 +34,6 @@ TEST_CASE("built-in amino-acid matrices: size, zero diagonal, symmetry") {
     // A=0, E=6 (squared distance). PAM250: 2+4-2*0=6; PAM100: 4+5-2*0=9.
     CHECK(SubstitutionMatrix::pam250().penalty(0, 6) == 6);
     CHECK(SubstitutionMatrix::pam100().penalty(0, 6) == 9);
-    // structural is on a 0..10 similarity scale: A-A=10, E-E=10, A-E=6 -> 10+10-12=8.
-    CHECK(SubstitutionMatrix::structural().penalty(0, 6) == 8);
+    // structural (MJ interaction-strength) on a 0..10 scale: A-A=10, E-E=10, A-E=7 -> 10+10-14=6.
+    CHECK(SubstitutionMatrix::structural().penalty(0, 6) == 6);
 }

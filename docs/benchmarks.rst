@@ -229,8 +229,11 @@ across all alignments to each reference. The **time overhead of matrix scoring i
    :width: 80%
 
 The built-in matrices are ``identity``, ``BLOSUM62``, ``PAM250``, ``PAM100`` and ``structural``
-(TeXshade sidechain volume + hydropathy); a custom matrix is supplied via
-``SubstitutionMatrix.from_similarity`` (row/column order from ``seqtree.amino_acids()``).
+(a Miyazawa–Jernigan interaction-strength similarity — residues are close when their MJ contact
+strengths ``q(a)=mean_b e(a,b)`` match, separating strong hydrophobic ``F W C L Y M I V`` from weak
+polar/charged ``S Q D E K`` interactors; Košmrlj et al., *PNAS* 2008, doi:10.1073/pnas.0808081105);
+a custom matrix is supplied via ``SubstitutionMatrix.from_similarity`` (row/column order from
+``seqtree.amino_acids()``).
 
 Selectivity and collisions
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~

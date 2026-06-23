@@ -26,8 +26,13 @@ to their own payloads (V gene, MHC, counts) and filter.
 Beyond search, seqtree ships:
 
 - **Substitution matrices** — built-in `identity`, `BLOSUM62`, `PAM250`, `PAM100`, and `structural`
-  (TeXshade sidechain volume + hydropathy), plus custom matrices via
-  `SubstitutionMatrix.from_similarity` (Gram-distance penalty `s(a,a)+s(b,b)−2·s(a,b)`).
+  — a **Miyazawa–Jernigan interaction-strength** matrix: each residue's strength `q(a)=mean_b e(a,b)`
+  is read off the MJ contact potential, so substitutions between residues of like interaction strength
+  are cheap. It separates strong (hydrophobic `F W C L Y M I V`) from weak (polar/charged
+  `S Q D E K`) interactors — the strong/weak-interactor axis of TCR-recognition models
+  ([Košmrlj et al., *PNAS* 2008](https://doi.org/10.1073/pnas.0808081105); MJ contact energies from
+  Miyazawa & Jernigan, *J Mol Biol* 1996) — letting dissimilar-but-chemically-equivalent loops align.
+  Plus custom matrices via `SubstitutionMatrix.from_similarity` (Gram penalty `s(a,a)+s(b,b)−2·s(a,b)`).
 - **E-values / significance** — calibrate hit counts against a background control repertoire
   (`load_control` + `evalues`), the TCRNET approach on a finite-sample footing. See the
   [E-value guide](https://antigenomics.github.io/seqtree/evalue.html).
