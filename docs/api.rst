@@ -35,3 +35,11 @@ Functions
 ---------
 
 .. autofunction:: pairwise_batch
+
+Gap-block alignment
+-------------------
+
+.. automodule:: seqtree.gapblock
+   :members:
+   :undoc-members:
+   :show-inheritance:

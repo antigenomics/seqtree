@@ -1,9 +1,13 @@
 """seqtree: fast fuzzy search over biological sequences (amino acid / nucleotide).
 
 Build an immutable index once, then search single queries or massive batches in
-parallel. Two engines: ``seqtm`` (branch-and-bound, exact per-type edit caps,
-fast Hamming path) and ``seqtrie`` (banded DP, matrix-weighted score budgets).
-Payload-agnostic: results are ``(ref_id, score, n_subs, n_ins, n_dels)``.
+parallel. Two engines: ``seqtm`` (branch-and-bound, exact per-type edit caps, fast
+Hamming path) and ``seqtrie`` (full-width DP carried down the trie, budget-only --
+it ignores the per-type caps). Payload-agnostic: results are
+``(ref_id, score, n_subs, n_ins, n_dels)``.
+
+For anchored loops (CDR3 / junction), :mod:`seqtree.gapblock` restricts the alignment
+to one contiguous indel and picks its position with a gap prior.
 """
 from ._core import (
     Index,
@@ -20,12 +24,17 @@ from ._core import (
 )
 from .control import load_control
 from .evalue import evalues
-from . import layout, pmhc
+from . import gapblock, layout, pmhc
+from .gapblock import GapBlockIndex, central_prior, gapblock_score
 from .pmhc import PMHCStore, find_mimics
 
 __all__ = [
+    "gapblock",
     "layout",
     "pmhc",
+    "GapBlockIndex",
+    "gapblock_score",
+    "central_prior",
     "PMHCStore",
     "find_mimics",
     "Index",
