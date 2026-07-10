@@ -112,3 +112,28 @@ def test_median_seed_evalue_crosses_one_at_k6(k, lo, hi):
     evs = [si.evalue(w, N) for w, post in si.postings.items() for _ in range(len(post))]
     med = stt.median(evs)
     assert lo <= med < hi, f"k={k}: median E_seed = {med:.2f}, expected in [{lo}, {hi})"
+
+
+def test_seeds_reject_bad_arguments():
+    import pytest
+
+    from seqtree.seeds import SeedIndex, core_kmers
+
+    with pytest.raises(ValueError, match="k must be"):
+        core_kmers("CASSLGQAYEQYF", 0)
+    with pytest.raises(ValueError, match="flank must be"):
+        core_kmers("CASSLGQAYEQYF", 4, flank=-1)
+
+
+def test_empty_seed_index_refuses_to_report_an_evalue():
+    """An empty control cannot calibrate anything; saying so beats dividing by zero."""
+    import pytest
+
+    from seqtree.seeds import SeedIndex
+
+    empty = SeedIndex([], k=4)
+    assert len(empty) == 0
+    with pytest.raises(ValueError, match="seed index is empty"):
+        empty.evalue("LGQA", n_target=100)
+    with pytest.raises(ValueError, match="seed index is empty"):
+        empty.union_evalue("CASSLGQAYEQYF", n_target=100)

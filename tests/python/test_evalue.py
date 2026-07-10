@@ -126,6 +126,25 @@ def test_thetas_from_scores_rejects_bad_arguments():
         thetas_from_scores([[1]], 10, 10, 0.0, 5)
     with pytest.raises(ValueError, match="n_target and m_control"):
         thetas_from_scores([[1]], 0, 10, 1.0, 5)
+    with pytest.raises(ValueError, match="theta_max"):
+        thetas_from_scores([[1]], 10, 10, 1.0, -1)
+
+
+def test_theta_is_unreachable_when_even_an_exact_ball_is_too_crowded():
+    """k = 1 but the two smallest control scores are both 0: the cutoff would be -1."""
+    assert thetas_from_scores([[0, 0, 4]], n_target=100, m_control=100, e_target=1.0,
+                              theta_max=9) == [-1]
+    # c_max < 1 -> not even one control hit is affordable, and an empty ball reports 3N/M.
+    assert thetas_from_scores([[7]], n_target=100, m_control=100, e_target=0.5,
+                              theta_max=9) == [-1]
+
+
+def test_evalues_rejects_an_empty_control():
+    rng = random.Random(13)
+    target = seqtree.Index.build(_rand(10, rng), "aa")
+    empty = seqtree.Index.build([], "aa")
+    with pytest.raises(ValueError, match="control index is empty"):
+        evalues(target, empty, ["CASSPGTEAFF"], seqtree.SearchParams(max_subs=1))
 
 
 def test_threshold_for_evalue_needs_a_score_ceiling():

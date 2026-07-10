@@ -30,6 +30,9 @@ between them, written so an agent developing either package can pick it up cold:
 | Per-position scoring | `PositionalMatrix` (`penalty(pos,a,b)` = base × per-position weight; weight 0 = free/anchor) | the hook for PSSMs and anchor masking |
 | k-mer seed index | `KmerIndex` (C++): unique-k-mer trie + CSR postings + per-peptide allele tag; `seed_and_gather` (GIL-released, parallel) | million-scale candidate generation |
 | Control-calibrated E-values | `seqtree.evalues`, `seqtree.load_control` | `Ê = (N/M)·n_C`, Poisson tail, `exclude_exact` |
+| Calibrated score cutoffs | `seqtree.threshold_for_evalue`, `thetas_from_scores` | inverts `Ê` to a **per-query** θ. A fixed θ is not calibrated: at `gapblock_score ≤ 60`, random control junctions cluster *harder* than real same-epitope ones |
+| Gap-placement priors | `central_prior`, `profile_prior`, `frame_prior`, `embed_in_frame` | `prior(i, d, m) ≥ 0` and `= 0` at `d = 0`. Only a **constant-`i`** rule (`frame_prior`) makes a frame transitive — and hence a column index, and hence a PWM, possible |
+| Seed significance | `seqtree.seeds`: `core_kmers`, `SeedIndex` | precision, not recall: ~0.5% cross-island coverage |
 | Anchor / layout model | `seqtree.layout`: `AnchorSpec`, `DEFAULTS`, `mask_anchors`, `kmers`, `presentation_features`, `weight_profile` | parametrized anchors; class-II register trick |
 | pMHC homology + reverse | `seqtree.pmhc`: `PMHCStore`, `search_homologs`, `assign_allele`, `find_mimics`, `build_kmer_index` | reference impl; mhcmatch productionizes |
 | Presentation-aware E-values | `seqtree.pmhc_evalue.homolog_evalue` | per-allele null |

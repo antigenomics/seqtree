@@ -15,11 +15,12 @@ Two search engines over one trie:
 - **`seqtm`** — branch-and-bound enumeration. Exact per-type edit caps
   (`max_subs` / `max_ins` / `max_dels`) and a fast Hamming-only path. Best for
   small edit distances (UMI collapse, error correction, CDR3/epitope matching).
-- **`seqtrie`** — banded edit-distance DP. Matrix-weighted score budgets
-  (BLOSUM62 + gap costs), cost independent of edit count. Best for
-  similarity-scored searches.
+- **`seqtrie`** — full-width edit-distance DP carried down the trie. Honours the
+  `max_penalty` score budget only; it **ignores the per-type edit caps**. Use it
+  when the budget is the whole specification.
 
-`engine="auto"` picks one per query. Results are payload-agnostic:
+`engine="auto"` always picks `seqtm`, because it is the only engine that enforces
+the caps you asked for. Results are payload-agnostic:
 `(ref_id, score, n_subs, n_ins, n_dels)`. Downstream libraries map `ref_id` back
 to their own payloads (V gene, MHC, counts) and filter.
 
@@ -36,6 +37,15 @@ Beyond search, seqtree ships:
 - **E-values / significance** — calibrate hit counts against a background control repertoire
   (`load_control` + `evalues`), the TCRNET approach on a finite-sample footing. See the
   [E-value guide](https://antigenomics.github.io/seqtree/evalue.html).
+- **Calibrated cutoffs** — `threshold_for_evalue` inverts the E-value into the score cutoff that
+  achieves it, **per query**. A fixed cutoff is not a calibrated one: a control repertoire is
+  dense near germline and sparse among rare junctions, so the same threshold buys a common query
+  far more chance neighbours than a rare one.
+- **Gap-block alignment** — `gapblock` restricts alignment to one contiguous indel, which is the
+  right model for a V(D)J junction and, measured against unrestricted affine alignment, is
+  exactly optimal on **98.8%** of genuinely related pairs at a calibrated `gap_open`. A gap
+  prior (`central_prior`, `profile_prior`, `frame_prior`) chooses where the block goes — a
+  sequence score alone cannot.
 
 ## Install
 
@@ -86,6 +96,23 @@ target = seqtree.Index.build(vdjdb_cdr3s, alphabet="aa")
 for q, r in zip(queries, seqtree.evalues(target, control, queries, p)):
     if r["p_enrichment"] < 1e-3:
         print(q, r["E"], r["n_target"], r["n_control"])
+
+# ...and the cutoff that achieves a target E, per query (-1 = unreachable at this control size)
+ceiling = seqtree.SearchParams(max_subs=14, max_penalty=50, matrix="BLOSUM62", engine="seqtm")
+thetas = seqtree.threshold_for_evalue(target, control, queries, ceiling, e_target=0.05)
+
+# one contiguous gap block, placed by a prior rather than by the score alone
+from seqtree.gapblock import GapBlockIndex, central_prior, embed_in_frame
+
+gbi = GapBlockIndex(cdr3s, "aa", d_max=2)
+mat = seqtree.SubstitutionMatrix.blosum62()
+for ref_id, score, block_len, block_pos in gbi.search(
+        "CASSLGQAYEQYF", 40, mat, gap_open=2 * mat.scale(),
+        gap_prior=central_prior(int(1.5 * mat.scale()))):
+    ...
+
+# a fixed frame column makes gap placement transitive -- and a column index, hence a PWM, possible
+embed_in_frame("CASSGQAYEQYF", width=14, c=4)      # 'CASS--GQAYEQYF'
 ```
 
 ## Tests
@@ -105,6 +132,7 @@ python bench/bench.py                # recall vs ground truth (real VDJdb data)
 python bench/bench_evalue.py         # true E-value benchmark (target vs background control)
 python bench/bench_evalue_matrix.py  # significance across reference/control/query/scope grid
 python bench/bench_epitope.py        # epitope detection-complexity (GIL vs NLV)
+python bench/bench_gapblock.py       # the gap-freedom ladder: fixed centre → prior → flat → affine
 ```
 
 Figures (throughput, scaling, matrix-scoring overhead, collisions, E-value matrix, epitope

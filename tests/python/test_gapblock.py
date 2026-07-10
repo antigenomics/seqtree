@@ -371,6 +371,42 @@ def test_index_dmax_zero_is_hamming():
     assert all(len(gbi.refs[rid]) == 13 for rid, *_ in hits)
 
 
+def test_index_rejects_bad_arguments():
+    with pytest.raises(ValueError, match="d_max"):
+        GapBlockIndex(REFS, "aa", d_max=-1)
+    with pytest.raises(ValueError, match="max_penalty"):
+        GapBlockIndex(REFS, "aa").search("CASSLGQAYEQYF", -1, BLOSUM)
+    with pytest.raises(ValueError, match="c must be"):
+        frame_prior(1, -1)
+
+
+def test_index_len_and_unit_cost_default():
+    gbi = GapBlockIndex(REFS, "aa", d_max=1)
+    assert len(gbi) == len(REFS)
+    # matrix=None must fall back to unit cost with gap_open 1, not crash on scale()
+    hits = gbi.search("CASSLGQAYEQYF", 3, None)
+    assert any(gbi.refs[rid] == "CASSLGQAYEQYF" and s == 0 for rid, s, _, _ in hits)
+
+
+def test_index_skips_refs_shorter_than_the_block():
+    """A ref of length 1 has no 2-deletion variant; it must be skipped, not crash."""
+    gbi = GapBlockIndex(["A", "CASSLGQAYEQYF"], "aa", d_max=2)
+    assert len(gbi) == 2
+    hits = gbi.search("CASSLGQAYEQYF", 60, BLOSUM, gap_open=28)
+    assert [gbi.refs[rid] for rid, *_ in hits] == ["CASSLGQAYEQYF"]
+
+
+def test_index_handles_an_empty_auxiliary_level():
+    """Every ref shorter than d -> that level's index is empty and must be tolerated.
+
+    The budget has to cover gap_cost(3) or the level is skipped before it is ever consulted.
+    """
+    gbi = GapBlockIndex(["AC", "AG"], "aa", d_max=3)
+    assert gbi._var[3][0] is None
+    hits = gbi.search("AC", 5, None)          # unit cost: gap_cost(3, 1, 1) == 3 <= 5
+    assert hits[0][1] == 0 and gbi.refs[hits[0][0]] == "AC"
+
+
 def test_score_is_a_valid_ball_for_evalues():
     """s >= 0 with s(q, q) == 0 is what appendix/evalue.tex needs; check it holds with a prior."""
     rng = random.Random(23)
