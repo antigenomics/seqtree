@@ -70,16 +70,31 @@ Numbers that constrain the API, all reproducible from `bench/` and the downstrea
   penalty units — affine inventing an alignment that does not exist. Extra gap freedom buys
   manufactured similarity.
 - **A fixed score cutoff is not a calibrated cutoff.** Building islands on human TRB by union-find
-  at `gapblock_score ≤ 60`, size-matched *random control* junctions land a larger fraction of nodes
-  in components of ≥5 (**0.748**) than real same-epitope sequences do (**0.660**). Under per-query
-  E-value edges at `E* = 0.05` the picture inverts: real 1.583 edges/node against control 0.022,
-  and the control forms no component of size 3 at all.
+  at `gapblock_score ≤ 60`, **31.7%** of size-matched *random control* junctions land in a component
+  of ≥5 — structure invented by the threshold. Per-query E-value edges at `E* = 0.05` cut that to
+  **0.000** while raising the real signal: 2.334 edges per node against 0.021 for the control, which
+  forms no component of size 3 at all. The control arm's realised edge rate lands on `E*`, which is
+  the check that the calibration is honest.
+- **Mouse replicates it.** Against the mouse TRB control (694,241 productive clonotypes), 5 epitopes
+  and 1,692 TCRs give 5.856 calibrated edges per node against 0.019 for the control, which again
+  forms nothing larger than a pair. At a fixed θ=40 the control still lands 18.3% of its nodes in
+  components of ≥5.
 - **Constraining the block is what buys precision.** Compared at a *matched* false-positive rate —
   each rung given the cutoff at which its own ball admits `E*` chance neighbours, since a freer rung
   finds lower scores and a fixed budget would reward it for that — retrieval precision on the
-  length-different fraction of VDJdb same-epitope pairs is **0.65** for a hard central pin or a
-  central prior, and **0.31** when the score chooses freely among `L+1` placements *or* among five
-  plausible ones. Trying several positions and keeping the best score is worse than not trying.
+  length-different fraction of VDJdb human TRB same-epitope pairs (2,000 queries, `E* = 0.1`):
+
+  | rung | layouts | precision |
+  |---|---|---|
+  | fixed centre | 1 | **0.414** |
+  | central prior λ=21 | ~1–2 effective | 0.336 |
+  | flat (score alone) | L+1 | 0.176 |
+  | candidates (after 3–4, before last 3–4, centre) | 5 | 0.156 |
+
+  Trying several plausible positions and keeping the best score is worse than not trying: the score
+  picks the structurally correct layout about a tenth of the time, so each extra candidate is mostly
+  an opportunity to be wrong. Mouse replicates the ordering at `E* = 1.0` but its length-different
+  stratum holds only 24–79 true positives, too few to separate the rungs.
 - **Performance.** 91% of `GapBlockIndex.search` time is the query-deletion-variant branch, 9% the
   9.8M-entry auxiliary indices. Netting the prior out of each variant's budget cuts that branch
   from ~15 sub-searches to 2.5. Variant dedup (7–10% of variants before pruning, fewer after) and

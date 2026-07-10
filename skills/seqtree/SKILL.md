@@ -74,9 +74,11 @@ load_control(name="human_trb_aa", size=None) -> Index      # 250k bundled; large
 ```
 
 **A fixed score cutoff is not a calibrated cutoff.** The control is dense near germline and
-sparse among rare junctions. Measured on human TRB: at `gapblock_score <= 60`, random control
-junctions cluster *harder* than real same-epitope ones. Always invert an E-value; never pick θ
-by hand. `-1` means `e_target < 3N/M` — enlarge the control rather than lowering the bar.
+sparse among rare junctions. Measured on human TRB: at `gapblock_score <= 60`, **31.7%** of random
+control junctions land in a connected component of ≥5 — structure the threshold invents. Per-query
+cutoffs cut that to 0.000 while raising the real signal to 2.334 edges/node. Always invert an
+E-value; never pick θ by hand. `-1` means `e_target < 3N/M` — enlarge the control rather than
+lowering the bar.
 
 `threshold_for_evalue` needs `params.max_penalty > 0` as the ceiling to search the control at.
 One control scan supplies every query's cutoff.
@@ -155,8 +157,10 @@ Count it in the control.
 
 1. `gap_open` defaults to **1**, which is wrong for any real matrix. Pass `2 * matrix.scale()`.
 2. `Index.build` rejects non-alphabet characters — filter `B/Z/X/*` out of CDR3s first.
-3. The bundled control has detectable row-order structure. Shuffle before subsampling; using all
-   250k rows is order-invariant and safe.
+3. The bundled control is a **uniform reservoir sample** of unique productive clonotypes, shuffled,
+   so `bundled[:k]` is a valid sub-sample. It used to be the abundance head (25.8x more
+   self-similar, 3.1x the ball mass); if you have a cached `~/.cache/seqtree/control_*.sqtree`
+   from before that fix, delete it.
 4. OLGA generates from `P_gen`, which is **not** the post-selection background `P_0`. Do not use
    an OLGA sample as the null for an operational cutoff.
 5. Rebuild after pulling: a stale `_core.so` has silently shadowed new Python-visible C++ methods

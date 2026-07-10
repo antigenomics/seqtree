@@ -150,9 +150,9 @@ Calibrated cutoffs
 
    **A fixed score cutoff is not a calibrated cutoff.** A control repertoire is dense near germline
    and sparse among rare junctions, so one threshold buys a common query many more chance neighbours
-   than a rare one. Building a neighbour graph on human TRB at ``gapblock_score <= 60``, size-matched
-   *random control* junctions land a larger fraction of nodes in components of ≥ 5 (**0.748**) than
-   real same-epitope sequences do (**0.660**). The threshold, not the biology, was doing the work.
+   than a rare one. Building a neighbour graph on human TRB at ``gapblock_score <= 60``, **31.7%** of
+   size-matched *random control* junctions land in a component of ≥ 5. That structure is invented by
+   the threshold; per-query cutoffs remove all of it.
 
 :func:`~seqtree.threshold_for_evalue` inverts ``E = (N/M) * n_control`` into the score cutoff that
 achieves a target E — **per query**. Because scores are integers the inversion is exact rather than
@@ -186,12 +186,13 @@ Re-run the same neighbour graph on E-value edges (an edge needs *mutual* signifi
 ===========  ==============  ================  ================
 arm          edges per node  in island ≥ 5     in island ≥ 20
 ===========  ==============  ================  ================
-real         **1.583**       **0.187**         **0.113**
-control      0.022           0.000             0.000
+real         **2.334**       **0.233**         **0.152**
+control      0.021           0.000             0.000
 ===========  ==============  ================  ================
 
-The control forms 19,257 singletons, 223 pairs, and **no component of size three**. Its realised edge
-rate lands on ``E* = 0.05`` as designed, which is the check that the calibration is honest.
+The control forms 19,248 singletons, 223 pairs, three components of 3–4, and **nothing larger**. Its
+realised edge rate lands on ``E* = 0.05`` as designed, which is the check that the calibration is
+honest.
 
 See also
 --------
