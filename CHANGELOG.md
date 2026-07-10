@@ -65,6 +65,19 @@ E-value.
 - **Gap priors** — `central_prior(lam)`, `profile_prior(lam, w)`, `frame_prior(lam, c)` and
   `embed_in_frame(seq, width, c)`. A sequence score alone cannot place the block: a hard central
   pin agrees with the flat, score-only choice on only 10.6% of pairs.
+- **`gapblock.score_matrix` and `ScoreMatrix`** — the dense `n × K` counterpart of
+  `GapBlockIndex.search`, for prototype-distance embeddings, where nothing can be pruned because
+  the distance to every reference *is* the output. C++, GIL released, one thread per core. On an
+  M3 against 3,000 prototypes: **51.3 M pairs/s** single-threaded, **532.7 M** on 16 cores, versus
+  0.41 M for pure-Python `gapblock_score` — while evaluating all `L+1` block positions, not a
+  fixed shortlist. The prior is flattened once into an `[m][d][i]` cube, so the kernel never
+  re-enters Python. `ScoreMatrix` carries the CPython buffer protocol: `numpy.asarray` wraps it
+  without copying, and seqtree keeps its zero runtime dependencies.
+- **`gapblock.positions_prior(starts)`** — restrict the block to a fixed set of starts, negative
+  values counting from the end, reproducing the `gap_positions=(3, 4, -4, -3)` convention that
+  other junction aligners hardcode. Shipped for interoperability, not as a recommendation: at a
+  matched false-positive rate on human TRB, candidate starts reach precision 0.156 against 0.414
+  for a single hard-pinned centre.
 - **`threshold_for_evalue` / `thetas_from_scores`** — invert `Ê = (N/M)·n_C` into the score cutoff
   that achieves a target E, **per query**. Exact rather than a root-find, because scores are
   integers. Returns `-1` where `e_target < 3N/M`, i.e. where the control is too small to certify
