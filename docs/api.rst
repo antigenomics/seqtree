@@ -36,6 +36,12 @@ Functions
 
 .. autofunction:: pairwise_batch
 
+.. autofunction:: evalues
+
+.. autofunction:: threshold_for_evalue
+
+.. autofunction:: thetas_from_scores
+
 Gap-block alignment
 -------------------
 

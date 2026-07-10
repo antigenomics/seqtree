@@ -11,6 +11,11 @@ Redundancy explained by background V(D)J biology inflates ``n_control`` and henc
 ``E``, so such hits are *not* significant; antigen-driven convergence shows up as
 ``n_target`` exceeding ``E``. See ``appendix/evalue.tex`` for the derivation. Both
 indices must be deduplicated to unique clonotypes (``load_control`` does this).
+
+:func:`threshold_for_evalue` inverts this: it turns a target E into the score cutoff that
+achieves it. A *fixed* score cutoff is not calibrated -- the control is far denser near
+germline than in the rare-junction region, so the same cutoff buys many more chance
+neighbours for a common query than for a rare one. The cutoff has to be per query.
 """
 import math
 import warnings
@@ -77,3 +82,97 @@ def evalues(target, control, queries, params, threads=0, exclude_exact=False):
             "rule_of_three": rule3,
         })
     return out
+
+
+def _theta(scores, k, c_max, theta_max):
+    """Largest cutoff in ``[0, theta_max]`` whose control count stays within ``k``."""
+    if k < 1:
+        # One control hit already overshoots, and an empty ball still reports the
+        # rule-of-three bound 3N/M, which exceeds e_target whenever c_max < 3.
+        return -1
+    theta = theta_max if len(scores) <= k else min(theta_max, scores[k] - 1)
+    if theta < 0:
+        return -1
+    n_control = sum(1 for s in scores if s <= theta)
+    if n_control == 0 and c_max < 3.0:
+        return -1
+    return theta
+
+
+def thetas_from_scores(control_scores, n_target, m_control, e_target, theta_max,
+                       *, exclude_exact=False):
+    """Invert ``E = (N/M) * n_control`` for the score cutoff, one cutoff per query.
+
+    Scores are integers, so the inversion is exact rather than a root-find: sort a query's
+    control-hit scores and the answer is the value just below the ``(k+1)``-th smallest,
+    where ``k = floor(e_target * M / N)`` is the largest control count the target E allows.
+
+    Args:
+        control_scores: Per query, the scores of its control hits found at ``theta_max``.
+            Hits above ``theta_max`` are irrelevant and may be omitted.
+        n_target: ``N``, size of the target index.
+        m_control: ``M``, size of the control index.
+        e_target: Desired E-value, e.g. ``0.05``.
+        theta_max: Score ceiling the control was searched at. Returned cutoffs never exceed it.
+        exclude_exact: Drop distance-0 hits, matching :func:`evalues`.
+
+    Returns:
+        One integer cutoff per query, or ``-1`` where no cutoff achieves ``e_target``. That
+        happens when ``e_target < 3N/M``: with only ``M`` control sequences, even an empty
+        ball certifies no better than the rule-of-three bound. Enlarge the control.
+
+    Example:
+        >>> # E(4) = (100/100)*1 = 1.0 is allowed; E(5) = 2.0 is not.
+        >>> thetas_from_scores([[2, 5, 9]], n_target=100, m_control=100, e_target=1.0,
+        ...                    theta_max=10)
+        [4]
+    """
+    if n_target <= 0 or m_control <= 0:
+        raise ValueError("n_target and m_control must be > 0")
+    if e_target <= 0.0:
+        raise ValueError("e_target must be > 0")
+    if theta_max < 0:
+        raise ValueError("theta_max must be >= 0")
+
+    c_max = e_target * m_control / n_target
+    k = int(c_max)
+    out = []
+    for scores in control_scores:
+        s = sorted(x for x in scores if not (exclude_exact and x == 0))
+        out.append(_theta(s, k, c_max, theta_max))
+    return out
+
+
+def threshold_for_evalue(target, control, queries, params, e_target, threads=0,
+                         exclude_exact=False):
+    """Per-query score cutoff achieving ``e_target`` against ``control``.
+
+    One control search at ``params.max_penalty`` supplies every cutoff, so calling this and
+    then filtering a target search at the same ceiling costs two scans, not two per query.
+
+    Args:
+        target: :class:`Index` the E-value is expressed against (only its size is used).
+        control: background :class:`Index`.
+        queries: list of query strings.
+        params: :class:`SearchParams`; ``max_penalty`` is the ceiling ``theta_max`` and must
+            be positive.
+        threads: worker threads for the batch search (0 = all cores).
+        e_target: Desired E-value.
+        exclude_exact: Drop distance-0 hits, matching :func:`evalues`.
+
+    Returns:
+        One integer cutoff per query; ``-1`` where ``e_target`` is unreachable at this
+        control size.
+
+    Raises:
+        ValueError: If ``params.max_penalty`` is not positive.
+    """
+    theta_max = int(params.max_penalty)
+    if theta_max <= 0:
+        raise ValueError(
+            "threshold_for_evalue needs params.max_penalty > 0 as the score ceiling to "
+            "search the control at; cutoffs are then found within [0, max_penalty]"
+        )
+    scores = [[h.score for h in hl] for hl in control.search_batch(queries, params, threads)]
+    return thetas_from_scores(scores, len(target), len(control), e_target, theta_max,
+                              exclude_exact=exclude_exact)

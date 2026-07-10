@@ -23,7 +23,7 @@ from ._core import (
     amino_acids,
 )
 from .control import load_control
-from .evalue import evalues
+from .evalue import evalues, thetas_from_scores, threshold_for_evalue
 from . import gapblock, layout, pmhc, seeds
 from .gapblock import GapBlockIndex, central_prior, gapblock_score
 from .seeds import SeedIndex, core_kmers
@@ -54,4 +54,6 @@ __all__ = [
     "amino_acids",
     "load_control",
     "evalues",
+    "thetas_from_scores",
+    "threshold_for_evalue",
 ]
