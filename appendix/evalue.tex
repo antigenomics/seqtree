@@ -131,8 +131,11 @@ score $s_\theta(q,x)$ and a \emph{ball}
   \ball{\theta}{q} = \{x \in \mathcal{X} : s(q,x) \le \theta\}, \qquad s(q,q)=0,\; s\ge 0.
 \end{equation}
 The score need not be a metric: with a substitution matrix it is the squared-distance penalty
-$\mathrm{pen}(a,b)=s_{aa}+s_{bb}-2s_{ab}$ summed along the optimal alignment (plus gap costs); in
-unit-cost mode it is an edit count. Both define a legitimate ball. We work with two background laws
+$\mathrm{pen}(a,b)=s_{aa}+s_{bb}-2s_{ab}$ summed along whatever correspondence the scoring model
+admits (plus gap costs, \S\ref{sec:gapblock}); in unit-cost mode it is an edit count. Both define a
+legitimate ball. The batched search path enumerates that ball by branch-and-bound over a trie: it is
+\emph{not} an aligner and returns nothing outside the budget. A full affine alignment of one
+specific pair is a separate, on-demand call. We work with two background laws
 on $\mathcal{X}$: the \emph{realized-repertoire background} $\Pzero$ (what a healthy, unselected
 repertoire instantiates) and the \emph{generation law} $\Pgen$ (the V(D)J model). Let
 \begin{equation}\label{eq:pi0}
@@ -234,20 +237,17 @@ by maximum likelihood, giving the post-selection law
   Z=\sum_\sigma Q(\sigma)\Pgen(\sigma)=1 \;\;(\langle Q\rangle_{\Pgen}=1).
 \end{equation}
 The normalization $\langle Q\rangle=1$ means $Q$ \emph{redistributes} mass without a global rescale;
-the structured part (selection reinforces recombination biases, with the observed
-$\Pdata(Q)/\Pgen(Q)$ saturating around $\approx 7$~\cite{Elhanati2014}) reshapes the ball mass per
-sequence. Separately, the \emph{physical} thymic acceptance fraction---the fraction of recombined
-cells that survive to the naive repertoire---is $\alpha\lesssim 15\%$ (consistent with $10$--$30\%$
-for positive selection and $\approx5\%$ for full selection)~\cite{Elhanati2014}, and selection cuts
-repertoire diversity by $\approx 6$ bits ($\sim 50$-fold). Two consequences for the E-value.
-(i) The empirical control $\Pzero$ already \emph{is} the post-selection law of~\eqref{eq:qfactor}, so
-the control estimator $\hat\pi$ needs no $Q$ and no $\alpha$; $Q$ enters only the analytic estimator,
-where one uses $Q\,\Pgen$ in place of $\Pgen$. (ii) The global acceptance fraction $\alpha$ is
-sequence-independent and \emph{cancels} in every ratio and in $\hat\pi$ (which calibrates against the
-control's own size $M$); it would matter only for an \emph{absolute} naive-frequency
-estimate $f(\sigma)=\alpha\,Q(\sigma)\Pgen(\sigma)$, e.g.\ when the $\hat\pi_{\mathrm{gen}}$ fallback
-for a rare query (\S\ref{sec:precision}) is read as an expected count of cells rather than a
-probability.
+separately, the physical thymic acceptance fraction $\alpha\lesssim 15\%$ is sequence-independent, and
+selection cuts diversity by $\approx6$ bits~\cite{Elhanati2014}. Two consequences for the E-value, and
+they are what let us ignore both quantities. (i) The empirical control $\Pzero$ already \emph{is} the
+post-selection law of~\eqref{eq:qfactor}, so $\hat\pi$ needs no $Q$ and no $\alpha$; $Q$ enters only
+the analytic estimator, where one substitutes $Q\,\Pgen$ for $\Pgen$. (ii) Being
+sequence-independent, $\alpha$ \emph{cancels} in every ratio and in $\hat\pi$, which calibrates against
+the control's own size $M$. It would matter only for an \emph{absolute} naive-frequency estimate
+$f(\sigma)=\alpha\,Q(\sigma)\Pgen(\sigma)$ --- e.g.\ when the $\hat\pi_{\mathrm{gen}}$ fallback for a
+rare query (\S\ref{sec:precision}) is read as an expected cell count rather than a probability. The
+repertoire-specific calibration of $Q$ is a \texttt{vdjmatch} concern; here we need only that it exists
+and that the control absorbs it.
 \end{remark}
 
 \begin{lemma}[The two nulls differ]\label{lem:hierarchy}
@@ -522,6 +522,37 @@ the rule-of-three upper bound $\widehat E \le 3N/M$ when $n_C=0$.
 When $M$ is inadequate for a rare $q$, the analytic $\hat\pi_{\mathrm{gen}}$ is exact per query for
 any $M$ and serves as the fallback (Lemma~\ref{lem:hierarchy}).
 
+\begin{remark}[Inverting the E-value: a cutoff is a per-query object]\label{rem:threshold}
+Scope monotonicity (Lemma~\ref{lem:monotone}) makes $n_C(q,\theta)$ non-decreasing in $\theta$, so
+\eqref{eq:Ehat} inverts. Because engine scores are integers the inversion is exact rather than a
+root-find: sort the control-hit scores of $q$ and set
+\begin{equation}\label{eq:theta}
+  \theta^\ast(q) \;=\; \max\{\theta \le \theta_{\max} : \widehat E(q,\theta) \le E^\ast\}
+  \;=\; \min\!\left(\theta_{\max},\; s_{(k+1)}(q) - 1\right), \qquad k = \lfloor E^\ast M/N \rfloor,
+\end{equation}
+with $s_{(j)}(q)$ the $j$-th smallest control score and $\theta^\ast=\theta_{\max}$ when fewer than
+$k+1$ control hits exist. One control scan at the ceiling $\theta_{\max}$ supplies $\theta^\ast$ for
+every query (\texttt{seqtree.threshold\_for\_evalue}).
+
+Two consequences deserve emphasis. First, Proposition~\ref{prop:zero} makes $E^\ast < 3N/M$
+\emph{unattainable}: with $M$ control sequences even an empty ball certifies no better than $3N/M$,
+so the implementation returns $-1$ rather than a cutoff it cannot honour. On the bundled
+$M=250{,}000$ control against an $N=19{,}246$ target this floor is $E^\ast \ge 0.231$; certifying
+$E^\ast=0.01$ would require $M \ge 3N/E^\ast \approx 5.8\times10^6$.
+
+Second, and less obviously, a \emph{fixed} score cutoff is not a calibrated one. $\Pzero$ is dense
+near germline and sparse among rare junctions, so a single $\theta$ purchases a common query far more
+chance neighbours than a rare one, and \eqref{eq:Ehat} is precisely the correction. The effect is not
+academic: building a neighbour graph on human TRB by joining CDR3s at a fixed single-gap-block score
+$\le 60$, size-matched \emph{random control} junctions place a \emph{larger} fraction of nodes in
+components of size $\ge 5$ ($0.748$) than genuinely co-specific sequences do ($0.660$) --- the
+threshold, not the biology, was generating the structure. Re-drawing the same graph with edges
+required to satisfy $s(a,b) \le \min(\theta^\ast(a),\theta^\ast(b))$ at $E^\ast=0.05$ inverts it:
+$1.583$ edges per node for co-specific TCRs against $0.022$ for the control, which forms no connected
+component of size three. The control arm's realized edge rate landing on $E^\ast$ is the check that
+the calibration is honest.
+\end{remark}
+
 \section{Composition and length are handled automatically}\label{sec:composition}
 
 \begin{proposition}\label{prop:composition}
@@ -563,24 +594,94 @@ matrix-weighted balls are admitted via the engine's score; (iii) the asymptotic 
 $K,\lambda^\ast$ are replaced by a finite-$N$, finite-$M$ non-asymptotic error bound
 (Theorem~\ref{thm:cs}).
 
+\section{The score model: one gap block, placed by a prior}\label{sec:gapblock}
+
+Point (ii) above is where the ball meets biology, and it is not free. A junction's length varies
+because of V/J trimming and N-addition --- \emph{one} contiguous indel event, not a scatter of them.
+The engine therefore restricts the alignment underlying $s(q,x)$ to a single gap block of length
+$d=\lvert m-n\rvert$ placed at some $i \in [0,\min(m,n)]$, and takes the best such placement. The
+optimum is a prefix/suffix sum, hence $O(\min(m,n))$ rather than $O(mn)$.
+
+\paragraph{The restriction is nearly free, and it is protective.} Against a model-independent
+structural oracle --- iterative superposition followed by an \emph{unrestricted} affine dynamic
+program, free to open any number of gap blocks anywhere --- the true residue correspondence between
+two crystal junctions is a single contiguous block in $95.2$--$100\%$ of $3{,}049$ pairs drawn from
+$199$ unique sequences, for both chains and every $d=1,\dots,4$; forcing one block costs no median
+$\mathrm{C}\alpha$-RMSD. On sequence pairs that are genuinely related (one indel plus zero to two
+substitutions) the single-block score equals the unrestricted affine optimum on $98.8\%$ of pairs at
+a gap cost calibrated to the matrix scale. On \emph{unrelated} pairs affine undercuts it every time,
+by a median of $106$ penalty units: unrestricted gapping does not discover a better alignment there,
+it manufactures one. Since $\ball{\theta}{q}$ is defined by the score, a score that invents
+similarity inflates $\pi_0$ and $n_D$ alike, and the E-value cannot repair what the metric destroyed.
+
+\paragraph{Gap costs live on the matrix scale.} With $\mathrm{pen}(a,a)=0$ the Gram transform puts a
+typical BLOSUM62 mismatch at $14$. A gap cost of order unity therefore makes gaps an order of
+magnitude cheaper than substitutions and every alignment degenerates to gaps. Costs must be
+$O(\text{median mismatch})$. Correspondingly the affine cost must be guarded at $d=0$: the naive
+$g_{\text{open}} + (d-1)g_{\text{ext}}$ is \emph{negative} there whenever
+$g_{\text{open}} < g_{\text{ext}}$, which would violate $s\ge 0$ and with it \eqref{eq:ball},
+Lemma~\ref{lem:monotone}, and admissible trie pruning.
+
+\paragraph{A prior, not the score, places the block.} A substitution score alone selects the
+structurally correct block position about as often as chance: a hard central pin agrees with the
+score-only choice on only $10.6\%$ of pairs. The engine therefore admits a \emph{gap prior}
+$\Lambda(i,d,m)$ added to each candidate placement before the minimisation. It must satisfy exactly
+two conditions, and no others:
+\begin{equation}\label{eq:priorinv}
+  \Lambda \ge 0 \quad\text{(admissible pruning)},
+  \qquad
+  \Lambda(\cdot,0,\cdot) = 0 \quad\text{(so } s(q,q)=0 \text{, hence \eqref{eq:ball})}.
+\end{equation}
+Monotonicity in $d$ is \emph{not} required and does not hold for the central prior
+$\Lambda = \lambda\lvert i + d/2 - m/2\rvert$: growing a leading block drags its midpoint toward the
+centre, so the penalty falls. Empirically the block sits at the loop apex --- Cys-offset $6$ for both
+TRA and TRB --- and does \emph{not} drift with $d$, up to $d=4$. The central prior recovers that
+position exactly $42.4\%$ (TRA) and $30.1\%$ (TRB) of the time. A rule placing the block instead in
+the germline-untemplated span, where the insertion generatively occurred, recovers it $0.4\%$ and
+$19.8\%$ of the time and is rejected: the site at which nucleotides were inserted and the site at
+which a backbone accommodates an extra residue are different places.
+
+Constraining the placement is what buys precision. Compared at a \emph{matched} false-positive rate
+--- each rung given the cutoff \eqref{eq:theta} at which its own ball admits $E^\ast$ chance
+neighbours, since a freer rung finds lower scores and a fixed budget would reward it for that ---
+retrieval precision on the length-different fraction of VDJdb same-epitope pairs is
+$0.65$ for a hard central pin or a central prior, and $0.31$ when the score is free to choose among
+$L+1$ placements, or even among five plausible ones.
+
+\begin{remark}[A placement rule is a column frame]\label{rem:frame}
+Pairwise-optimal placement is not transitive. Embedding a set of unequal-length sequences into a
+common $W$-column frame yields a consistent column index --- and hence a position weight matrix ---
+if and only if the block start is constant in $d$. Under the central prior the start is
+$\lfloor (W-d)/2 \rfloor$, which drifts, and two shorter members of the frame are then related by
+\emph{two} blocks rather than one. The unique transitive rule pins the block to a fixed column $c$:
+left-anchor the first $c$ residues on the conserved Cys, right-anchor the remainder on the Phe. Any
+per-position weight profile fed to a positional matrix (Remark~\ref{rem:noduplicate},
+\S\ref{sec:epitope}) presupposes such a frame.
+\end{remark}
+
 \section{Epitopes: presentation-aware E-values and molecular mimicry}\label{sec:epitope}
 
 For TCR CDR3 the background is V(D)J generation; for epitopes (MHC-presented peptides) it is
 \emph{presentation}, which is allele-conditional and constrains the anchor positions. We adapt the
 framework with $\Pzero := \Pzero^{\mathrm{pep}}(\cdot\mid a)$ per allele $a$, anchor-masked.
 
-\subsection{Anchor decomposition and TCR-facing masking}
-A presented peptide factorizes $\sigma=(\sigma_A,\sigma_T)$ into MHC-facing anchors $A(a,L)$
-(class~I: $\{\mathrm{P2},\mathrm{P}\Omega\}$; class~II core: $\{\mathrm{P1,P4,P6,P9}\}$) and
-TCR-facing positions $T$. Presentation fixes $\sigma_A$; recognition reads $\sigma_T$
----Dolton~et~al.~\cite{Dolton2023} show one HLA-A\*02:01 TCR cross-reacting with three epitopes via the
-shared central motif x-x-x-A/G-I/L-G-I-x-x-x, the anchors irrelevant. With masking
-$\mu_a(\sigma)=\sigma_T$, define the TCR-facing ball
-$B^T_\theta(q)=\{\sigma:\sigma_A\in\mathrm{motif}(a),\ s_T(q_T,\sigma_T)\le\theta\}$, where $s_T$
-zeroes the anchors (a per-position \texttt{PositionalMatrix}). Significance is computed on $\mu_a$
-only: shared anchors are presentation, not recognition, and would inflate every within-allele hit.
+This section states only what the general framework needs in order to specialize; the pMHC layer
+itself --- pocket decomposition, cross-allele pseudosequence diffusion, structural validation, and
+the comparison against trained predictors --- is developed in the companion \texttt{mhcmatch}
+appendix, which defers its derivations to this document. The two agree; we do not restate them here.
 
-\subsection{Per-allele E-value}
+\paragraph{Anchor masking.} A presented peptide factorizes $\sigma=(\sigma_A,\sigma_T)$ into
+MHC-facing anchors $A(a,L)$ (class~I $\{\mathrm{P2},\mathrm{P}\Omega\}$; class~II core
+$\{\mathrm{P1,P4,P6,P9}\}$) and TCR-facing positions $T$. Presentation fixes $\sigma_A$; recognition
+reads $\sigma_T$ --- Dolton~et~al.~\cite{Dolton2023} exhibit one HLA-A\*02:01 TCR cross-reacting with
+three epitopes through a shared central motif, the anchors irrelevant. Masking $\mu_a(\sigma)=\sigma_T$
+gives the TCR-facing ball
+$B^T_\theta(q)=\{\sigma:\sigma_A\in\mathrm{motif}(a),\ s_T(q_T,\sigma_T)\le\theta\}$, with $s_T$
+zeroing the anchors via a per-position matrix (which presupposes a fixed frame, Remark~\ref{rem:frame}).
+Significance must be computed on $\mu_a$ alone: shared anchors are presentation, not recognition, and
+would inflate every within-allele hit.
+
+\paragraph{Per-allele E-value.}
 Null mass $\pi^{\mathrm{pep}}_0(q,\theta;a)=\Pzero^{\mathrm{pep}}(B^T_\theta(q)\mid a)$. With a
 per-allele anchor-masked presented control $C_a$ of size $M_a$ and a target presented peptidome of
 size $N_a$,
@@ -597,39 +698,22 @@ conditioned on $\sigma_A\in\mathrm{motif}(a)$; its 2-point couplings make the co
 (Thm~\ref{thm:cs}) generically nonzero, so the E-value mean stays robust (Prop.~\ref{prop:linearity})
 while the tail takes the $b_2$ / negative-binomial correction (Prop.~\ref{prop:nb}).
 
-\subsection{Cross-reactivity distance and mimicry significance}
-The recognition distance is TCR-facing and position-weighted,
-$d_{\mathrm{TCR}}(p,q)=\sum_i w_i\,\mathrm{pen}(p_i,q_i)$ with $w_i=0$ on anchors and peaked on the
-central hotspot --- exactly a \texttt{PositionalMatrix} on the seqtm Hamming path. A self or bacterial
-peptide $p$ is a candidate cross-reactive mimic of neoantigen $n$ iff (i) $p$ is presented by the
-same (compatible) allele, (ii) $d_{\mathrm{TCR}}(p,n)\le\theta$, and (iii) the hit is significant
-against the per-allele presented background, $\widehat E\le\alpha$. Condition (iii) deflates motifs
-common in the allele's presented peptidome and elevates surprisingly shared ones, connecting the
-neoantigen-fitness cross-reactivity distance of Łuksza~et~al.~\cite{Luksza2017} and the
-close-to-self ``shell'' picture of~\cite{TiffeauMayer2026} to a calibrated E-value.
-
-\subsection{Reverse problem: peptide to presenting allele}
-Flipping the weights ($w_i=1$ on anchors, $0$ on TCR-facing --- the \emph{presentation} mode) scores
-the binding motif. For a peptide of unknown restriction we widen the scope on its anchor signature
-until it has $10$--$100$ non-exact neighbours and vote their alleles. Two scores read off this tally:
-a \emph{ranking} score, the neighbour vote fraction $\hat p(a\mid q)=k_a/n$ (a posterior over the
-panel, used to rank alleles), and a \emph{confidence} score, the per-allele anchor-signature E-value
-$E_a$ from the binomial tail against the background frequency, which separates real peptides from
-noise. The distinction matters: enrichment-vs-background \emph{penalises} the dominant true allele on
-skewed panels (its expected count is large), so the vote fraction --- not $E_a$ --- is the correct
-ranking statistic. A global $E_{\mathrm{glob}}=\sum_a E_a$ (Poisson over the allele panel) reports the
-expected number of panel alleles presenting the peptide by chance: a lightweight presentation prior,
-not a substitute for a trained predictor.
-
-\paragraph{Class-II register trick.}
-The class-II binding core is a 9-mer with anchors at P1/P4/P6/P9, but its register inside a longer
-peptide is unknown; deconvolution tools resolve it by clustering (GibbsCluster~\cite{Andreatta2017},
-NNAlign\_MA~\cite{Alvarez2019}). For the reverse problem we use a one-pass proxy
-(\texttt{layout.presentation\_features} with \texttt{register=\textquotesingle anchored\textquotesingle}):
-pick the single 9-mer window whose P1 is a large hydrophobic and whose P4/P6/P9 avoid Pro/Gly, and take that
-core's $\{$P1,P4,P6,P9$\}$ as the signature. Committing to one register (vs.\ pooling all windows)
-makes an allele's peptides share a consistent anchor signature and is what lifts class-II ROC-AUC into
-the $0.9$ range (Table~\ref{tab:mhcguess}).
+\paragraph{Two directions, one weighting.} Zeroing the anchors and peaking the weights on the central
+hotspot gives the \emph{recognition} distance $d_{\mathrm{TCR}}$; a self or bacterial peptide is a
+candidate mimic of a neoantigen iff it is presented by a compatible allele, lies within $\theta$, and
+is significant against that allele's presented background --- which deflates motifs common in the
+peptidome and elevates surprisingly shared ones, connecting the cross-reactivity distance
+of~\cite{Luksza2017} and the close-to-self shell of~\cite{TiffeauMayer2026} to a calibrated E-value.
+Flipping the weights ($w_i=1$ on anchors) scores the binding motif instead and answers the reverse
+problem, peptide to restricting allele, by voting the alleles of a peptide's anchor-signature
+neighbours. One subtlety is load-bearing and easy to get backwards: enrichment against background
+\emph{penalises} the dominant true allele on a skewed panel, because its expected count is large. The
+vote fraction $\hat p(a\mid q)=k_a/n$ is therefore the ranking statistic; the per-allele E-value $E_a$
+is the confidence gate, and the global $E_{\mathrm{glob}}=\sum_a E_a$ counts how many panel alleles
+would present the peptide by chance. Both directions, and the class-II \emph{register trick} --- commit
+to the single 9-mer window whose P1 is large-hydrophobic and whose P4/P6/P9 avoid Pro/Gly, rather than
+pooling windows or deconvolving by clustering~\cite{Andreatta2017,Alvarez2019}, which is what lifts
+class-II ROC-AUC into the $0.9$ range --- are specified and productionized in \texttt{mhcmatch}.
 
 \paragraph{Two reference sets.} \texttt{pmhc\_data} ships in two tiers. The \emph{full} set is every
 IEDB-positive epitope--allele assay; the \emph{shortlist} keeps only epitope--allele pairs supported
@@ -709,21 +793,15 @@ alleles, shortlist $2$) and dominated by I-A\textsuperscript{b}, inflating both 
   \label{fig:mhc2guess}
 \end{figure}
 
-\paragraph{Filtering non-binders.}
-The same per-allele E-value rejects \emph{non-binders} at two granularities. A peptide that binds
-\emph{no} MHC has a large best-over-panel E-value (no allele's anchor signature is enriched over the
-marginal background) and is dropped; this is precisely the real-vs-random noise-rejection AUROC of
-Table~\ref{tab:mhcguess}. A peptide that simply does not bind a \emph{specific} allele $a$ has
-$E_a>\alpha$ even when it binds something else, so $a$ is excluded as a restriction element. The two
-filters compose: rank by vote fraction, threshold by $E_a$.
-
-\paragraph{Class-II promiscuity.}
-Class-II binding is far more degenerate than class-I: shared, loosely specified P1/P4/P6/P9 pockets
-and an open groove let one peptide be presented by \emph{many} alleles. Allele assignment is therefore
-genuinely multi-label --- the true set for a peptide is several alleles, not one --- which is how the
-benchmark scores it (positives $=$ every observed restricting allele) and why class-II PR baselines
-sit above class-I. Operationally, a class-II non-binder filter must test ``binds none of the panel''
-rather than ``binds exactly one,'' and the global $E_{\mathrm{glob}}$ is the natural statistic for it.
+\paragraph{Non-binders and class-II promiscuity.}
+The same per-allele E-value rejects non-binders at two granularities: a peptide binding \emph{no} MHC
+has a large best-over-panel E-value (the noise-rejection column of Table~\ref{tab:mhcguess}), while a
+peptide that merely fails to bind a \emph{specific} $a$ has $E_a>\alpha$. Rank by vote fraction,
+threshold by $E_a$. Class-II binding is far more degenerate --- an open groove and loosely specified
+pockets let one peptide be presented by many alleles --- so allele assignment there is genuinely
+multi-label, which is how the benchmark scores it (positives $=$ every observed restricting allele),
+why class-II PR baselines sit above class-I, and why a class-II non-binder filter must test ``binds
+none of the panel'' rather than ``binds exactly one.'' $E_{\mathrm{glob}}$ is the natural statistic.
 
 \subsection{Implementation and limitations}
 Implemented in \texttt{seqtree.pmhc} (anchor-masked TCR-facing k-mer homology via the C++
@@ -731,15 +809,15 @@ Implemented in \texttt{seqtree.pmhc} (anchor-masked TCR-facing k-mer homology vi
 \texttt{seqtree.pmhc\_evalue}; the positive control is the recovery of the A\*02:01 trio of
 \cite{Dolton2023} as mutual TCR-facing homologs. Anchor positions are parametrized (presets per
 class, overridable); class-II homology is register-agnostic (all-window k-mers), while the reverse
-allele-guessing problem uses the register trick (one core register, after the deconvolution idea of
-\cite{Andreatta2017,Alvarez2019}). Alternative CDR3 build strategies, e.g.\ the bilateral run-peeling
-decomposition of~\cite{Konstantinovsky2026}, plug into the same layer. \emph{Limitation:} we do not
-model MHC-groove/peptide-context similarity across alleles --- distinct alleles are distinct nulls,
-searched independently (never pooled); ``compatible allele'' is a user input, and validity is
-conditional on a faithful per-allele presented control. The \texttt{seqtree} code here is a
-\emph{reference implementation and benchmark} of the E-value methodology; the production allele
-guessing and non-binder filtering, with an optimized index and tuned ROC/PR thresholds, are built
-downstream in \texttt{vdjmatch} (TCR--antigen specificity) and \texttt{mhcmatch} (peptide--MHC).
+allele-guessing problem uses the register trick. Alternative CDR3 build strategies, e.g.\ the
+bilateral run-peeling decomposition of~\cite{Konstantinovsky2026}, plug into the same layer.
+\emph{Limitation:} we do not model MHC-groove similarity across alleles --- distinct alleles are
+distinct nulls, searched independently and never pooled; ``compatible allele'' is a user input, and
+validity is conditional on a faithful per-allele presented control. The \texttt{seqtree} code here is
+a \emph{reference implementation and benchmark} of the E-value methodology; production allele guessing
+and non-binder filtering, with an optimized index, cross-allele pocket modelling and tuned thresholds,
+are built downstream in \texttt{vdjmatch} (TCR--antigen specificity) and \texttt{mhcmatch}
+(peptide--MHC), whose appendices specialize this one rather than repeat it.
 
 \section{Practical defaults and algorithm}\label{sec:practice}
 
