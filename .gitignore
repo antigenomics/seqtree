@@ -11,3 +11,8 @@ _skbuild/
 docs/_build/
 bench/figures/
 bench/cache/
+
+# coverage artifacts
+.coverage
+.coverage.*
+htmlcov/

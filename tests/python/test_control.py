@@ -75,3 +75,44 @@ def test_a_prefix_of_the_bundled_control_is_a_uniform_sample():
         cass = sum(s.startswith("CASS") for s in pre) / k
         assert abs(cass - whole_cass) < 0.03, f"prefix[:{k}] CASS share {cass:.3f} vs {whole_cass:.3f}"
         assert abs(stt.mean(map(len, pre)) - whole_len) < 0.2
+
+
+def test_download_filters_productive_and_samples_uniformly(tmp_path, monkeypatch):
+    """Pins both control defects at once, with a fake table and no network.
+
+    The upstream tables are sorted by clonotype abundance, so `head -n size` returns the most
+    expanded public clones -- not a sample of P0. And they carry '_' (out of frame) and '*' (stop),
+    which are non-coding and belong to Pgen, not P0.
+    """
+    import gzip
+    import sys
+    import types
+
+    import seqtree.control as control
+
+    aa = "ACDEFGHIKLMNPQRSTVWY"
+    rows = ["count\tcdr3aa"]
+    productive = [f"CASS{aa[i % 20]}{aa[(i // 20) % 20]}{aa[(i // 400) % 20]}EQYF" for i in range(1000)]
+    productive = list(dict.fromkeys(productive))
+    for n, s in enumerate(productive):                     # descending "abundance", as upstream
+        rows.append(f"{len(productive) - n}\t{s}")
+    rows += ["5\tCASS_EQYF", "4\tCASS*EQYF", "3\tCASSXEQYF"]   # out of frame, stop, ambiguous
+    path = tmp_path / "fake.tsv.gz"
+    with gzip.open(path, "wt") as fh:
+        fh.write("\n".join(rows) + "\n")
+
+    monkeypatch.setitem(control._HF, "fake", ("repo", "fake.tsv.gz", "cdr3aa"))
+    monkeypatch.setitem(sys.modules, "huggingface_hub",
+                        types.SimpleNamespace(hf_hub_download=lambda **kw: str(path)))
+
+    everything = control._download("fake", None)
+    assert everything == productive
+    assert not any(c in s for s in everything for c in "_*X")
+
+    k = 50
+    sample = control._download("fake", k, seed=0)
+    assert len(sample) == k and set(sample) <= set(everything)
+    assert sample != everything[:k], "reservoir returned the abundance head"
+
+    assert control._download("fake", k, seed=0) == sample     # reproducible from the seed
+    assert control._download("fake", k, seed=1) != sample
