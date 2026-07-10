@@ -30,7 +30,7 @@ Limits resolve_limits(const SearchParams&);
 
 // Both append to out (caller clears). qcodes has length qlen, already encoded.
 void search_seqtm(const Trie&, const uint8_t* qcodes, int qlen, const Limits&,
-                  Mode, Scratch&, std::vector<Hit>& out);
+                  Scratch&, std::vector<Hit>& out);
 void search_seqtrie(const Trie&, const uint8_t* qcodes, int qlen, const Limits&,
                     Scratch&, std::vector<Hit>& out);
 

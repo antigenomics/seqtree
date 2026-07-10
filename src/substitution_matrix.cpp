@@ -1,5 +1,8 @@
 #include "seqtree/seqtree.hpp"
 
+#include <algorithm>
+#include <vector>
+
 namespace seqtree {
 
 #include "blosum62.inc"
@@ -46,6 +49,18 @@ SubstitutionMatrix SubstitutionMatrix::pam100() {
 
 SubstitutionMatrix SubstitutionMatrix::structural() {
     return from_similarity(static_cast<uint8_t>(kStructuralSize), kStructural);
+}
+
+int32_t SubstitutionMatrix::scale() const {
+    if (size_ < 2) return 0;
+    std::vector<int32_t> off;
+    off.reserve(size_t(size_) * (size_ - 1));
+    for (uint8_t a = 0; a < size_; ++a)
+        for (uint8_t b = 0; b < size_; ++b)
+            if (a != b) off.push_back(penalty(a, b));
+    auto mid = off.begin() + off.size() / 2;
+    std::nth_element(off.begin(), mid, off.end());
+    return *mid;
 }
 
 }  // namespace seqtree

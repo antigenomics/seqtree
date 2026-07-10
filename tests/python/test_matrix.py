@@ -54,8 +54,11 @@ def test_identity_is_edit_cost():
 @pytest.mark.parametrize("name", ["BLOSUM62", "PAM250", "PAM100", "structural"])
 def test_aa_matrix_rejects_nt_alphabet(name):
     idx = st.Index.build(["ACGTACGT"], alphabet="nt")
-    with pytest.raises(ValueError):
-        idx.search("ACGTACGT", st.SearchParams(matrix=name, max_total_edits=1, engine="seqtrie"))
+    # max_penalty is required on the seqtrie+matrix path; without it the alphabet check
+    # below would be masked by the "needs an explicit max_penalty" guard.
+    p = st.SearchParams(matrix=name, max_penalty=100, engine="seqtrie")
+    with pytest.raises(ValueError, match="alphabet"):
+        idx.search("ACGTACGT", p)
 
 
 def test_unknown_matrix_name_rejected():
@@ -70,8 +73,9 @@ def test_custom_matrix_matches_builtin():
     q = "CASSLAPGATNEKLFF"
     obj = st.SubstitutionMatrix.blosum62()
     assert obj.size() == 24
-    a = [h.score for h in idx.search(q, st.SearchParams(matrix=obj, max_total_edits=3, engine="seqtrie"))]
-    b = [h.score for h in idx.search(q, st.SearchParams(matrix="BLOSUM62", max_total_edits=3, engine="seqtrie"))]
+    # seqtrie is budget-only: an explicit max_penalty is required with a matrix.
+    a = [h.score for h in idx.search(q, st.SearchParams(matrix=obj, max_penalty=200, engine="seqtrie"))]
+    b = [h.score for h in idx.search(q, st.SearchParams(matrix="BLOSUM62", max_penalty=200, engine="seqtrie"))]
     assert a == b
 
 

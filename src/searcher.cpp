@@ -31,9 +31,11 @@ Limits resolve_limits(const SearchParams& p) {
 namespace {
 Engine pick_engine(const SearchParams& p) {
     if (p.engine != Engine::Auto) return p.engine;
-    if (p.max_insertions == 0 && p.max_deletions == 0) return Engine::SeqTm;  // Hamming fast path
-    if (p.matrix != nullptr) return Engine::SeqTrie;                          // matrix-weighted budget
-    return Engine::SeqTm;                                                     // small-k indel
+    // Auto always selects seqtm: it enforces the per-type caps exactly and reports edit
+    // counts. seqtrie is a budget-only DP that cannot see edit types, so routing a capped
+    // search there silently widened the ball -- and with a matrix but no explicit
+    // max_score_penalty the budget degenerated to +inf and it scanned the whole index.
+    return Engine::SeqTm;
 }
 
 bool by_score(const Hit& a, const Hit& b) {
@@ -58,11 +60,19 @@ void Searcher::search_into(std::string_view query, const SearchParams& p, std::v
     Limits L = resolve_limits(p);
     out.clear();
     scratch_->collisions = 0;  // seqtrie leaves it 0; seqtm accumulates per re-reached ref
-    // seqtm handles Local and positional scoring; seqtrie is the matrix-budget DP path.
-    if (p.mode == Mode::Local || p.pos_matrix != nullptr || pick_engine(p) == Engine::SeqTm)
-        search_seqtm(idx_.trie(), qcodes_.data(), int(query.size()), L, p.mode, *scratch_, out);
-    else
+    // Positional scoring is a seqtm-only path (query position is unambiguous there).
+    if (p.pos_matrix != nullptr || pick_engine(p) == Engine::SeqTm) {
+        search_seqtm(idx_.trie(), qcodes_.data(), int(query.size()), L, *scratch_, out);
+    } else {
+        // seqtrie cuts only on the accumulated penalty. Without a finite budget it would
+        // walk the entire trie and emit every reference.
+        if (!L.unit && p.max_score_penalty <= 0)
+            throw std::invalid_argument(
+                "seqtree: engine 'seqtrie' with a substitution matrix requires an explicit "
+                "max_penalty (it is a budget-only DP and would otherwise scan the whole index); "
+                "use engine 'seqtm' if you want per-type edit caps instead");
         search_seqtrie(idx_.trie(), qcodes_.data(), int(query.size()), L, *scratch_, out);
+    }
 
     if (p.mode == Mode::TopHit) {
         uint32_t keep = p.max_hits > 0 ? p.max_hits : 1;

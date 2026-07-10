@@ -46,6 +46,11 @@ public:
 
     uint8_t size() const { return size_; }
     int32_t penalty(uint8_t a, uint8_t b) const { return pen_[a * size_ + b]; }
+    // Median penalty over all mismatched symbol pairs -- the natural unit of this matrix.
+    // Gap costs must be on this scale: the Gram transform makes a typical BLOSUM62 mismatch
+    // cost ~15, so the default gap_open of 1 would make gaps ~15x cheaper than substitutions
+    // and the aligner would gap rather than substitute. Use gap_open ~ 1-2 * scale().
+    int32_t scale() const;
 
 private:
     uint8_t size_ = 0;

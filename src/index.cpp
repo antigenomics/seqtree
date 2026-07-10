@@ -97,52 +97,72 @@ Alphabet Index::alphabet() const { return trie_->codec.alphabet(); }
 const Codec& Index::codec() const { return trie_->codec; }
 std::string_view Index::ref_seq(uint32_t ref_id) const { return trie_->ref_seq(ref_id); }
 
+// Global affine-gap alignment (Gotoh). A gap run of length L costs
+// gap_open + (L-1)*gap_extend; with gap_open == gap_extend this is the linear-gap NW it
+// replaces. States: M (match/sub), X (gap in ref -> 'D'), Y (gap in query -> 'I').
 Alignment Index::align(std::string_view query, uint32_t ref_id, const SearchParams& p) const {
     std::string_view ref = ref_seq(ref_id);
     const Codec& cod = trie_->codec;
     const bool unit = (p.matrix == nullptr);
-    const int32_t gap = p.gap_open;
+    for (char c : query)  // the ref comes from the index and is already validated
+        if (cod.encode(c) == Codec::kInvalid)
+            throw std::invalid_argument(std::string("invalid symbol '") + c + "' in query");
+    if (p.gap_open < 0 || p.gap_extend < 0)
+        throw std::invalid_argument("seqtree: gap_open and gap_extend must be >= 0");
+
+    const int32_t go = p.gap_open, ge = p.gap_extend;
     auto sub_pen = [&](char a, char b) -> int32_t {
         if (unit) return a == b ? 0 : 1;
         return p.matrix->penalty(cod.encode(a), cod.encode(b));
     };
 
+    constexpr int32_t kInf = std::numeric_limits<int32_t>::max() / 4;
     const int m = int(query.size()), n = int(ref.size());
     const int W = n + 1;
-    std::vector<int32_t> dp(size_t(m + 1) * W);
-    std::vector<uint8_t> bt(size_t(m + 1) * W);  // 0 diag, 1 up(del query), 2 left(ins ref)
-    dp[0] = 0;
-    for (int j = 1; j <= n; ++j) { dp[j] = j * gap; bt[j] = 2; }
-    for (int i = 1; i <= m; ++i) { dp[size_t(i) * W] = i * gap; bt[size_t(i) * W] = 1; }
+    const size_t sz = size_t(m + 1) * W;
+    std::vector<int32_t> M(sz, kInf), X(sz, kInf), Y(sz, kInf);
+    std::vector<uint8_t> bM(sz, 0), bX(sz, 0), bY(sz, 0);  // predecessor state: 0=M 1=X 2=Y
+
+    M[0] = 0;
+    for (int i = 1; i <= m; ++i) { X[size_t(i) * W] = go + (i - 1) * ge; bX[size_t(i) * W] = (i > 1) ? 1 : 0; }
+    for (int j = 1; j <= n; ++j) { Y[j] = go + (j - 1) * ge; bY[j] = (j > 1) ? 2 : 0; }
+
+    // best of (M, X, Y) candidates, returning the winning state in `which` (0=M 1=X 2=Y)
+    auto best3 = [](int32_t mv, int32_t xv, int32_t yv, uint8_t& which) {
+        int32_t v = mv; which = 0;
+        if (xv < v) { v = xv; which = 1; }
+        if (yv < v) { v = yv; which = 2; }
+        return v;
+    };
     for (int i = 1; i <= m; ++i) {
         for (int j = 1; j <= n; ++j) {
-            int32_t diag = dp[size_t(i - 1) * W + (j - 1)] + sub_pen(query[i - 1], ref[j - 1]);
-            int32_t up = dp[size_t(i - 1) * W + j] + gap;       // query char unmatched -> deletion
-            int32_t left = dp[size_t(i) * W + (j - 1)] + gap;   // ref char unmatched -> insertion
-            int32_t best = diag; uint8_t b = 0;
-            if (up < best) { best = up; b = 1; }
-            if (left < best) { best = left; b = 2; }
-            dp[size_t(i) * W + j] = best;
-            bt[size_t(i) * W + j] = b;
+            const size_t k = size_t(i) * W + j, kd = size_t(i - 1) * W + (j - 1);
+            const size_t ku = size_t(i - 1) * W + j, kl = size_t(i) * W + (j - 1);
+            M[k] = sub_pen(query[i - 1], ref[j - 1]) + best3(M[kd], X[kd], Y[kd], bM[k]);
+            X[k] = best3(M[ku] + go, X[ku] + ge, Y[ku] + go, bX[k]);  // consume query char
+            Y[k] = best3(M[kl] + go, X[kl] + go, Y[kl] + ge, bY[k]);  // consume ref char
         }
     }
 
     Alignment al;
-    al.score = dp[size_t(m) * W + n];
+    const size_t end = size_t(m) * W + n;
+    uint8_t st;
+    al.score = best3(M[end], X[end], Y[end], st);
+
     int i = m, j = n;
     while (i > 0 || j > 0) {
-        uint8_t b = bt[size_t(i) * W + j];
-        if (i > 0 && j > 0 && b == 0) {
+        const size_t k = size_t(i) * W + j;
+        if (st == 0) {  // M: consumed one query and one ref char
             char q = query[i - 1], r = ref[j - 1];
             al.aligned_query += q; al.aligned_ref += r;
             al.ops += (q == r ? 'M' : 'S');
-            --i; --j;
-        } else if (i > 0 && b == 1) {
+            st = bM[k]; --i; --j;
+        } else if (st == 1) {  // X: query char unmatched -> deletion
             al.aligned_query += query[i - 1]; al.aligned_ref += '-'; al.ops += 'D';
-            --i;
-        } else {
+            st = bX[k]; --i;
+        } else {  // Y: ref char unmatched -> insertion
             al.aligned_query += '-'; al.aligned_ref += ref[j - 1]; al.ops += 'I';
-            --j;
+            st = bY[k]; --j;
         }
     }
     std::reverse(al.aligned_query.begin(), al.aligned_query.end());
@@ -247,11 +267,12 @@ std::vector<std::vector<Hit>> pairwise_batch(const std::vector<std::string>& a,
 
     if (!index_a) return res;  // qry == a, ref_id already indexes b
 
-    // ref == a, qry == b: transpose to a-major with ref_id pointing into b.
+    // ref == a, qry == b: transpose to a-major with ref_id pointing into b. The hit describes
+    // b[bi] -> a[ref_id]; reversing the direction swaps insertions and deletions.
     std::vector<std::vector<Hit>> out(a.size());
     for (uint32_t bi = 0; bi < res.size(); ++bi)
         for (const Hit& h : res[bi])
-            out[h.ref_id].push_back(Hit{bi, h.score, h.n_subs, h.n_ins, h.n_dels});
+            out[h.ref_id].push_back(Hit{bi, h.score, h.n_subs, h.n_dels, h.n_ins});
     return out;
 }
 

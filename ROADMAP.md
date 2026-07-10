@@ -24,8 +24,8 @@ between them, written so an agent developing either package can pick it up cold:
 
 | Capability | Module / symbol | Notes |
 |---|---|---|
-| Fuzzy fixed-length search | `seqtree.Index`, engines `seqtm` / `seqtrie` | per-type edit caps + Hamming fast path; or banded DP |
-| Local / best-window mode | `Mode::Local` (C++) | class-II register, general local match |
+| Fuzzy fixed-length search | `seqtree.Index`, engines `seqtm` / `seqtrie` | seqtm: per-type edit caps + Hamming fast path. seqtrie: budget-only full-width DP over the trie (not banded), ignores per-type caps |
+| Single-gap-block loop alignment | `seqtree.gapblock` (Python) | anchored CDR3/junction alignment: one contiguous indel + positional gap prior |
 | Substitution scoring | `SubstitutionMatrix` (Gram → squared-distance penalty `s_aa+s_bb−2·s_ab`) | payload-agnostic |
 | Per-position scoring | `PositionalMatrix` (`penalty(pos,a,b)` = base × per-position weight; weight 0 = free/anchor) | the hook for PSSMs and anchor masking |
 | k-mer seed index | `KmerIndex` (C++): unique-k-mer trie + CSR postings + per-peptide allele tag; `seed_and_gather` (GIL-released, parallel) | million-scale candidate generation |

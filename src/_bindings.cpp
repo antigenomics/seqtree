@@ -23,7 +23,7 @@ struct PyParams {
     std::optional<SubstitutionMatrix> matrix_obj;  // explicit/custom matrix (overrides name)
     std::optional<PositionalMatrix> pos_matrix_obj;  // per-position penalties (Hamming path)
     std::string engine = "auto"; // auto | seqtrie | seqtm
-    std::string mode = "all";    // all | top | local
+    std::string mode = "all";    // all | top
 };
 
 std::string lower(std::string s) {
@@ -51,8 +51,7 @@ Mode parse_mode(const std::string& m) {
     std::string l = lower(m);
     if (l == "all") return Mode::AllHits;
     if (l == "top") return Mode::TopHit;
-    if (l == "local") return Mode::Local;
-    throw py::value_error("unknown mode '" + m + "' (use 'all', 'top', or 'local')");
+    throw py::value_error("unknown mode '" + m + "' (use 'all' or 'top')");
 }
 
 // Symbols in codec code order for an alphabet (custom matrices must match this order).
@@ -229,9 +228,15 @@ PYBIND11_MODULE(_core, m) {
             },
             py::arg("grid"),
             "Build from a square similarity grid (higher == more similar), converted to "
-            "penalties via max(sim[a,a], sim[b,b]) - sim[a,b]. Row/column order must match the "
+            "non-negative penalties via the Gram / squared-distance transform "
+            "s[a,a] + s[b,b] - 2*s[a,b] (clamped at 0). Row/column order must match the "
             "target alphabet's symbol order (see ``amino_acids()``).")
         .def("size", &SubstitutionMatrix::size)
+        .def("scale", &SubstitutionMatrix::scale,
+             "Median penalty over all mismatched symbol pairs -- this matrix's natural unit. "
+             "Gap costs must be on this scale: BLOSUM62 has scale() == 14, so the default "
+             "gap_open of 1 makes gaps ~14x cheaper than substitutions and the aligner gaps "
+             "rather than substitutes. Use ``gap_open = 1-2 * m.scale()``.")
         .def(
             "penalty",
             [](const SubstitutionMatrix& self, const std::string& a, const std::string& b) {
@@ -263,7 +268,16 @@ PYBIND11_MODULE(_core, m) {
         .def_static("from_weights", &PositionalMatrix::from_weights,
                     py::arg("base"), py::arg("weights"),
                     "pen[pos][a][b] = weights[pos] * base.penalty(a, b); weight 0 masks the "
-                    "position. len(weights) is the frame width.")
+                    "position. len(weights) is the frame width. NOTE: penalty(a, a) == 0 for "
+                    "every base matrix, so a weight scales MISMATCH cost only -- it is a "
+                    "mismatch-tolerance profile, not an information/match weighting.")
+        .def_static("from_tables", &PositionalMatrix::from_tables,
+                    py::arg("size"), py::arg("width"), py::arg("data"),
+                    py::arg("masked") = std::vector<uint8_t>{},
+                    "Full per-position PSSM. ``data`` is row-major [width][size][size]; "
+                    "``masked`` is an optional length-``width`` flag array (non-zero == free "
+                    "position). Use this to give different regions different matrices, e.g. a "
+                    "germline-flank matrix and an N-region core matrix in one frame.")
         .def("size", &PositionalMatrix::size)
         .def("width", &PositionalMatrix::width)
         .def("masked", &PositionalMatrix::masked, py::arg("pos"))

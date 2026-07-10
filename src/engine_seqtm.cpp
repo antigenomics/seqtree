@@ -13,7 +13,6 @@ struct TmCtx {
     Limits lim;
     bool hamming;          // no indels allowed
     bool posmode;          // per-position penalties active (Hamming, width == qlen)
-    Mode mode;
     std::unordered_map<uint32_t, uint32_t>* seen;
     uint64_t* collisions;
     std::vector<Hit>* out;
@@ -79,12 +78,11 @@ void recurse(TmCtx& c, uint32_t node, int qpos, int ns, int ni, int nd, int32_t 
 }  // namespace
 
 void search_seqtm(const Trie& trie, const uint8_t* qcodes, int qlen, const Limits& lim,
-                  Mode mode, Scratch& s, std::vector<Hit>& out) {
+                  Scratch& s, std::vector<Hit>& out) {
     s.seen.clear();
     bool hamming = lim.max_ins == 0 && lim.max_del == 0;
     bool posmode = lim.posmat != nullptr && hamming && lim.posmat->width() == uint16_t(qlen);
-    TmCtx c{trie, qcodes, qlen, lim, hamming, posmode, mode,
-            &s.seen, &s.collisions, &out};
+    TmCtx c{trie, qcodes, qlen, lim, hamming, posmode, &s.seen, &s.collisions, &out};
     recurse(c, /*node=*/0, /*qpos=*/0, 0, 0, 0, 0);
 }
 
