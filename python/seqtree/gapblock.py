@@ -282,6 +282,13 @@ class GapBlockIndex:
 
     Building costs ``O(d_max * total_residues)`` extra index entries -- roughly 14x the base
     index for CDR3 at ``d_max=1``. Build once, query many.
+
+    Profiled over the bundled 250k control at ``d_max=3``: 91% of query time is the *first*
+    branch (the query's own deletion variants against the base index) and only 9% the auxiliary
+    indices, despite those holding 9.8M entries. Netting the prior out of each variant's budget
+    already cuts that branch from ~15 sub-searches per query to 2.5. Deduplicating variants
+    would touch 7-10% of them before pruning and fewer after, and bucketing the auxiliary
+    indices by reference length saves no memory -- neither is worth the code.
     """
 
     def __init__(self, refs: Iterable[str], alphabet: str = "aa", d_max: int = 1):
