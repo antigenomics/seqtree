@@ -24,20 +24,34 @@ def test_unknown_control_raises():
         seqtree.load_control(name="klingon_trb_aa", size=10)
 
 
-def test_sanitize_drops_symbols_outside_the_alphabet():
-    """Index.build rejects the whole set on the first bad symbol, so screening must precede it.
-    The upstream vdjtools tables mark out-of-frame rearrangements with '_'."""
-    import pytest
+def test_sanitize_keeps_only_productive_clonotypes():
+    """The control IS the E-value null and must share the target's background law (ass:match).
 
+    VDJtools marks out-of-frame rearrangements with '_' and in-frame stops with '*'. Both are
+    non-coding. '_' cannot be repaired at the amino-acid level: VDJtools collapses a RUN of
+    untranslatable positions into one character, so the residue count is already gone.
+    Out-of-frame junctions escape thymic selection and estimate Pgen, not P0.
+    """
     from seqtree.control import sanitize
 
-    kept, dropped = sanitize(["CASSF", "CA_SF", "", "CASSY"], "aa")
-    assert kept == ["CASSF", "CASSY"]
-    assert dropped == 2
+    # the three real markers from the mouse TRB table, plus a clean junction
+    kept, dropped = sanitize(["CASSLYEQYF", "C*A_FF", "CASS*GTGGYEQYF", "CASISRTV_NTGQLYF"])
+    assert kept == ["CASSLYEQYF"] and dropped == 3
 
-    kept, dropped = sanitize(["ACGT", "ACG_"], "nt")
+    # ambiguous residues go too: pen(X, a) is barely half a mismatch and pen(X, X) is zero,
+    # so an X column is a cheap wildcard that would inflate the control ball mass.
+    kept, dropped = sanitize(["CASXF", "CASZF", "CASBF", "CASSF"])
+    assert kept == ["CASSF"] and dropped == 3
+
+    kept, dropped = sanitize(["ACGT", "ACG_"], "nt")     # non-aa alphabets keep their symbol set
     assert kept == ["ACGT"] and dropped == 1
 
-    # X, Z, B and * are defined amino-acid symbols and must survive
-    kept, dropped = sanitize(["CASXF", "CASZF", "CASBF", "CASS*"], "aa")
-    assert len(kept) == 4 and dropped == 0
+
+def test_bundled_control_is_productive():
+    """A regression guard on the shipped asset itself."""
+    from seqtree.control import _read_bundled, sanitize
+
+    seqs = _read_bundled("human_trb_aa")
+    kept, dropped = sanitize(seqs)
+    assert dropped == 0, f"{dropped} non-productive sequences in the bundled control"
+    assert len(kept) == 250_000
