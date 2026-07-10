@@ -13,8 +13,11 @@ from seqtree.gapblock import (
     GapBlockIndex,
     central_prior,
     deletion_variants,
+    embed_in_frame,
+    frame_prior,
     gap_cost,
     gapblock_score,
+    profile_prior,
 )
 
 AA = "ACDEFGHIKLMNPQRSTVWY"
@@ -34,8 +37,8 @@ def brute_block(q, r, go, ge, prior=None):
     """
     m, n = len(q), len(r)
     d = abs(m - n)
-    shorter = min(m, n)
-    prior = prior if (prior is not None and d > 0) else (lambda i, length: 0)
+    shorter, longer = min(m, n), max(m, n)
+    prior = prior if (prior is not None and d > 0) else (lambda i, d_, m_: 0)
     best = INF
     for i in range(shorter + 1):
         head = sum(PEN[q[j], r[j]] for j in range(i))
@@ -43,7 +46,7 @@ def brute_block(q, r, go, ge, prior=None):
             tail = sum(PEN[q[j + d], r[j]] for j in range(i, n))
         else:
             tail = sum(PEN[q[j], r[j + d]] for j in range(i, m))
-        best = min(best, head + tail + prior(i, shorter))
+        best = min(best, head + tail + prior(i, d, longer))
     return best + gap_cost(d, go, ge)
 
 
@@ -171,8 +174,156 @@ def test_is_a_strict_restriction_of_affine():
 def test_negative_gap_costs_rejected():
     with pytest.raises(ValueError):
         gapblock_score("CAST", "CAT", BLOSUM, gap_open=-1)
-    with pytest.raises(ValueError):
-        central_prior(-1)
+    for factory in (central_prior, lambda x: profile_prior(x, lambda j, m: 1.0),
+                    lambda x: frame_prior(x, 4)):
+        with pytest.raises(ValueError):
+            factory(-1)
+
+
+# ---------------------------------------------------------------- the prior protocol
+
+def test_central_prior_is_bit_identical_after_the_reparametrisation():
+    """It used to take (i, shorter). shorter == m - d, so abs(2i - shorter) == abs(2i + d - m)."""
+    prior = central_prior(21)
+    for m in range(6, 20):
+        for d in range(0, 5):
+            for i in range(0, m - d + 1):
+                old = 0 if d == 0 else int(21 * abs(2 * i - (m - d)) // 2)
+                assert prior(i, d, m) == old, (i, d, m)
+
+
+def test_priors_obey_the_two_required_invariants():
+    """Zero at d == 0 (so s(q,q) == 0) and non-negative (so trie pruning stays admissible)."""
+    w = [0.77, 0.76, 0.71, 0.52, 0.22, 0.05, 0.07, 0.21, 0.44, 0.73, 0.83, 0.86, 0.93, 0.93]
+    priors = [central_prior(21), profile_prior(30, lambda j, m: w[j]), frame_prior(21, 5)]
+    for prior in priors:
+        for m in range(6, 15):
+            for i in range(m + 1):
+                assert prior(i, 0, m) == 0
+            for d in range(1, min(5, m)):
+                for i in range(m - d + 1):
+                    assert prior(i, d, m) >= 0
+
+
+def test_central_prior_is_not_monotone_in_d_and_need_not_be():
+    """Growing a leading block drags its midpoint toward the centre, so the penalty falls.
+    Pruning holds (i, d) fixed and the ball needs only s >= 0 with s(q,q) == 0, so this is
+    sound -- but nothing may assume monotonicity of a general prior."""
+    prior = central_prior(21)
+    assert prior(0, 1, 6) == 52 and prior(0, 2, 6) == 42
+
+    # profile_prior, being a sum of non-negative weights, IS monotone.
+    w = [0.9, 0.8, 0.1, 0.0, 0.1, 0.8, 0.9]
+    p = profile_prior(100, lambda j, m: w[j])
+    for i in range(4):
+        for d in range(1, 7 - i - 1):
+            assert p(i, d + 1, 7) >= p(i, d, 7)
+
+
+def test_profile_prior_sums_the_weights_it_deletes():
+    w = [0.9, 0.8, 0.1, 0.0, 0.1, 0.8, 0.9]
+    prior = profile_prior(100, lambda j, m: w[j])
+    assert prior(2, 3, 7) == int(100 * (0.1 + 0.0 + 0.1))    # cheapest window, in the valley
+    assert prior(0, 3, 7) == int(100 * (0.9 + 0.8 + 0.1))    # eats the templated flank
+    assert prior(0, 0, 7) == 0                                # empty block, empty sum
+    # a flat zero weight must reproduce the no-prior score exactly
+    q, r = "CASSLGQAYEQYF", "CASSLGQAYEQY"
+    free = profile_prior(1000, lambda j, m: 0.0)
+    assert gapblock_score(q, r, BLOSUM, 28, 1, free) == gapblock_score(q, r, BLOSUM, 28, 1, None)
+
+
+def test_profile_prior_accepts_a_fixed_weight_vector():
+    w = [0.0, 1.0, 0.0]
+    assert profile_prior(10, w)(1, 1, 3) == 10
+    assert profile_prior(10, w)(0, 1, 3) == 0
+
+
+def test_profile_prior_matches_brute_force():
+    rng = random.Random(29)
+    w = lambda j, m: abs(j - (m - 1) / 2) / m  # noqa: E731  -- a U-shaped weight
+    prior = profile_prior(40, w)
+    for _ in range(2000):
+        q, r = rand_pair(rng, d_choices=(1, 2, 3))
+        go, ge = rng.choice(GAP_COSTS)
+        assert gapblock_score(q, r, BLOSUM, go, ge, prior)[0] == brute_block(q, r, go, ge, prior)
+
+
+def test_frame_prior_pins_the_block_and_keeps_the_ball():
+    hard = frame_prior(10**6, 4)
+    for q, r in (("CASSLGQAYEQYF", "CASSGQAYEQYF"), ("CASSLGQAYEQYF", "CASSLGQAYEQYFFF")):
+        assert gapblock_score(q, r, BLOSUM, 28, 1, hard)[1] == 4
+    assert gapblock_score("CASSLGQAYEQYF", "CASSLGQAYEQYF", BLOSUM, 28, 1, hard)[0] == 0
+
+
+# ---------------------------------------------------------------- the frame
+
+def _induced_blocks(ga, gb):
+    """Maximal runs of columns where exactly one of the two gapped strings has a gap.
+
+    One run == the pair is related by a single contiguous gap block. Two or more == the frame
+    did not induce a single-block correspondence.
+    """
+    runs, cur = [], None
+    for col, (x, y) in enumerate(zip(ga, gb)):
+        state = (x == "-") - (y == "-")   # +1: only a gapped, -1: only b gapped, 0: neither
+        if state != 0 and state == cur:
+            runs[-1][2] = col             # extend the open run
+        elif state != 0:
+            runs.append([state, col, col])
+        cur = state
+    return runs
+
+
+def test_embed_in_frame_round_trips():
+    assert embed_in_frame("CASSLF", 6, 3) == "CASSLF"
+    assert embed_in_frame("CASLF", 6, 3) == "CAS-LF"
+    for s, w, c in (("CASSLF", 5, 3), ("CASSLF", 8, 9)):
+        with pytest.raises(ValueError):
+            embed_in_frame(s, w, c)
+
+
+def test_a_constant_c_frame_is_transitive():
+    """Embedding two members reproduces their pairwise single-block alignment. This is the
+    property that makes a column index -- and therefore a PWM -- well defined."""
+    rng = random.Random(31)
+    c = 4
+    hard = frame_prior(10**6, c)
+    for _ in range(300):
+        width = rng.randint(10, 18)
+        a = "".join(rng.choice(AA) for _ in range(rng.randint(c + 1, width)))
+        b = "".join(rng.choice(AA) for _ in range(rng.randint(c + 1, width)))
+        ga, gb = embed_in_frame(a, width, c), embed_in_frame(b, width, c)
+
+        runs = _induced_blocks(ga, gb)
+        assert len(runs) <= 1, f"frame induced {len(runs)} blocks for {a!r} vs {b!r}"
+        if len(a) != len(b):
+            assert len(runs) == 1
+            # The block starts at residue index c of the longer sequence, which is frame
+            # column c + (the shared gap columns both members already carry).
+            shared = min(width - len(a), width - len(b))
+            assert runs[0][1] == c + shared
+            assert gapblock_score(a, b, BLOSUM, 28, 1, hard)[1] == c
+
+
+def test_a_length_dependent_frame_is_not_transitive():
+    """The central rule puts the block midpoint at the frame centre, so its start drifts with
+    d. Two shorter members are then related by TWO blocks, not one -- no consistent columns."""
+    width = 14
+    # central start = (width - d) // 2
+    def central_embed(seq):
+        d = width - len(seq)
+        return embed_in_frame(seq, width, (width - d) // 2)
+
+    a, b = central_embed("CASSLGQAYEQYF"), central_embed("CASSLGQAYEQ")   # d = 1 and d = 3
+    assert a == "CASSLG-QAYEQYF"     # block start 6
+    assert b == "CASSL---GQAYEQ"     # block start 5 -- it drifted
+    runs = _induced_blocks(a, b)
+    assert len(runs) == 2, f"expected the correspondence to split; got {runs}"
+    assert [r[1] for r in runs] == [5, 7]   # 'G' and 'Q' of the longer, on opposite sides
+
+    # the constant-c rule on the same two sequences yields exactly one block
+    assert len(_induced_blocks(embed_in_frame("CASSLGQAYEQYF", width, 4),
+                               embed_in_frame("CASSLGQAYEQ", width, 4))) == 1
 
 
 # ---------------------------------------------------------------- GapBlockIndex

@@ -24,16 +24,35 @@ crystal structures sharing peptide and MHC, the minimum-BLOSUM62 block position 
 the structurally correct one 8.6% of the time -- indistinguishable from picking at random
 (8.6%). A central prior lifts that to 25.9% and cuts loop CA-RMSD from 2.15 A to 1.62 A
 (oracle: 1.52 A). Pass ``gap_prior=central_prior(...)`` unless you have a better one.
+
+**A prior is also what makes a column frame possible.** Pairwise-optimal gap placement is not
+transitive: align A to B and B to C independently and the two column assignments do not
+compose, so a set of unequal-length sequences has no consistent column index -- and hence no
+profile. A *rule* that maps length to block position supplies one. Only a rule whose block
+start is **constant in** ``d`` is transitive, i.e. one that pins the block to a fixed frame
+column ``c``; see :func:`frame_prior` and :func:`embed_in_frame`. :func:`central_prior` is not
+such a rule -- its block start drifts with ``d`` and the correspondence it induces between two
+shorter members splits into two blocks.
 """
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Sequence
 
 from ._core import Index, SearchParams, SubstitutionMatrix
 
-__all__ = ["gapblock_score", "deletion_variants", "central_prior", "gap_cost", "GapBlockIndex"]
+__all__ = [
+    "gapblock_score", "deletion_variants", "central_prior", "profile_prior", "frame_prior",
+    "embed_in_frame", "gap_cost", "GapBlockIndex",
+]
 
-GapPrior = Callable[[int, int], int]
+#: ``prior(block_start, block_length, longer_length) -> int``. The block occupies columns
+#: ``[i, i + d)`` of the longer sequence. Two requirements, both load-bearing: the result must
+#: be ``>= 0`` (admissible trie pruning) and must be 0 when ``d == 0``, or ``s(q, q)`` stops
+#: being zero and the score no longer defines a ball (``appendix/evalue.tex``).
+#:
+#: Monotonicity in ``d`` is *not* required and does not hold in general -- growing a leading
+#: block drags its midpoint toward the centre, so :func:`central_prior` decreases.
+GapPrior = Callable[[int, int, int], int]
 
 
 def gap_cost(d: int, gap_open: int, gap_extend: int) -> int:
@@ -50,18 +69,97 @@ def gap_cost(d: int, gap_open: int, gap_extend: int) -> int:
 
 
 def central_prior(lam: int) -> GapPrior:
-    """Penalise block positions away from the loop centre: ``lam * abs(i - L/2)``.
+    """Penalise blocks whose midpoint sits away from the centre of the longer sequence.
 
-    ``lam ~ 1.5 * matrix.scale()`` reproduces the structurally-fitted optimum. Returns an
-    integer so the total score stays an exact non-negative penalty.
+    ``lam * abs(block_midpoint - m/2)``, where the block spans ``[i, i + d)``. ``lam ~ 1.5 *
+    matrix.scale()`` reproduces the structurally-fitted optimum. Returns an integer so the
+    total score stays an exact non-negative penalty.
+
+    Not a transitive frame rule: its block start ``(m - d) // 2`` moves with ``d``.
     """
     if lam < 0:
         raise ValueError("lam must be >= 0")
 
-    def prior(i: int, length: int) -> int:
-        return int(lam * abs(2 * i - length) // 2)
+    def prior(i: int, d: int, m: int) -> int:
+        return 0 if d == 0 else int(lam * abs(2 * i + d - m) // 2)
 
     return prior
+
+
+def profile_prior(lam: int, w: Callable[[int, int], float] | Sequence[float]) -> GapPrior:
+    """Charge ``lam`` per unit of positional weight the block deletes.
+
+    ``lam * sum(w(j, m) for j in block)``. With ``w(j, m)`` the probability that position ``j``
+    of a length-``m`` sequence is germline-templated, this reads as *lam times the expected
+    number of templated residues the gap had to remove* -- deleting conserved framework is
+    implausible, deleting a non-templated insert is free.
+
+    Args:
+        lam: Cost per unit weight. Must be ``>= 0``.
+        w: ``w(j, m) -> float`` in ``[0, 1]``, or a fixed sequence indexed by ``j`` when the
+            frame has a fixed width. Prefer the callable: loop length varies.
+
+    Returns:
+        A :data:`GapPrior`. Zero at ``d == 0`` (the sum is empty) and non-negative. Unlike
+        :func:`central_prior` it is also monotone non-decreasing in ``d``: a longer block can
+        only delete more weight.
+
+    Raises:
+        ValueError: If ``lam`` is negative.
+    """
+    if lam < 0:
+        raise ValueError("lam must be >= 0")
+    wfn = w if callable(w) else (lambda j, m: w[j])
+
+    def prior(i: int, d: int, m: int) -> int:
+        return int(lam * sum(wfn(j, m) for j in range(i, i + d)))
+
+    return prior
+
+
+def frame_prior(lam: int, c: int) -> GapPrior:
+    """Pin the block to frame column ``c``: ``lam * abs(i - c)``.
+
+    The block start does not depend on ``d``, which makes this the **only** kind of rule under
+    which embedding two sequences into a common frame reproduces their pairwise single-block
+    alignment (see :func:`embed_in_frame`). Equivalent to left-anchoring the first ``c``
+    residues and right-anchoring the rest.
+
+    A large ``lam`` makes the pin hard: exactly one layout survives.
+    """
+    if lam < 0:
+        raise ValueError("lam must be >= 0")
+    if c < 0:
+        raise ValueError("c must be >= 0")
+
+    def prior(i: int, d: int, m: int) -> int:
+        return 0 if d == 0 else lam * abs(i - c)
+
+    return prior
+
+
+def embed_in_frame(seq: str, width: int, c: int, gap: str = "-") -> str:
+    """Place ``seq`` into a ``width``-column frame, gaps blocked at column ``c``.
+
+    Columns ``[0, c)`` hold the sequence's own prefix (left-anchored) and columns
+    ``[c + d, width)`` its suffix (right-anchored), with ``d = width - len(seq)`` gap columns
+    between them. Applying this to every member of a set yields a multiple alignment whose
+    columns are consistent -- which is what a position weight matrix needs.
+
+    Example:
+        >>> # c = 4: the V-templated CASS stays left, the J-templated EQYF stays right.
+        >>> for s in ("CASSLGQGAYEQYF", "CASSLGQAYEQYF", "CASSGQAYEQYF"):
+        ...     print(embed_in_frame(s, 14, 4))
+        CASSLGQGAYEQYF
+        CASS-LGQAYEQYF
+        CASS--GQAYEQYF
+    """
+    d = width - len(seq)
+    if d < 0:
+        raise ValueError(f"sequence of length {len(seq)} does not fit a width-{width} frame")
+    if not 0 <= c <= len(seq):
+        raise ValueError(f"frame column {c} outside [0, {len(seq)}]")
+    return seq[:c] + gap * d + seq[c:]
 
 
 def deletion_variants(q: str, d: int) -> list[tuple[int, str]]:
@@ -122,10 +220,10 @@ def gapblock_score(
         gap_open: Cost of opening the block. Defaults to ``2 * matrix.scale()``, or 1 for
             unit cost. Must be ``>= 0``.
         gap_extend: Cost of each additional gap column. Must be ``>= 0``.
-        gap_prior: ``prior(block_position, shorter_length) -> int``, added to each candidate
-            position. See :func:`central_prior`. ``None`` disables it. It applies only when
-            there is a block to place (``d > 0``); otherwise ``s(q, q)`` would be non-zero
-            and the score would no longer define a ball.
+        gap_prior: :data:`GapPrior`, added to each candidate position. See
+            :func:`central_prior`, :func:`profile_prior`, :func:`frame_prior`. ``None``
+            disables it. It applies only when there is a block to place (``d > 0``); otherwise
+            ``s(q, q)`` would be non-zero and the score would no longer define a ball.
         _pen: Precomputed penalty lookup, for hot loops.
 
     Returns:
@@ -163,10 +261,11 @@ def gapblock_score(
 
     # No block to place when the lengths match, so no positional cost -- otherwise s(q, q)
     # would pick up the prior's minimum and stop being zero.
-    prior = gap_prior if (gap_prior is not None and d > 0) else (lambda i, length: 0)
+    longer = max(m, n)
+    prior = gap_prior if (gap_prior is not None and d > 0) else (lambda i, d_, m_: 0)
     best_i, best = 0, None
     for i in range(shorter + 1):
-        cand = prefix[i] + suffix[i] + prior(i, shorter)
+        cand = prefix[i] + suffix[i] + prior(i, d, longer)
         if best is None or cand < best:
             best, best_i = cand, i
     return best + gap_cost(d, gap_open, gap_extend), best_i
@@ -227,7 +326,7 @@ class GapBlockIndex:
             gap_open = _default_gap_open(matrix)
         if max_penalty < 0:
             raise ValueError("max_penalty must be >= 0")
-        zero: GapPrior = lambda i, length: 0  # noqa: E731
+        zero: GapPrior = lambda i, d, m: 0  # noqa: E731
         mat = matrix if matrix is not None else ""
         best: dict[int, tuple[int, int, int]] = {}
 
@@ -242,24 +341,25 @@ class GapBlockIndex:
                 continue
             prior = gap_prior if (gap_prior is not None and d > 0) else zero
 
-            # Refs shorter than the query (the block sits in the ref): delete d from the query.
+            # Refs shorter than the query (the block sits in the query, the longer sequence):
+            # delete d from the query.
             if d <= len(query):
                 for i, qv in deletion_variants(query, d):
-                    extra = prior(i, len(qv))
+                    extra = prior(i, d, len(query))
                     if budget - extra < 0:
                         continue
-                    for h in self._base.search(qv, self._params(budget, matrix=mat, qlen=len(qv))):
+                    for h in self._base.search(qv, self._params(budget - extra, matrix=mat, qlen=len(qv))):
                         offer(h.ref_id, h.score + g + extra, d, i)
 
-            # Refs longer than the query (the block sits in the query): the refs' variants
-            # were pre-deleted, so match the full query against them.
+            # Refs longer than the query (the block sits in the ref, of length len(query) + d):
+            # the refs' variants were pre-deleted, so match the full query against them.
             if d >= 1:
                 idx, owner = self._var[d]
                 if idx is None:
                     continue
                 for h in idx.search(query, self._params(budget, matrix=mat, qlen=len(query))):
                     rid, i = owner[h.ref_id]
-                    offer(rid, h.score + g + prior(i, len(query)), d, i)
+                    offer(rid, h.score + g + prior(i, d, len(query) + d), d, i)
 
         return sorted(((rid, s, d, i) for rid, (s, d, i) in best.items()), key=lambda t: (t[1], t[0]))
 
