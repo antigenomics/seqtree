@@ -106,6 +106,13 @@ embed_in_frame(seq, width, c, gap="-") -> str
 # Dense n x K, for prototype-distance embeddings. C++, GIL released, buffer protocol.
 score_matrix(queries, refs, matrix=None, gap_open=None, gap_extend=1, gap_prior=None,
              alphabet="aa", threads=0) -> ScoreMatrix     # numpy.asarray(sm) is zero-copy
+
+# Per-island PWM. pen(j,a) = lam*log(p_max_j / p_j(a)): >= 0 and 0 on the consensus, so it is
+# still a ball and still feeds thetas_from_scores. c defaults to the entropy-optimal column.
+IslandProfile.fit(members, c=None, lam=1000, pseudocount=0.5) -> IslandProfile
+    .score(seq) -> int          # UNREACHABLE if it does not fit the frame
+    .score_batch(seqs) -> list[int]
+    .consensus() -> str         # score(consensus()) == 0
 ```
 
 **Invariants a prior must satisfy** (nothing else): `>= 0`, and `== 0` when `d == 0`. Otherwise
@@ -135,6 +142,23 @@ trie pruning. Monotonicity in `d` is **not** required and is false for `central_
   what `positions_prior` implements, and it exists to reproduce other aligners' conventions —
   `mir.distances.aligner.JunctionAligner` hardcodes `(3, 4, -4, -3)` for all seven loci — not
   because it is the right rule.
+
+- **A per-island PWM beats min-over-members only at a strict cutoff, and "strict" depends on `N`.**
+  The E-value's `k = floor(E*·M/N)` is how many control neighbours the cutoff admits, so FPR = `k/M`.
+  108 calibrated VDJdb islands >= 10, held-out members, 250k control negatives, paired bootstrap
+  over islands:
+
+  | regime | FPR | min | PWM | diff [95% CI] |
+  |---|---|---|---|---|
+  | loose reference | 1% | **99.5%** | 99.1% | −0.40 [−1.09, +0.14] |
+  | per-epitope islands (`N` = group size, median 88) | 0.0568% | 88.3% | **89.3%** | +0.93 [−0.80, +2.79] |
+  | repertoire annotation (`N` ≈ 20k) | 0.0012% | 37.6% | **48.5%** | +10.90 [+7.69, +14.21] |
+
+  No significant difference *while building* islands; a large one when annotating a repertoire with
+  them (islands >= 50: 9.8% vs 22.6%). Note `E*=0.05` at `N≈20k` gives `k=0` → `thetas_from_scores`
+  returns `-1`; the rule of three forbids any `E < 3N/M = 0.236`, and that is the third row's cutoff.
+  Neither representation generalises to same-epitope junctions in a *different* island (3.7% vs 3.5%
+  at 1% FPR, ~0% at either operating point).
 
 ### Batch scoring — `score_matrix`
 

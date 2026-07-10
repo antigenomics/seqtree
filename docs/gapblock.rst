@@ -123,6 +123,64 @@ Pin the block instead, and embedding reproduces the pairwise alignment exactly:
 Columns ``0..c-1`` are left-anchored on the conserved Cys, columns ``c+d..W-1`` right-anchored on the
 Phe. Now every column means the same thing in every member, and a PWM is well defined.
 
+Profiling an island
+-------------------
+
+:class:`~seqtree.gapblock.IslandProfile` is that PWM. Its column penalty is measured against the
+column's **own consensus**, ``pen(j, a) = round(lam * log(p_max_j / p_j(a)))`` — a textbook log-odds
+score is signed, and a signed score is not a ball. This one is ``>= 0`` and zero on the consensus,
+so it flows through :func:`~seqtree.thetas_from_scores` unchanged.
+
+.. code-block:: python
+
+   from seqtree.gapblock import IslandProfile
+
+   profile = IslandProfile.fit(island_members)     # c defaults to the entropy-optimal column
+   control_scores = profile.score_batch(control_seqs)
+   theta = seqtree.thetas_from_scores([control_scores], n_target=N, m_control=M,
+                                      e_target=0.05, theta_max=1 << 20)[0]
+
+**Whether it beats scoring against every member depends entirely on how strict your cutoff is**, and
+the cutoff moves with ``N``. The E-value's ``k = floor(e_target · M / N)`` is the number of control
+neighbours the cutoff may admit, so the false-positive rate is ``k / M``:
+
+* Building islands *within* one epitope group puts ``N`` at the group size (median 88 in VDJdb), so
+  ``k`` has median 142 out of ``M = 250,000`` — an FPR of ``5.7e-4``.
+* Annotating a whole repertoire against known islands puts ``N`` at ≈ 20,000. Then
+  ``e_target = 0.05`` yields ``k = 0``, which :func:`~seqtree.thetas_from_scores` reports as ``-1``:
+  the rule of three certifies no ``E`` below ``3N/M = 0.236``. At that smallest certifiable ``E``,
+  ``k = 3`` — an FPR of ``1.2e-5``.
+
+Recall on held-out members of 108 calibrated VDJdb islands of ≥ 10 (human TRB, three splits each,
+paired bootstrap over islands, 250,000 control junctions as negatives):
+
+===================  ==========  ==================  =================  =======================
+regime               FPR         min-over-members    ``IslandProfile``  difference [95% CI]
+===================  ==========  ==================  =================  =======================
+loose reference      1 %         **99.5 %**          99.1 %             −0.40 [−1.09, +0.14]
+per-epitope islands  0.0568 %    88.3 %              **89.3 %**         +0.93 [−0.80, +2.79]
+repertoire           0.0012 %    37.6 %              **48.5 %**         +10.90 [+7.69, +14.21]
+===================  ==========  ==================  =================  =======================
+
+So there is **no significant difference while you are building the islands**, and a large one when
+you use them to annotate a repertoire. On islands of ≥ 50 members the repertoire-regime gap is
+9.8 % against 22.6 %.
+
+.. warning::
+
+   A profile does **not** generalise beyond its island. Junctions specific to the same epitope that
+   landed in a *different* island are recovered 3.5 % of the time by the profile and 3.7 % by
+   min-over-members at a 1 % FPR, and by neither at either operating point. Distinct islands of one
+   epitope share no motif that similarity can find. Fit a profile to recognise *this* island's
+   members more sharply, not to discover new ones.
+
+   Nor is it a compression. 14 columns × 21 symbols × 4 B is 1,176 B against 182 B of member
+   strings; an island needs 84 members before the profile is the smaller of the two, which 3.7 % of
+   real islands reach.
+
+The entropy-optimal frame column is modal at ``c = 6`` across real islands — the same place the
+crystal structures put the block, arrived at from sequence alone.
+
 Searching a reference set
 -------------------------
 

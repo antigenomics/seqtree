@@ -1,7 +1,7 @@
 Examples
 ========
 
-Three runnable scripts in ``examples/``. Each is self-contained: the only data is the 250k control
+Four runnable scripts in ``examples/``. Each is self-contained: the only data is the 250k control
 repertoire bundled with the package, and the only import is ``seqtree`` plus the standard library.
 
 .. code-block:: fish
@@ -9,6 +9,7 @@ repertoire bundled with the package, and the only import is ``seqtree`` plus the
    python examples/01_gapped_search.py
    python examples/02_sequence_dendrogram.py
    python examples/03_indel_positions.py
+   python examples/04_island_profile.py
 
 .. contents::
    :local:
@@ -128,8 +129,36 @@ pairs. That is where a spurious low score hides: shift the whole sequence by one
 alignment undercuts the block score by a median of 106 penalty units on unrelated pairs. It does not
 find a better alignment. It manufactures one.
 
+4. An island profile, and the cutoff that decides whether to build one
+----------------------------------------------------------------------
+
+``examples/04_island_profile.py`` fits an :class:`~seqtree.gapblock.IslandProfile` to a planted
+island and scores twenty held-out members against all 250,000 control junctions — twice, once per
+scorer. The point is not which wins on one island. It is that *the E-value decides which question
+you are asking*:
+
+.. code-block:: text
+
+   regime                         N     k        FPR   note
+   per-epitope island            90   138    0.0552%   E*=0.05
+   repertoire annotation     20,000     3    0.0012%   E*=0.05 unreachable (3N/M=0.240); using E*=0.240
+
+``k = floor(e_target · M / N)`` is how many control neighbours the calibrated cutoff may admit, so
+the false-positive rate is ``k / M`` — and it moves by a factor of fifty depending on whether you are
+building islands inside one epitope group or annotating a whole repertoire against them. At the first
+cutoff the two scorers are indistinguishable; at the second, over 108 real VDJdb islands, the profile
+recovers 48.5 % of held-out members against 37.6 %.
+
+The script says so out loud rather than reporting its own twenty-member table as a result. Note also
+that ``E* = 0.05`` is simply *unreachable* at ``N = 20,000``: the rule of three certifies nothing
+below ``3N/M``, and :func:`~seqtree.thetas_from_scores` returns ``-1`` instead of a cutoff it cannot
+defend.
+
+It also demonstrates :func:`~seqtree.gapblock.score_matrix`: min-over-members is a row minimum of the
+250,000 × 40 gap-block matrix, which the C++ kernel produces in milliseconds.
+
 See also
 --------
 
-* :doc:`gapblock` — the model behind all three.
+* :doc:`gapblock` — the model behind all four.
 * :doc:`evalue` — where the cutoff comes from.
