@@ -1,7 +1,7 @@
 #!/usr/bin/env fish
 # Repo-local venv + editable install. Flags:
 #   --tests  also install pytest extra
-#   --bench  also install benchmark extras (huggingface_hub, pandas, psutil)
+#   --bench  also install benchmark extras (huggingface_hub, psutil)
 set repo (dirname (status --current-filename))
 cd $repo
 

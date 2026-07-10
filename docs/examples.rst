@@ -64,8 +64,10 @@ way. Output is Newick plus an ASCII rendering.
    ...
    (...)               + (...)                     52.3  ------------------------------------
 
-The root sits at the gap cost, 28 units, because that is what separates the deletion branch from the
-rest. Then the tree is cut where the control says to cut it:
+The deletion branch is the last to join: the root sits at **52.3** (average linkage, so the mean over
+cross-branch pairs), of which 28 is the irreducible ``gap_open`` every cross-length pair must pay —
+that floor is what pushes the one-deletion branch to the top. Then the tree is cut where the control
+says to cut it:
 
 .. code-block:: text
 

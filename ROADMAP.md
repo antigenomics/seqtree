@@ -26,12 +26,14 @@ between them, written so an agent developing either package can pick it up cold:
 |---|---|---|
 | Fuzzy fixed-length search | `seqtree.Index`, engines `seqtm` / `seqtrie` | seqtm: per-type edit caps + Hamming fast path. seqtrie: budget-only full-width DP over the trie (not banded), ignores per-type caps |
 | Single-gap-block loop alignment | `seqtree.gapblock` (Python) | anchored CDR3/junction alignment: one contiguous indel + positional gap prior |
+| Dense batch gap-block scoring | `seqtree.gapblock.score_matrix` → `ScoreMatrix` | every query × every reference in one GIL-released C++ call (~532 M pairs/s on 16 cores); `numpy.asarray` is zero-copy. The shape a prototype-distance embedding needs, where nothing can be pruned |
+| Per-island profile (PWM) | `seqtree.gapblock.IslandProfile` | position weight matrix over a frame-aligned island; `pen(j,a) = round(lam·log(p_max_j/p_j(a)))` is `≥ 0` and `0` on the consensus, so it stays a ball and flows through `thetas_from_scores` unchanged. Beats min-over-members only at a strict cutoff |
 | Substitution scoring | `SubstitutionMatrix` (Gram → squared-distance penalty `s_aa+s_bb−2·s_ab`) | payload-agnostic |
 | Per-position scoring | `PositionalMatrix` (`penalty(pos,a,b)` = base × per-position weight; weight 0 = free/anchor) | the hook for PSSMs and anchor masking |
 | k-mer seed index | `KmerIndex` (C++): unique-k-mer trie + CSR postings + per-peptide allele tag; `seed_and_gather` (GIL-released, parallel) | million-scale candidate generation |
 | Control-calibrated E-values | `seqtree.evalues`, `seqtree.load_control` | `Ê = (N/M)·n_C`, Poisson tail, `exclude_exact` |
 | Calibrated score cutoffs | `seqtree.threshold_for_evalue`, `thetas_from_scores` | inverts `Ê` to a **per-query** θ. A fixed θ is not calibrated: at `gapblock_score ≤ 60`, 31.7% of *random control* junctions land in a component of ≥5 — structure invented by the threshold, which per-query cutoffs remove entirely |
-| Gap-placement priors | `central_prior`, `profile_prior`, `frame_prior`, `embed_in_frame` | `prior(i, d, m) ≥ 0` and `= 0` at `d = 0`. Only a **constant-`i`** rule (`frame_prior`) makes a frame transitive — and hence a column index, and hence a PWM, possible |
+| Gap-placement priors | `central_prior`, `profile_prior`, `frame_prior`, `positions_prior`, `embed_in_frame` | `prior(i, d, m) ≥ 0` and `= 0` at `d = 0`. Only a **constant-`i`** rule (`frame_prior`) makes a frame transitive — a column index, hence a PWM, which `IslandProfile` now ships |
 | Seed significance | `seqtree.seeds`: `core_kmers`, `SeedIndex` | precision, not recall: ~0.5% cross-island coverage |
 | Background control | `seqtree.load_control`, `sanitize` | uniform reservoir sample over unique **productive** clonotypes. *Planned:* an out-of-frame control as an empirical `P_gen` sample for the `π̂_gen` fallback — needs the `*.ntvj` tables, since the `.aa` table's `_` has already collapsed a run of positions |
 | Anchor / layout model | `seqtree.layout`: `AnchorSpec`, `DEFAULTS`, `mask_anchors`, `kmers`, `presentation_features`, `weight_profile` | parametrized anchors; class-II register trick |
@@ -41,7 +43,7 @@ between them, written so an agent developing either package can pick it up cold:
 **E-value theory** lives in `appendix/evalue.tex`: the empirical-control null (§Setup, §Null), the
 Poisson/Chen–Stein bound (§Poisson), multiple testing (§E-value), the closest-hit Gumbel law
 (§Gumbel), Karlin–Altschul as the i.i.d. special case (§KA), the pMHC presentation-aware extension
-(§Epitopes, §Reverse problem), and elementary applications — UMI/barcode birthday-collision and
+(§Epitopes), and elementary applications — UMI/barcode birthday-collision and
 CDR3-nt error clustering (§Related applications).
 
 **Datasets.** `isalgo/pmhc_data` ships two tiers (see `appendix` Table "Scope of the two pmhc_data
@@ -119,8 +121,8 @@ additions below.
   presentation-aware E-values via `pmhc_evalue.homolog_evalue`). Positive control: the Dolton et al.
   A\*02:01 cross-reactive trio.
 - Allele guessing (reverse problem): `assign_allele` + the vote-fraction ranking / register trick
-  validated in `bench/bench_mhc_guess.py` (appendix §Reverse problem). ROC-AUC 0.90–0.98.
-- **Non-binder filter** (appendix §Reverse problem, "Filtering non-binders"): _binds no MHC_ →
+  validated in `bench/bench_mhc_guess.py` (appendix §Epitopes). ROC-AUC 0.90–0.98.
+- **Non-binder filter** (appendix §Epitopes, "Non-binders and class-II promiscuity"): _binds no MHC_ →
   best-over-panel E-value high / no allele scores above background; _doesn't bind allele a_ →
   per-allele `E_a > α`. mhcmatch exposes both thresholds.
 - Tier choice (full vs shortlist, §1 Datasets).

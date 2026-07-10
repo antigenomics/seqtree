@@ -23,7 +23,7 @@ dependencies = []
 
 [project.optional-dependencies]
 test = ["pytest>=7.4", "pytest-cov>=4.1"]
-bench = ["huggingface_hub", "pandas", "psutil"]
+bench = ["huggingface_hub", "psutil"]
 docs = ["sphinx", "pydata-sphinx-theme", "nbsphinx"]
 control = ["huggingface_hub"]  # only needed to download controls larger than the bundled subset
 pmhc = ["huggingface_hub"]     # only needed to fetch the isalgo/pmhc_data epitope tables

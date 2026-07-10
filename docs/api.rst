@@ -31,10 +31,35 @@ Alignment
    :members:
    :undoc-members:
 
+Scoring
+-------
+
+.. autoclass:: SubstitutionMatrix
+   :members:
+   :undoc-members:
+
+.. autoclass:: PositionalMatrix
+   :members:
+   :undoc-members:
+
+.. autoclass:: KmerIndex
+   :members:
+   :undoc-members:
+
+.. autoclass:: Candidate
+   :members:
+   :undoc-members:
+
 Functions
 ---------
 
 .. autofunction:: pairwise_batch
+
+.. autofunction:: alphabet_symbols
+
+.. autofunction:: amino_acids
+
+.. autofunction:: load_control
 
 .. autofunction:: evalues
 
@@ -62,6 +87,14 @@ Layout and anchors
 ------------------
 
 .. automodule:: seqtree.layout
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+Epitope (pMHC) search
+---------------------
+
+.. automodule:: seqtree.pmhc
    :members:
    :undoc-members:
    :show-inheritance:

@@ -45,7 +45,15 @@ Beyond search, seqtree ships:
   right model for a V(D)J junction and, measured against unrestricted affine alignment, is
   exactly optimal on **98.8%** of genuinely related pairs at a calibrated `gap_open`. A gap
   prior (`central_prior`, `profile_prior`, `frame_prior`) chooses where the block goes — a
-  sequence score alone cannot.
+  sequence score alone cannot. `score_matrix` scores a whole query set against a whole reference
+  set in one GIL-released C++ call (**532 M pairs/s** on 16 cores; `numpy.asarray` wraps the
+  result with no copy), the shape a prototype-distance embedding needs.
+- **Island profiles** — `IslandProfile.fit` builds a position weight matrix over a set of
+  frame-aligned junctions (an *island*) and scores a query column by column against the island
+  consensus, as a non-negative penalty that flows through `threshold_for_evalue` unchanged. At a
+  repertoire-scale cutoff it recovers **48.5%** of held-out members against **37.6%** for
+  min-over-members; at a loose cutoff the two are indistinguishable, so it earns its keep only
+  where the cutoff is strict.
 
 ## Install
 
@@ -62,7 +70,7 @@ needs a C++17 compiler and CMake (pulled in automatically by the build).
 ```fish
 bash setup.sh            # repo-local .venv + editable install
 bash setup.sh --tests    # + pytest
-bash setup.sh --bench     # + benchmark deps (huggingface_hub, pandas, psutil)
+bash setup.sh --bench     # + benchmark deps (huggingface_hub, psutil)
 ```
 
 ## Quickstart
@@ -113,6 +121,16 @@ for ref_id, score, block_len, block_pos in gbi.search(
 
 # a fixed frame column makes gap placement transitive -- and a column index, hence a PWM, possible
 embed_in_frame("CASSGQAYEQYF", width=14, c=4)      # 'CASS--GQAYEQYF'
+
+# a whole query set vs a whole reference set, in one GIL-released C++ call
+from seqtree.gapblock import score_matrix, IslandProfile
+sm = score_matrix(clonotypes, prototypes, mat, gap_open=2 * mat.scale(), threads=0)
+import numpy as np
+distances = np.asarray(sm)                          # (len(clonotypes), len(prototypes)) int32, zero-copy
+
+# a position weight matrix over an island, still a non-negative penalty (feeds threshold_for_evalue)
+profile = IslandProfile.fit(island_members)
+profile.score("CASSLGQAYEQYF")                      # 0 on the consensus, > 0 for deviations
 ```
 
 ## Tests
@@ -133,6 +151,7 @@ python bench/bench_evalue.py         # true E-value benchmark (target vs backgro
 python bench/bench_evalue_matrix.py  # significance across reference/control/query/scope grid
 python bench/bench_epitope.py        # epitope detection-complexity (GIL vs NLV)
 python bench/bench_gapblock.py       # the gap-freedom ladder: fixed centre → prior → flat → affine
+python bench/bench_score_matrix.py   # dense batch gap-block throughput (µs/pair, M pairs/s, RSS)
 ```
 
 Figures (throughput, scaling, matrix-scoring overhead, collisions, E-value matrix, epitope

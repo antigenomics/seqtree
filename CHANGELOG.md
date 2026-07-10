@@ -3,7 +3,7 @@
 All notable changes to `seqtree`. Dates are release dates; the project is pre-1.0, so a **minor**
 bump may carry breaking changes.
 
-## [0.3.0] — unreleased
+## [0.3.0] — 2026-07-10
 
 Gap-block alignment, calibrated cutoffs, seed significance — the removal of several engine paths
 that returned confident wrong answers, and a corrected background control that changes every
@@ -131,8 +131,8 @@ Numbers that constrain the API, all reproducible from `bench/` and the downstrea
   at `gapblock_score ≤ 60`, **31.7%** of size-matched *random control* junctions land in a component
   of ≥5 — structure invented by the threshold. Per-query E-value edges at `E* = 0.05` cut that to
   **0.000** while raising the real signal: 2.334 edges per node against 0.021 for the control, which
-  forms no component of size 3 at all. The control arm's realised edge rate lands on `E*`, which is
-  the check that the calibration is honest.
+  forms 19,248 singletons, 223 pairs, three components of size 3–4, and nothing larger. The control
+  arm's realised edge rate lands on `E*`, which is the check that the calibration is honest.
 - **Mouse replicates it.** Against the mouse TRB control (694,241 productive clonotypes), 5 epitopes
   and 1,692 TCRs give 5.856 calibrated edges per node against 0.019 for the control, which again
   forms nothing larger than a pair. At a fixed θ=40 the control still lands 18.3% of its nodes in

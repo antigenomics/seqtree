@@ -30,7 +30,7 @@ seqtree
      </a>
      <a class="proj-card" href="api.html">
        <h3>API Reference</h3>
-       <p>Index, SearchParams, Hit, Alignment.</p>
+       <p>Index, matrices, gap-block scoring, E-values.</p>
      </a>
      <a class="proj-card" href="benchmarks.html">
        <h3>Benchmarks</h3>
@@ -49,6 +49,13 @@ seqtree
        <h3>seqtrie &mdash; banded DP</h3>
        <p>Matrix-weighted score budgets (BLOSUM62 + gap costs) with cost independent of the
        edit count. Best for similarity-scored searches over a total-edit or penalty budget.</p>
+     </div>
+     <div class="proj-feature">
+       <h3>Gap blocks &amp; calibrated cutoffs</h3>
+       <p>One contiguous indel for V(D)J junctions, its position set by a prior rather than the
+       score alone; E-value inversion for the cutoff that achieves a target false-positive rate,
+       per query; and <code>IslandProfile</code>, a per-island PWM. Where the indel goes and how
+       close is close enough &mdash; both measured, not assumed.</p>
      </div>
    </div>
 
