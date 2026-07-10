@@ -64,6 +64,7 @@ map ``ref_id`` back to their own payloads (V gene, MHC, read counts) and filter 
    api
    evalue
    gapblock
+   examples
    pmhc
    benchmarks
    roadmap

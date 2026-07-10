@@ -96,3 +96,23 @@ def test_no_submodule_was_added_without_being_listed_here():
     assert found <= set(SUBMODULES), (
         f"new submodule(s) {sorted(found - set(SUBMODULES))}: add to SUBMODULES and docs/api.rst"
     )
+
+
+def test_examples_compile_and_carry_a_docstring():
+    """The examples are documentation. If one stops parsing, the docs are lying."""
+    import py_compile
+
+    root = pathlib.Path(__file__).resolve().parents[2] / "examples"
+    scripts = sorted(root.glob("*.py"))
+    assert len(scripts) >= 3, f"expected the three worked examples, found {scripts}"
+    for s in scripts:
+        py_compile.compile(str(s), doraise=True)
+        body = "\n".join(ln for ln in s.read_text().split("\n") if not ln.startswith("#!"))
+        assert body.lstrip().startswith('"""'), f"{s.name} has no module docstring"
+
+
+def test_examples_page_references_every_script():
+    page = (DOCS / "examples.rst").read_text()
+    root = pathlib.Path(__file__).resolve().parents[2] / "examples"
+    missing = [s.name for s in sorted(root.glob("*.py")) if s.name not in page]
+    assert not missing, f"docs/examples.rst does not mention: {missing}"
