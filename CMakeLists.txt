@@ -27,6 +27,7 @@ add_library(seqtree_core STATIC
   src/engine_seqtm.cpp
   src/engine_seqtrie.cpp
   src/searcher.cpp
+  src/gapblock.cpp
 )
 target_include_directories(seqtree_core PUBLIC include PRIVATE src)
 target_link_libraries(seqtree_core PUBLIC Threads::Threads)

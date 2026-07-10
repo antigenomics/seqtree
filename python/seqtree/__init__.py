@@ -26,7 +26,8 @@ from .control import load_control
 from .evalue import evalues, thetas_from_scores, threshold_for_evalue
 from . import gapblock, layout, pmhc, seeds
 from .gapblock import (
-    GapBlockIndex, central_prior, embed_in_frame, frame_prior, gapblock_score, profile_prior,
+    GapBlockIndex, ScoreMatrix, central_prior, embed_in_frame, frame_prior, gapblock_score,
+    positions_prior, profile_prior, score_matrix,
 )
 from .seeds import SeedIndex, core_kmers
 from .pmhc import PMHCStore, find_mimics
@@ -37,10 +38,13 @@ __all__ = [
     "pmhc",
     "seeds",
     "GapBlockIndex",
+    "ScoreMatrix",
     "gapblock_score",
+    "score_matrix",
     "central_prior",
     "profile_prior",
     "frame_prior",
+    "positions_prior",
     "embed_in_frame",
     "SeedIndex",
     "core_kmers",

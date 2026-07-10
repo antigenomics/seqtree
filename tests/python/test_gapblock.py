@@ -10,6 +10,7 @@ import pytest
 
 import seqtree as st
 from seqtree.gapblock import (
+    UNREACHABLE,
     GapBlockIndex,
     central_prior,
     deletion_variants,
@@ -17,7 +18,9 @@ from seqtree.gapblock import (
     frame_prior,
     gap_cost,
     gapblock_score,
+    positions_prior,
     profile_prior,
+    score_matrix,
 )
 
 AA = "ACDEFGHIKLMNPQRSTVWY"
@@ -67,6 +70,10 @@ def gotoh(q, r, go, ge):
             X[i][j] = min(M[i - 1][j] + go, X[i - 1][j] + ge, Y[i - 1][j] + go)
             Y[i][j] = min(M[i][j - 1] + go, Y[i][j - 1] + ge, X[i][j - 1] + go)
     return min(M[m][n], X[m][n], Y[m][n])
+
+
+def rand_seq(rng, n):
+    return "".join(rng.choice(AA) for _ in range(n))
 
 
 def rand_pair(rng, d_choices=(0, 0, 1, 1, 2, 3, 4)):
@@ -416,3 +423,134 @@ def test_score_is_a_valid_ball_for_evalues():
         s, _ = gapblock_score(q, r, BLOSUM, 28, 1, prior)
         assert s >= 0
         assert gapblock_score(q, q, BLOSUM, 28, 1, prior)[0] == 0
+
+
+# ---------------------------------------------------------------------------------------------
+# positions_prior -- the "score several candidate placements, keep the best" rule
+# ---------------------------------------------------------------------------------------------
+
+def test_positions_prior_admits_exactly_its_starts():
+    prior = positions_prior((3, 4, -4, -3))
+    m, d = 14, 2          # longer length 14, block length 2 => shorter length 12
+    allowed = {3, 4, 12 - 4, 12 - 3}
+    for i in range(13):
+        assert prior(i, d, m) == (0 if i in allowed else UNREACHABLE)
+
+
+def test_positions_prior_clamps_into_range_so_a_layout_always_survives():
+    """A start past the end of a short sequence must fold onto its last column, not vanish."""
+    prior = positions_prior((9, -9))
+    m, d = 6, 2           # shorter length 4: both 9 and -9 land outside [0, 4]
+    admitted = [i for i in range(5) if prior(i, d, m) == 0]
+    assert admitted == [0, 4]
+
+
+def test_positions_prior_obeys_the_two_invariants():
+    prior = positions_prior((3, 4, -4, -3))
+    for m in range(1, 20):
+        for d in range(0, m + 1):
+            for i in range(m - d + 1):
+                assert prior(i, d, m) >= 0
+                if d == 0:
+                    assert prior(i, d, m) == 0
+
+
+def test_positions_prior_rejects_an_empty_start_set():
+    with pytest.raises(ValueError, match="at least one start"):
+        positions_prior(())
+
+
+def test_positions_prior_never_beats_a_free_score():
+    """Restricting the layout set can only raise the penalty -- it is a strict sub-family."""
+    rng = random.Random(31)
+    prior = positions_prior((3, 4, -4, -3))
+    for _ in range(400):
+        q, r = rand_pair(rng)
+        free, _ = gapblock_score(q, r, BLOSUM, 28, 1, None)
+        pinned, _ = gapblock_score(q, r, BLOSUM, 28, 1, prior)
+        assert pinned >= free
+
+
+# ---------------------------------------------------------------------------------------------
+# score_matrix -- the batched C++ kernel
+# ---------------------------------------------------------------------------------------------
+
+PRIORS = [
+    pytest.param(None, id="none"),
+    pytest.param(central_prior(21), id="central"),
+    pytest.param(frame_prior(21, 5), id="frame"),
+    pytest.param(positions_prior((3, 4, -4, -3)), id="positions"),
+    pytest.param(profile_prior(21, lambda j, m: 1.0 - abs(2 * j + 1 - m) / m), id="profile"),
+]
+
+
+@pytest.mark.parametrize("prior", PRIORS)
+def test_score_matrix_reproduces_the_scalar_scorer(prior):
+    """The C++ kernel and gapblock_score must agree on every cell, under every prior."""
+    rng = random.Random(7)
+    seqs = [rand_seq(rng, rng.randint(4, 20)) for _ in range(40)]
+    sm = score_matrix(seqs, seqs, BLOSUM, gap_open=28, gap_extend=1, gap_prior=prior)
+    assert sm.shape == (len(seqs), len(seqs))
+    for i, q in enumerate(seqs):
+        for k, r in enumerate(seqs):
+            assert sm[i, k] == gapblock_score(q, r, BLOSUM, 28, 1, prior, _pen=PEN)[0]
+
+
+@pytest.mark.parametrize("prior", PRIORS)
+def test_score_matrix_is_a_valid_ball(prior):
+    rng = random.Random(11)
+    seqs = [rand_seq(rng, rng.randint(4, 20)) for _ in range(30)]
+    sm = score_matrix(seqs, seqs, BLOSUM, gap_open=28, gap_prior=prior)
+    for i in range(len(seqs)):
+        assert sm[i, i] == 0
+        for k in range(len(seqs)):
+            assert sm[i, k] >= 0
+            assert sm[i, k] == sm[k, i]
+
+
+def test_score_matrix_is_thread_invariant():
+    rng = random.Random(13)
+    q = [rand_seq(rng, rng.randint(6, 18)) for _ in range(64)]
+    r = [rand_seq(rng, rng.randint(6, 18)) for _ in range(40)]
+    prior = central_prior(21)
+    ref = [score_matrix(q, r, BLOSUM, 28, 1, prior, threads=1).row(i) for i in range(len(q))]
+    for threads in (2, 4, 0):
+        got = score_matrix(q, r, BLOSUM, 28, 1, prior, threads=threads)
+        assert [got.row(i) for i in range(len(q))] == ref
+
+
+def test_score_matrix_exposes_a_zero_copy_buffer():
+    """seqtree has no runtime dependencies, so the result must travel by buffer protocol."""
+    sm = score_matrix(["CASSL", "CASL"], ["CASSL"], BLOSUM, 28)
+    mv = memoryview(sm)
+    assert mv.format == "i"
+    assert mv.shape == (2, 1)
+    assert mv.c_contiguous
+    assert mv[0, 0] == 0
+    assert mv[1, 0] == sm[1, 0] > 0
+
+
+def test_score_matrix_unit_cost_and_empty_inputs():
+    sm = score_matrix(["ACGT", "ACTT"], ["ACGT"], None, gap_open=1)
+    assert sm[0, 0] == 0 and sm[1, 0] == 1        # one mismatch, unit cost
+    assert score_matrix([], ["ACGT"]).shape == (0, 1)
+    assert score_matrix(["ACGT"], []).shape == (1, 0)
+
+
+def test_score_matrix_rejects_bad_input():
+    with pytest.raises(ValueError):
+        score_matrix(["CAS"], ["CAS"], BLOSUM, gap_open=-1)
+    with pytest.raises(ValueError, match="negative"):
+        score_matrix(["CAS"], ["CA"], BLOSUM, 28, gap_prior=lambda i, d, m: -1)
+    with pytest.raises(ValueError, match="alphabet"):
+        score_matrix(["CAS#"], ["CASS"], BLOSUM, 28)
+
+
+def test_score_matrix_index_and_row_agree():
+    sm = score_matrix(["CASSL", "CASL", "CAS"], ["CASSL", "CASSY"], BLOSUM, 28)
+    for i in range(3):
+        assert sm.row(i) == [sm[i, 0], sm[i, 1]]
+    with pytest.raises(IndexError):
+        sm.row(3)
+    with pytest.raises(IndexError):
+        sm[3, 0]

@@ -143,6 +143,61 @@ no new C++, and no separate aligner.
 them and ``d <= 3`` covers 85.5 %, so the default of 1 is deliberately conservative — raise it when
 you care about length-different neighbours, and pay for it in build memory.
 
+Scoring every pair
+------------------
+
+A search prunes; a **distance-vector embedding cannot**. Scoring *n* clonotypes against a few
+thousand fixed prototypes needs all *n × K* cells, so there is nothing for a trie to skip.
+:func:`~seqtree.gapblock.score_matrix` is that dense path, in C++ with the GIL released:
+
+.. code-block:: python
+
+   from seqtree.gapblock import score_matrix, central_prior
+
+   sm = score_matrix(clonotypes, prototypes, mat,
+                     gap_open=2 * mat.scale(),
+                     gap_prior=central_prior(lam),
+                     threads=0)                # 0 = one per core
+   d = numpy.asarray(sm)                       # (n, K) int32, no copy
+
+Measured on an M3, 3,000 prototypes, human TRB junctions:
+
+=================================  ===========  ===============
+rung                               M pairs/s    vs pure Python
+=================================  ===========  ===============
+``gapblock_score`` (Python)        0.41         1×
+``score_matrix``, 1 thread         **51.3**     125×
+``score_matrix``, 16 threads       **532.7**    1294×
+=================================  ===========  ===============
+
+The prior is free — it is flattened once into an ``[m][d][i]`` lookup cube, so the kernel never
+re-enters Python. The result is ``int32`` and carries the CPython buffer protocol, so
+``numpy.asarray`` wraps it without copying and seqtree keeps its zero runtime dependencies. Budget
+``4 * n * K`` bytes (1.2 GB at 100k × 3000) and chunk the queries if that does not fit.
+
+.. note::
+
+   The scores are already the distance. There is no ``d = s(a,a) + s(b,b) - 2·s(a,b)`` step to do:
+   the Gram transform is applied per *residue* when the matrix is built, so the alignment score is
+   non-negative, zero on the diagonal, and symmetric by construction.
+
+One knob exists only for interoperability. :func:`~seqtree.gapblock.positions_prior` restricts the
+block to a fixed list of starts (negative values counting from the end), reproducing the
+``gap_positions=(3, 4, -4, -3)`` convention that other junction aligners hardcode:
+
+.. code-block:: python
+
+   from seqtree.gapblock import positions_prior
+   sm = score_matrix(clonotypes, prototypes, mat, gap_open=28,
+                     gap_prior=positions_prior((3, 4, -4, -3)))
+
+Reach for it to reproduce someone else's numbers, not to improve your own. On human TRB retrieval at
+a matched false-positive rate, candidate starts ``(3, 4, mid)`` reached precision **0.156** against
+**0.414** for a single hard-pinned centre: scoring several placements and keeping the best is *more*
+freedom, and freedom is what manufactures similarity. A fixed set of four starts is also a TRB-shaped
+assumption — an IGH junction runs to 50 residues, and a block pinned within four of an anchor there
+means something quite different.
+
 Calibrated cutoffs
 ------------------
 

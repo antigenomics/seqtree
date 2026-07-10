@@ -149,4 +149,17 @@ std::vector<std::vector<Hit>> pairwise_batch(const std::vector<std::string>& a,
                                              const std::vector<std::string>& b,
                                              Alphabet, const SearchParams&, int threads = 0);
 
+// Dense N*K single-gap-block penalty matrix, row-major (row i is queries[i] vs every ref).
+// Unlike pairwise_batch this is exhaustive: no budget, no trie, every cell scored.
+//
+// The block of length d = |m-n| is placed at whichever of the min(m,n)+1 positions minimises
+// substitution cost plus `prior`. `prior` is the gap prior flattened to [m][d][i] with stride
+// (prior_width+1); pass it empty for no prior. It is read only when d > 0, which is what keeps
+// the diagonal zero. `matrix` may be null for unit cost. threads <= 0 => hardware_concurrency.
+std::vector<int32_t> gapblock_matrix(const std::vector<std::string>& queries,
+                                     const std::vector<std::string>& refs, Alphabet,
+                                     const SubstitutionMatrix* matrix, int32_t gap_open,
+                                     int32_t gap_extend, const std::vector<int32_t>& prior,
+                                     uint32_t prior_width, int threads = 0);
+
 }  // namespace seqtree

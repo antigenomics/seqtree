@@ -100,7 +100,12 @@ GapPrior = Callable[[block_start_i, block_length_d, longer_length_m], int]
 central_prior(lam)          # lam * |block_midpoint - m/2|; lam ~ 1.5 * scale()
 profile_prior(lam, w)       # lam * sum(w(j, m) for j in block); w in [0,1], callable
 frame_prior(lam, c)         # lam * |i - c|; the block start does not depend on d
+positions_prior(starts)     # 0 at each start (negatives from the end), UNREACHABLE elsewhere
 embed_in_frame(seq, width, c, gap="-") -> str
+
+# Dense n x K, for prototype-distance embeddings. C++, GIL released, buffer protocol.
+score_matrix(queries, refs, matrix=None, gap_open=None, gap_extend=1, gap_prior=None,
+             alphabet="aa", threads=0) -> ScoreMatrix     # numpy.asarray(sm) is zero-copy
 ```
 
 **Invariants a prior must satisfy** (nothing else): `>= 0`, and `== 0` when `d == 0`. Otherwise
@@ -125,6 +130,22 @@ trie pruning. Monotonicity in `d` is **not** required and is false for `central_
   `central_prior`'s start drifts, so embedding two shorter members into a common frame relates
   them by *two* blocks — no consistent column index, no PWM. Use `embed_in_frame(seq, W, c)`:
   left-anchor the first `c` residues, right-anchor the rest.
+- **Scoring several candidate placements and keeping the best loses.** At a matched FPR on human
+  TRB, candidate starts `(3, 4, mid)` reach precision 0.156; a hard-pinned centre 0.414. That is
+  what `positions_prior` implements, and it exists to reproduce other aligners' conventions —
+  `mir.distances.aligner.JunctionAligner` hardcodes `(3, 4, -4, -3)` for all seven loci — not
+  because it is the right rule.
+
+### Batch scoring — `score_matrix`
+
+A search prunes; an embedding cannot, because the distance to every prototype *is* the output.
+Measured on an M3, 3,000 refs, human TRB: pure-Python `gapblock_score` **0.41 M pairs/s**,
+`score_matrix` **51.3 M** (1 thread) and **532.7 M** (16 threads). The prior costs nothing — it
+is flattened once into an `[m][d][i]` cube. Reproduce with `bench/bench_score_matrix.py`.
+
+The result *is* the distance: the Gram transform is applied per residue when the matrix is built,
+so there is no `d = s(a,a) + s(b,b) - 2·s(a,b)` step, and non-negativity, symmetry and a zero
+diagonal hold by construction. Budget `4 * n * K` bytes and chunk the queries.
 
 ### Performance
 

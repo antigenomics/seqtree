@@ -197,6 +197,31 @@ Alignment py_align(const Index& idx, uint32_t ref_id, const std::string& q, cons
     return idx.align(q, ref_id, cp);
 }
 
+// Owns an N*K int32 block and lends it out through the CPython buffer protocol. seqtree has no
+// runtime dependencies, so we cannot hand back a numpy array; a buffer lets numpy (or plain
+// memoryview) wrap the same memory with no copy.
+struct ScoreMatrix {
+    std::vector<int32_t> data;
+    size_t rows = 0, cols = 0;
+};
+
+ScoreMatrix py_gapblock_matrix(const std::vector<std::string>& queries,
+                               const std::vector<std::string>& refs, const std::string& alphabet,
+                               const std::optional<SubstitutionMatrix>& matrix, int32_t gap_open,
+                               int32_t gap_extend, const std::vector<int32_t>& prior,
+                               uint32_t prior_width, int threads) {
+    Alphabet alph = parse_alphabet(alphabet);
+    ScoreMatrix out;
+    out.rows = queries.size();
+    out.cols = refs.size();
+    {
+        py::gil_scoped_release release;
+        out.data = gapblock_matrix(queries, refs, alph, matrix ? &*matrix : nullptr, gap_open,
+                                   gap_extend, prior, prior_width, threads);
+    }
+    return out;
+}
+
 }  // namespace
 
 PYBIND11_MODULE(_core, m) {
@@ -410,6 +435,45 @@ PYBIND11_MODULE(_core, m) {
           py::arg("alphabet") = "aa", py::arg("threads") = 0,
           "Batch-vs-batch search. Indexes the larger set internally and streams the smaller; "
           "results are a-major (one hit list per a[i]) with Hit.ref_id pointing into b.");
+
+    py::class_<ScoreMatrix>(m, "ScoreMatrix", py::buffer_protocol(),
+                            "A read-only (n_queries, n_refs) int32 penalty matrix, row-major. "
+                            "Exposes the buffer protocol, so ``numpy.asarray(sm)`` and "
+                            "``memoryview(sm)`` both wrap it without copying. Index it with "
+                            "``sm[i, k]`` or pull one row with ``sm.row(i)``.")
+        .def_buffer([](ScoreMatrix& s) {
+            return py::buffer_info(s.data.data(), sizeof(int32_t),
+                                   py::format_descriptor<int32_t>::format(), 2, {s.rows, s.cols},
+                                   {sizeof(int32_t) * s.cols, sizeof(int32_t)});
+        })
+        .def_property_readonly("shape",
+                               [](const ScoreMatrix& s) { return py::make_tuple(s.rows, s.cols); })
+        .def("__len__", [](const ScoreMatrix& s) { return s.rows; })
+        .def(
+            "row",
+            [](const ScoreMatrix& s, size_t i) {
+                if (i >= s.rows) throw py::index_error("row out of range");
+                return std::vector<int32_t>(s.data.begin() + i * s.cols,
+                                            s.data.begin() + (i + 1) * s.cols);
+            },
+            py::arg("i"), "Row i as a list of penalties, one per reference.")
+        .def("__getitem__",
+             [](const ScoreMatrix& s, std::pair<size_t, size_t> ik) {
+                 if (ik.first >= s.rows || ik.second >= s.cols)
+                     throw py::index_error("index out of range");
+                 return s.data[ik.first * s.cols + ik.second];
+             })
+        .def("__repr__", [](const ScoreMatrix& s) {
+            return "ScoreMatrix(" + std::to_string(s.rows) + ", " + std::to_string(s.cols) + ")";
+        });
+
+    m.def("gapblock_matrix", &py_gapblock_matrix, py::arg("queries"), py::arg("refs"),
+          py::arg("alphabet") = "aa", py::arg("matrix") = std::nullopt, py::arg("gap_open") = 1,
+          py::arg("gap_extend") = 1, py::arg("prior") = std::vector<int32_t>{},
+          py::arg("prior_width") = 0, py::arg("threads") = 0,
+          "Exhaustive single-gap-block penalties for every (query, ref) pair, GIL released. "
+          "`prior` is the gap prior flattened to [m][d][i]; see seqtree.gapblock.score_matrix, "
+          "which builds it for you.");
 
     py::class_<Candidate>(m, "Candidate",
                           "A seed-and-gather hit: peptide_id, shared_kmers (distinct query k-mers "

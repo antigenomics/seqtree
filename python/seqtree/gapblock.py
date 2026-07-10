@@ -38,12 +38,17 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Sequence
 
-from ._core import Index, SearchParams, SubstitutionMatrix
+from ._core import Index, ScoreMatrix, SearchParams, SubstitutionMatrix
+from ._core import gapblock_matrix as _gapblock_matrix
 
 __all__ = [
-    "gapblock_score", "deletion_variants", "central_prior", "profile_prior", "frame_prior",
-    "embed_in_frame", "gap_cost", "GapBlockIndex",
+    "gapblock_score", "score_matrix", "deletion_variants", "central_prior", "profile_prior",
+    "frame_prior", "positions_prior", "embed_in_frame", "gap_cost", "GapBlockIndex", "ScoreMatrix",
 ]
+
+#: A prior value large enough that no layout carrying it can ever win, yet small enough that
+#: adding a real substitution cost cannot overflow int32.
+UNREACHABLE = 1 << 20
 
 #: ``prior(block_start, block_length, longer_length) -> int``. The block occupies columns
 #: ``[i, i + d)`` of the longer sequence. Two requirements, both load-bearing: the result must
@@ -134,6 +139,45 @@ def frame_prior(lam: int, c: int) -> GapPrior:
 
     def prior(i: int, d: int, m: int) -> int:
         return 0 if d == 0 else lam * abs(i - c)
+
+    return prior
+
+
+def positions_prior(starts: Iterable[int]) -> GapPrior:
+    """Allow the block to open only at ``starts``; let the score choose among them.
+
+    A non-negative start counts from the sequence's beginning, a negative one from the end of
+    the *shorter* sequence -- so ``(3, 4, -4, -3)`` reproduces the fixed gap set that
+    ``mir.distances.aligner.JunctionAligner`` hardcodes for every locus. Starts outside
+    ``[0, shorter]`` clamp into range, so at least one layout always survives.
+
+    This is the "score several candidate placements and keep the best" rule. It is weaker than
+    it looks: measured on human TRB retrieval at a matched false-positive rate, candidates
+    ``(3, 4, mid)`` reached precision 0.156 against 0.414 for a single hard-pinned centre. The
+    freer the placement, the more readily an unrelated reference manufactures a low score.
+
+    Args:
+        starts: Permitted block starts. Negative values index from the end.
+
+    Returns:
+        A :data:`GapPrior` returning 0 at a permitted start and :data:`UNREACHABLE` elsewhere.
+
+    Raises:
+        ValueError: If ``starts`` is empty.
+    """
+    ss = tuple(starts)
+    if not ss:
+        raise ValueError("need at least one start position")
+
+    def prior(i: int, d: int, m: int) -> int:
+        if d == 0:
+            return 0
+        shorter = m - d
+        for p in ss:
+            allowed = min(p, shorter) if p >= 0 else max(0, shorter + p)
+            if i == allowed:
+                return 0
+        return UNREACHABLE
 
     return prior
 
@@ -269,6 +313,81 @@ def gapblock_score(
         if best is None or cand < best:
             best, best_i = cand, i
     return best + gap_cost(d, gap_open, gap_extend), best_i
+
+
+def _prior_cube(prior: GapPrior, width: int) -> list[int]:
+    """Flatten ``prior`` to ``[m][d][i]`` with stride ``width + 1``, for the C++ kernel.
+
+    Only reachable cells are filled: ``d >= 1`` (the prior never applies to equal lengths) and
+    ``i <= m - d`` (the block start indexes the shorter sequence). The rest stay zero and are
+    never read.
+    """
+    w1 = width + 1
+    cube = [0] * (w1 * w1 * w1)
+    for m in range(w1):
+        for d in range(1, m + 1):
+            base = (m * w1 + d) * w1
+            for i in range(m - d + 1):
+                v = int(prior(i, d, m))
+                if v < 0:
+                    raise ValueError(f"gap_prior({i}, {d}, {m}) = {v} is negative")
+                cube[base + i] = v
+    return cube
+
+
+def score_matrix(
+    queries: Sequence[str],
+    refs: Sequence[str],
+    matrix: SubstitutionMatrix | None = None,
+    gap_open: int | None = None,
+    gap_extend: int = 1,
+    gap_prior: GapPrior | None = None,
+    alphabet: str = "aa",
+    threads: int = 0,
+) -> ScoreMatrix:
+    """Gap-block penalty of every query against every reference, in C++ with the GIL released.
+
+    The exhaustive counterpart of :meth:`GapBlockIndex.search`: no budget, no trie, every cell
+    scored. This is the shape a prototype-distance embedding wants -- ``n`` clonotypes against a
+    few thousand fixed references -- and it is where :func:`gapblock_score` stops being fast
+    enough, at roughly 0.4 M pairs/s in Python against ~50 M in the kernel.
+
+    Args:
+        queries: Query sequences (the matrix rows).
+        refs: Reference sequences (the matrix columns).
+        matrix: Substitution penalties; ``None`` means unit cost.
+        gap_open: Block-opening cost. Defaults to ``2 * matrix.scale()``. See the module note:
+            leaving this at 1 with a real matrix makes gaps ~14x cheaper than substitutions.
+        gap_extend: Cost per additional gap column.
+        gap_prior: :data:`GapPrior`, materialized once into a lookup cube and then read from C++.
+            ``None`` lets the score alone choose the block position.
+        alphabet: ``"aa"``, ``"nt"``, or ``"iupac"``. Symbols outside it raise.
+        threads: Worker threads; ``0`` means one per core. Rows are disjoint, so this scales.
+
+    Returns:
+        A :class:`ScoreMatrix` of shape ``(len(queries), len(refs))``. It holds
+        ``4 * len(queries) * len(refs)`` bytes -- 1.2 GB at 100k x 3000 -- so chunk the queries
+        if that does not fit. ``numpy.asarray`` wraps it without copying.
+
+    Raises:
+        ValueError: If a gap cost is negative, or the prior returns a negative value.
+
+    Example:
+        >>> m = SubstitutionMatrix.blosum62()
+        >>> sm = score_matrix(["CASSLGQAYEQYF"], ["CASSLGQAYEQYF", "CASSLGAYEQYF"], m)
+        >>> sm.shape
+        (1, 2)
+        >>> sm[0, 0]
+        0
+    """
+    q, r = list(queries), list(refs)
+    if gap_open is None:
+        gap_open = _default_gap_open(matrix)
+    if gap_open < 0 or gap_extend < 0:
+        raise ValueError("gap_open and gap_extend must be >= 0")
+    width = max((len(s) for s in q + r), default=0)
+    cube = _prior_cube(gap_prior, width) if gap_prior is not None else []
+    return _gapblock_matrix(q, r, alphabet, matrix, gap_open, gap_extend, cube, width, threads)
 
 
 class GapBlockIndex:
