@@ -15,7 +15,15 @@ mouse TRB table is out-of-frame; the human table is already productive-only.
 **The control must be a uniform sample.** ``ass:indep`` assumes the unique clonotypes of the
 control are i.i.d. from ``P0``. The upstream tables are sorted by clonotype abundance, so taking
 the first ``size`` rows returns the most expanded clonotypes -- a public-clone head, not a sample.
-``_download`` reservoir-samples uniformly over the unique clonotypes instead.
+``_download`` reservoir-samples uniformly over the unique clonotypes instead, and the bundled asset
+is shuffled so that ``bundled[:size]`` is itself a valid sub-sample.
+
+.. note::
+   The out-of-frame clonotypes dropped here are not merely noise. They escape thymic selection, so
+   they are the standard empirical proxy for the *generation* law ``Pgen`` -- exactly the analytic
+   fallback Lemma "the two nulls differ" reaches for when a rare query's productive-control ball is
+   empty. Recovering them needs the ``*.ntvj`` tables (the ``.aa`` table's ``_`` has already
+   destroyed the residue count). Nothing calls for it yet; build it when something does.
 """
 import gzip
 import os

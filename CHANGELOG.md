@@ -5,11 +5,30 @@ bump may carry breaking changes.
 
 ## [0.3.0] — unreleased
 
-Gap-block alignment, calibrated cutoffs, seed significance — and the removal of several engine
-paths that returned confident wrong answers.
+Gap-block alignment, calibrated cutoffs, seed significance — the removal of several engine paths
+that returned confident wrong answers, and a corrected background control that changes every
+E-value.
 
 ### Breaking
 
+- **The bundled control is a different set of sequences.** It was the *abundance head* of the
+  upstream repertoire — the 250,000 most expanded clonotypes — because both `gen_control.py` and
+  `_download` took the first `size` unique rows of a count-descending table. `appendix/evalue.tex`
+  (`ass:indep`) assumes the control's unique clonotypes are i.i.d. from `P₀`. Measured against a
+  uniform sample of the same size, the head is **25.8× more self-similar** (P(Hamming≤2 | equal
+  length) 3.11×10⁻³ vs 1.20×10⁻⁴) and carries **3.1× the ball mass** at a BLOSUM62 budget of 40
+  (mean n_C 110.1 vs 35.5). Both are now uniform reservoir samples over unique **productive**
+  clonotypes, seeded and shuffled so any prefix is itself a valid sub-sample.
+
+  **Every E-value moves.** Delete `~/.cache/seqtree/control_*.sqtree` after upgrading. Numbers
+  derived from the control are corrected throughout this file, `seeds.py`, `SKILL.md` and the
+  appendix.
+- **Controls are filtered to productive clonotypes.** VDJtools marks out-of-frame rearrangements
+  with `_` and in-frame stops with `*`; 13.7% of the mouse TRB table is out of frame. `_` cannot be
+  repaired at the amino-acid level — VDJtools collapses a *run* of untranslatable positions into one
+  character, so the residue count is already gone — and out-of-frame junctions escape thymic
+  selection, making them an estimator of `P_gen`, which `lem:hierarchy` says is not `P₀`.
+  `load_control("mouse_trb_aa")` previously raised on `_`; it now yields 694,241 clonotypes.
 - **`engine="auto"` now always resolves to `seqtm`.** It previously routed matrix-plus-indel
   searches to `seqtrie`, whose budget defaults to `INT_MAX/4`, so
   `SearchParams(max_subs=1, max_ins=1, matrix="BLOSUM62")` silently returned **every reference in

@@ -33,6 +33,7 @@ between them, written so an agent developing either package can pick it up cold:
 | Calibrated score cutoffs | `seqtree.threshold_for_evalue`, `thetas_from_scores` | inverts `Ê` to a **per-query** θ. A fixed θ is not calibrated: at `gapblock_score ≤ 60`, 31.7% of *random control* junctions land in a component of ≥5 — structure invented by the threshold, which per-query cutoffs remove entirely |
 | Gap-placement priors | `central_prior`, `profile_prior`, `frame_prior`, `embed_in_frame` | `prior(i, d, m) ≥ 0` and `= 0` at `d = 0`. Only a **constant-`i`** rule (`frame_prior`) makes a frame transitive — and hence a column index, and hence a PWM, possible |
 | Seed significance | `seqtree.seeds`: `core_kmers`, `SeedIndex` | precision, not recall: ~0.5% cross-island coverage |
+| Background control | `seqtree.load_control`, `sanitize` | uniform reservoir sample over unique **productive** clonotypes. *Planned:* an out-of-frame control as an empirical `P_gen` sample for the `π̂_gen` fallback — needs the `*.ntvj` tables, since the `.aa` table's `_` has already collapsed a run of positions |
 | Anchor / layout model | `seqtree.layout`: `AnchorSpec`, `DEFAULTS`, `mask_anchors`, `kmers`, `presentation_features`, `weight_profile` | parametrized anchors; class-II register trick |
 | pMHC homology + reverse | `seqtree.pmhc`: `PMHCStore`, `search_homologs`, `assign_allele`, `find_mimics`, `build_kmer_index` | reference impl; mhcmatch productionizes |
 | Presentation-aware E-values | `seqtree.pmhc_evalue.homolog_evalue` | per-allele null |
