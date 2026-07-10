@@ -36,6 +36,8 @@ shorter members splits into two blocks.
 """
 from __future__ import annotations
 
+import collections
+import math
 from collections.abc import Callable, Iterable, Sequence
 
 from ._core import Index, ScoreMatrix, SearchParams, SubstitutionMatrix
@@ -44,6 +46,7 @@ from ._core import gapblock_matrix as _gapblock_matrix
 __all__ = [
     "gapblock_score", "score_matrix", "deletion_variants", "central_prior", "profile_prior",
     "frame_prior", "positions_prior", "embed_in_frame", "gap_cost", "GapBlockIndex", "ScoreMatrix",
+    "IslandProfile",
 ]
 
 #: A prior value large enough that no layout carrying it can ever win, yet small enough that
@@ -204,6 +207,177 @@ def embed_in_frame(seq: str, width: int, c: int, gap: str = "-") -> str:
     if not 0 <= c <= len(seq):
         raise ValueError(f"frame column {c} outside [0, {len(seq)}]")
     return seq[:c] + gap * d + seq[c:]
+
+
+_AA = "ACDEFGHIKLMNPQRSTVWY"
+
+
+class IslandProfile:
+    """A position weight matrix over one island, scored as a non-negative penalty.
+
+    Once a set of related sequences has been embedded into a common frame (see
+    :func:`embed_in_frame`), each column has a residue distribution and a query can be scored
+    column by column instead of against every member. The column penalty is measured **against the
+    column's own consensus**::
+
+        pen(j, a) = round(lam * log(p_max_j / p_j(a)))
+
+    which is what keeps the score usable. A textbook PWM log-odds score is signed; this one is
+    ``>= 0`` and exactly ``0`` on the consensus sequence, so it still defines a ball -- centred on
+    the consensus rather than on any one member -- and still flows through
+    :func:`seqtree.thetas_from_scores`.
+
+    The gap is a column symbol like any other, so a column never gapped in the training members
+    charges heavily for a gap there. There is no separate affine gap term: the island's own members
+    say where a gap is tolerated.
+
+    **When this is worth it depends on your cutoff, and there are two regimes.** The E-value's
+    ``k = floor(e_target * M / N)`` is the number of control neighbours the cutoff may admit, so
+    the false-positive rate is ``k / M`` and it moves with ``N``, the size of the set you annotate.
+
+    * Building islands *within* one epitope group puts ``N`` at the group size (median 88), so
+      ``k`` has median 142 of ``M = 250,000``: FPR ~ 5.7e-4.
+    * Annotating a whole repertoire against known islands puts ``N`` at ~20,000. Then
+      ``e_target = 0.05`` gives ``k = 0``, which :func:`seqtree.thetas_from_scores` reports as
+      ``-1``: the rule of three certifies no ``E`` below ``3N/M = 0.236``. At that smallest
+      certifiable ``E``, ``k = 3``: FPR ~ 1.2e-5.
+
+    Recall on held-out members of 108 calibrated VDJdb islands of >= 10 (human TRB, three splits
+    each, paired bootstrap over islands, 250,000 control negatives):
+
+    ===============  ==========  ==================  ==============  ======================
+    regime           FPR         min-over-members    IslandProfile   difference [95% CI]
+    ===============  ==========  ==================  ==============  ======================
+    loose reference  1%          **99.5 %**          99.1 %          -0.40 [-1.09, +0.14]
+    per-epitope      0.0568%     88.3 %              **89.3 %**      +0.93 [-0.80, +2.79]
+    repertoire       0.0012%     37.6 %              **48.5 %**      +10.90 [+7.69, +14.21]
+    ===============  ==========  ==================  ==============  ======================
+
+    So: **no significant difference when you are building the islands**, and a large one when you
+    use them to annotate a repertoire. On islands of >= 50 members the repertoire-regime gap is
+    9.8 % against 22.6 %.
+
+    It does **not** generalise. Junctions specific to the same epitope that fall in a *different*
+    island are recovered by neither this nor min-over-members (3.5 % vs 3.7 % at a 1 % FPR, by
+    neither at either operating point). Distinct islands share no motif either representation finds.
+
+    Nor is it a compression: 14 columns x 21 symbols x 4 B is 1,176 B against 182 B of member
+    strings. An island needs 84 members before the profile is the smaller of the two, which 3.7 %
+    of real islands reach.
+
+    Args:
+        penalties: One dict per frame column, mapping symbol to a non-negative integer penalty.
+        width: Frame width; equals ``len(penalties)``.
+        c: Frame column where the gap block opens.
+
+    Example:
+        >>> members = ["CASSLGQAYEQYF", "CASSLGQGYEQYF", "CASSLGQAYEQYF"]
+        >>> p = IslandProfile.fit(members)
+        >>> p.score(p.consensus())
+        0
+        >>> p.score("CASSLGQAYEQYF") <= p.score("CASSLGQGYEQYF")
+        True
+    """
+
+    def __init__(self, penalties: list[dict[str, int]], width: int, c: int) -> None:
+        self.penalties = penalties
+        self.width = width
+        self.c = c
+
+    @classmethod
+    def fit(
+        cls,
+        members: Sequence[str],
+        c: int | None = None,
+        lam: int = 1000,
+        pseudocount: float = 0.5,
+        gap: str = "-",
+    ) -> IslandProfile:
+        """Fit a profile to an island's members.
+
+        Args:
+            members: The island. Must be non-empty. The frame width is the longest member.
+            c: Frame column for the gap block. ``None`` picks the column minimising summed column
+                entropy -- the frame the members themselves prefer. On real islands the mode lands
+                at 6, where crystal structures put the block.
+            lam: Score resolution. Scores are compared against a control-calibrated cutoff, so any
+                monotone rescaling cancels; ``lam`` only controls integer rounding.
+            pseudocount: Added to every symbol count, so an unseen residue is expensive but finite.
+            gap: The gap symbol used in the frame.
+
+        Returns:
+            A fitted :class:`IslandProfile`.
+
+        Raises:
+            ValueError: If ``members`` is empty, ``lam`` is negative, ``pseudocount`` is not
+                positive, or an explicit ``c`` exceeds the shortest member's length.
+        """
+        members = list(members)
+        if not members:
+            raise ValueError("cannot fit a profile to an empty island")
+        if lam < 0:
+            raise ValueError("lam must be >= 0")
+        if pseudocount <= 0:
+            raise ValueError("pseudocount must be > 0")
+
+        width = max(len(s) for s in members)
+        shortest = min(len(s) for s in members)
+        if c is None:
+            c = min(range(shortest + 1), key=lambda k: cls._entropy(members, width, k, gap))
+        elif not 0 <= c <= shortest:
+            raise ValueError(f"frame column {c} outside [0, {shortest}]")
+
+        alpha = _AA + gap
+        # Cap a single column so a full-width score can never reach the UNREACHABLE sentinel.
+        cap = UNREACHABLE // (width + 1)
+        penalties = []
+        for j in range(width):
+            counts = collections.Counter(embed_in_frame(s, width, c, gap)[j] for s in members)
+            denom = sum(counts.values()) + pseudocount * len(alpha)
+            probs = {a: (counts.get(a, 0) + pseudocount) / denom for a in alpha}
+            p_max = max(probs.values())
+            penalties.append(
+                {a: min(cap, int(round(lam * math.log(p_max / p)))) for a, p in probs.items()}
+            )
+        return cls(penalties, width, c)
+
+    @staticmethod
+    def _entropy(members: Sequence[str], width: int, c: int, gap: str) -> float:
+        total = 0.0
+        for j in range(width):
+            counts = collections.Counter(embed_in_frame(s, width, c, gap)[j] for s in members)
+            n = sum(counts.values())
+            total -= sum((v / n) * math.log(v / n) for v in counts.values() if v)
+        return total
+
+    def consensus(self, gap: str = "-") -> str:
+        """The zero-penalty sequence: each column's most frequent symbol, gaps stripped.
+
+        This is the centre of the ball the profile defines. ``score(consensus()) == 0``.
+        """
+        out = "".join(min(col, key=col.get) for col in self.penalties)
+        return out.replace(gap, "")
+
+    def score(self, seq: str, gap: str = "-") -> int:
+        """Penalty of ``seq`` in this island's frame; ``0`` on the consensus.
+
+        A sequence that does not fit the frame -- longer than ``width``, or shorter than ``c`` --
+        cannot be embedded and scores :data:`UNREACHABLE`. That is a rejection, not an error: it
+        must still count as a scored sequence when a cutoff is calibrated against a control.
+        """
+        if len(seq) > self.width or self.c > len(seq):
+            return UNREACHABLE
+        emb = embed_in_frame(seq, self.width, self.c, gap)
+        cap = UNREACHABLE // (self.width + 1)
+        return sum(self.penalties[j].get(ch, cap) for j, ch in enumerate(emb))
+
+    def score_batch(self, seqs: Iterable[str], gap: str = "-") -> list[int]:
+        """:meth:`score` for many sequences. Score the whole control this way, then hand the
+        result to :func:`seqtree.thetas_from_scores` for a calibrated cutoff."""
+        return [self.score(s, gap) for s in seqs]
+
+    def __repr__(self) -> str:
+        return f"IslandProfile(width={self.width}, c={self.c})"
 
 
 def deletion_variants(q: str, d: int) -> list[tuple[int, str]]:

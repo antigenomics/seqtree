@@ -12,6 +12,7 @@ import seqtree as st
 from seqtree.gapblock import (
     UNREACHABLE,
     GapBlockIndex,
+    IslandProfile,
     central_prior,
     deletion_variants,
     embed_in_frame,
@@ -554,3 +555,93 @@ def test_score_matrix_index_and_row_agree():
         sm.row(3)
     with pytest.raises(IndexError):
         sm[3, 0]
+
+
+# ---------------------------------------------------------------------------------------------
+# IslandProfile -- a PWM that is still a ball
+# ---------------------------------------------------------------------------------------------
+
+ISLAND = ["CASSLGQAYEQYF", "CASSLGQGYEQYF", "CASSPGQAYEQYF", "CASSLGQAYEQYF", "CASSLGKAYEQYF"]
+
+
+def test_profile_is_a_valid_ball():
+    """s >= 0 with s(centre) == 0. Without this the profile cannot flow through evalues()."""
+    p = IslandProfile.fit(ISLAND)
+    assert p.score(p.consensus()) == 0
+    for s in ISLAND:
+        assert p.score(s) >= 0
+    # a single-member island: the member is its own consensus
+    solo = IslandProfile.fit(["CASSLGQAYEQYF"])
+    assert solo.score("CASSLGQAYEQYF") == 0
+
+
+def test_profile_charges_more_for_a_rarer_residue():
+    members = ["CASSA", "CASSA", "CASSA", "CASSA", "CASSG"]
+    p = IslandProfile.fit(members)
+    assert p.score("CASSA") == 0                  # the consensus
+    assert p.score("CASSG") > 0                   # seen once
+    assert p.score("CASSW") > p.score("CASSG")    # never seen
+
+
+def test_profile_rejects_what_it_cannot_embed_without_erroring():
+    """An unrepresentable sequence must still be scored, or a control cutoff is miscalibrated."""
+    p = IslandProfile.fit(ISLAND, c=4)
+    assert p.width == 13 and p.c == 4
+    assert p.score("CASSLGQAYEQYFFFFF") == UNREACHABLE     # longer than the frame
+    assert p.score("CAS") == UNREACHABLE                   # shorter than c: no prefix to left-anchor
+    assert p.score("CASSLGQAYEQY") < UNREACHABLE           # one short: one gap column, embeddable
+
+
+def test_profile_score_never_reaches_the_sentinel_for_a_representable_sequence():
+    """Otherwise a real sequence would be indistinguishable from an unrepresentable one."""
+    p = IslandProfile.fit(ISLAND, lam=10 ** 9)
+    worst = "W" * p.width
+    assert 0 <= p.score(worst) < UNREACHABLE
+
+
+def test_profile_picks_the_frame_column_the_members_prefer():
+    """One member is short by one residue at a known column; entropy should find it."""
+    hub = "CASSLGQAYEQYF"
+    cut = 6
+    members = [hub] * 4 + [hub[:cut] + hub[cut + 1:]]
+    p = IslandProfile.fit(members)
+    assert p.c == cut
+    assert p.width == len(hub)
+    # and the deletion is then free: the gap column is where the short member wanted it
+    assert p.score(hub) == 0
+
+
+def test_profile_explicit_frame_column_is_honoured():
+    p = IslandProfile.fit(ISLAND, c=4)
+    assert p.c == 4
+    with pytest.raises(ValueError, match="outside"):
+        IslandProfile.fit(ISLAND, c=99)
+
+
+def test_profile_rejects_bad_arguments():
+    with pytest.raises(ValueError, match="empty"):
+        IslandProfile.fit([])
+    with pytest.raises(ValueError, match="lam"):
+        IslandProfile.fit(ISLAND, lam=-1)
+    with pytest.raises(ValueError, match="pseudocount"):
+        IslandProfile.fit(ISLAND, pseudocount=0)
+
+
+def test_profile_repr_names_its_frame():
+    p = IslandProfile.fit(ISLAND, c=4)
+    assert repr(p) == "IslandProfile(width=13, c=4)"
+
+
+def test_profile_score_batch_matches_score():
+    p = IslandProfile.fit(ISLAND)
+    seqs = ISLAND + ["CCCCCCCCCCCCC", "CASSLGQAYEQYFFF"]
+    assert p.score_batch(seqs) == [p.score(s) for s in seqs]
+
+
+def test_profile_scores_are_integers_so_the_evalue_inversion_stays_exact():
+    p = IslandProfile.fit(ISLAND)
+    scores = p.score_batch(ISLAND)
+    assert all(isinstance(s, int) for s in scores)
+    thetas = st.thetas_from_scores([scores], n_target=10, m_control=1000, e_target=1.0,
+                                   theta_max=UNREACHABLE)
+    assert len(thetas) == 1

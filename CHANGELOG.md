@@ -78,6 +78,32 @@ E-value.
   other junction aligners hardcode. Shipped for interoperability, not as a recommendation: at a
   matched false-positive rate on human TRB, candidate starts reach precision 0.156 against 0.414
   for a single hard-pinned centre.
+- **`gapblock.IslandProfile`** — a per-island position weight matrix whose column penalty is
+  measured against the column's own consensus, `pen(j, a) = round(lam·log(p_max_j / p_j(a)))`. A
+  textbook log-odds score is signed and therefore not a ball; this one is `>= 0`, zero on the
+  consensus, and flows through `thetas_from_scores` unchanged. The frame column defaults to the
+  entropy-optimal one, which is modal at `c = 6` on real islands — where crystal structures put
+  the block.
+
+  Whether it beats scoring against every member **depends entirely on the cutoff**, which moves
+  with `N`: the E-value's `k = floor(e_target·M/N)` is how many control neighbours the cutoff may
+  admit, so the FPR is `k/M`. Over 108 calibrated VDJdb islands of ≥10 members (human TRB, three
+  held-out splits, paired bootstrap over islands, 250k control negatives):
+
+  | regime | FPR | min-over-members | `IslandProfile` | difference [95% CI] |
+  |---|---|---|---|---|
+  | loose reference | 1% | **99.5%** | 99.1% | −0.40 [−1.09, +0.14] |
+  | per-epitope islands (`N`= group, median 88) | 0.0568% | 88.3% | **89.3%** | +0.93 [−0.80, +2.79] |
+  | repertoire annotation (`N`≈20k) | 0.0012% | 37.6% | **48.5%** | +10.90 [+7.69, +14.21] |
+
+  So: **no significant difference while building the islands**, a large one when using them to
+  annotate a repertoire (on islands ≥50 members, 9.8% vs 22.6%). At `N≈20k` and `e_target=0.05`,
+  `k=0` and `thetas_from_scores` returns `-1` — the rule of three certifies no `E` below
+  `3N/M = 0.236`, and that is the cutoff the third row uses.
+
+  It does **not** generalise: same-epitope junctions in a different island are recovered by
+  neither representation. Nor is it a compression — 1,176 B against 182 B of member strings,
+  break-even at 84 members.
 - **`threshold_for_evalue` / `thetas_from_scores`** — invert `Ê = (N/M)·n_C` into the score cutoff
   that achieves a target E, **per query**. Exact rather than a root-find, because scores are
   integers. Returns `-1` where `e_target < 3N/M`, i.e. where the control is too small to certify
