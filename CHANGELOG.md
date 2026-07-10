@@ -74,6 +74,12 @@ Numbers that constrain the API, all reproducible from `bench/` and the downstrea
   in components of ≥5 (**0.748**) than real same-epitope sequences do (**0.660**). Under per-query
   E-value edges at `E* = 0.05` the picture inverts: real 1.583 edges/node against control 0.022,
   and the control forms no component of size 3 at all.
+- **Constraining the block is what buys precision.** Compared at a *matched* false-positive rate —
+  each rung given the cutoff at which its own ball admits `E*` chance neighbours, since a freer rung
+  finds lower scores and a fixed budget would reward it for that — retrieval precision on the
+  length-different fraction of VDJdb same-epitope pairs is **0.65** for a hard central pin or a
+  central prior, and **0.31** when the score chooses freely among `L+1` placements *or* among five
+  plausible ones. Trying several positions and keeping the best score is worse than not trying.
 - **Performance.** 91% of `GapBlockIndex.search` time is the query-deletion-variant branch, 9% the
   9.8M-entry auxiliary indices. Netting the prior out of each variant's budget cuts that branch
   from ~15 sub-searches to 2.5. Variant dedup (7–10% of variants before pruning, fewer after) and
@@ -83,9 +89,18 @@ Numbers that constrain the API, all reproducible from `bench/` and the downstrea
 ### Docs
 
 - `skills/seqtree/SKILL.md` — public API surface, invariants, and the gotchas that have bitten.
+- `docs/gapblock.rst` — a worked guide: why one gap block, how to choose its position, why a
+  placement rule is a column frame, and why a fixed score cutoff is not a calibrated one.
 - README corrected: `seqtrie` is a full-width DP that ignores per-type caps, not a banded one, and
   `auto` does not choose between engines.
-- Test coverage: `gapblock.py`, `evalue.py` and `seeds.py` at **100%**; package total 88%.
+- `appendix/evalue.tex` gains §"The score model: one gap block, placed by a prior" (the appendix
+  derived a theory of balls without ever saying what the score was) and a remark inverting the
+  E-value into a per-query cutoff. The pMHC section is compacted from ~110 lines of prose to ~50,
+  deferring to the `mhcmatch` appendix, which specialises this one rather than repeating it. Its
+  empirical tables stay: they are this repo's own `bench/bench_mhc_guess.py` output.
+- Test coverage: `gapblock.py`, `evalue.py` and `seeds.py` at **100%**; package total 88%. A new
+  `tests/python/test_doc_coverage.py` fails the build if a public symbol is undocumented, missing
+  from `__all__`, or unreachable from any docs page.
 
 ## [0.2.0]
 
