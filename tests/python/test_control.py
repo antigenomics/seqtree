@@ -22,3 +22,22 @@ def test_unknown_control_raises():
 
     with pytest.raises(ValueError):
         seqtree.load_control(name="klingon_trb_aa", size=10)
+
+
+def test_sanitize_drops_symbols_outside_the_alphabet():
+    """Index.build rejects the whole set on the first bad symbol, so screening must precede it.
+    The upstream vdjtools tables mark out-of-frame rearrangements with '_'."""
+    import pytest
+
+    from seqtree.control import sanitize
+
+    kept, dropped = sanitize(["CASSF", "CA_SF", "", "CASSY"], "aa")
+    assert kept == ["CASSF", "CASSY"]
+    assert dropped == 2
+
+    kept, dropped = sanitize(["ACGT", "ACG_"], "nt")
+    assert kept == ["ACGT"] and dropped == 1
+
+    # X, Z, B and * are defined amino-acid symbols and must survive
+    kept, dropped = sanitize(["CASXF", "CASZF", "CASBF", "CASS*"], "aa")
+    assert len(kept) == 4 and dropped == 0
