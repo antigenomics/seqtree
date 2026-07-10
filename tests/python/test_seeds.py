@@ -93,8 +93,10 @@ def test_flank_seeds_are_useless_and_core_seeds_are_not():
     core = SeedIndex(ctrl, k=4, flank=4)
     M = len(ctrl)
 
-    # 'CASS' is the single most common N-terminal 4-mer.
-    assert nterm.count("CASS") / M > 0.6
+    # 'CASS' is the single most common N-terminal 4-mer. It was 68.1% while the bundled control
+    # was the abundance head of the repertoire; a uniform sample of unique clonotypes puts it at
+    # 56.5%. Both say the same thing -- an N-terminal seed selects half the repertoire.
+    assert nterm.count("CASS") / M > 0.55
     # ...whereas the most common central 4-mer is far rarer.
     top_core = max(core.postings, key=lambda w: len(core.postings[w]))
     assert core.count(top_core) / M < 0.05
@@ -102,7 +104,7 @@ def test_flank_seeds_are_useless_and_core_seeds_are_not():
 
 @pytest.mark.parametrize("k,lo,hi", [(4, 10.0, 100.0), (6, 0.0, 1.0)])
 def test_median_seed_evalue_crosses_one_at_k6(k, lo, hi):
-    """Occurrence-weighted median E_seed of a central k-mer, N = 1e5: 32.4 at k=4, 0.80 at
+    """Occurrence-weighted median E_seed of a central k-mer, N = 1e5: 20.4 at k=4, 0.40 at
     k=6. This is the quantitative form of 'the same 4 residues from the NDN region is
     sometimes hardly by chance'."""
     ctrl = _control()
