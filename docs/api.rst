@@ -43,3 +43,11 @@ Gap-block alignment
    :members:
    :undoc-members:
    :show-inheritance:
+
+Seed E-values
+-------------
+
+.. automodule:: seqtree.seeds
+   :members:
+   :undoc-members:
+   :show-inheritance:

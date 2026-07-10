@@ -24,17 +24,21 @@ from ._core import (
 )
 from .control import load_control
 from .evalue import evalues
-from . import gapblock, layout, pmhc
+from . import gapblock, layout, pmhc, seeds
 from .gapblock import GapBlockIndex, central_prior, gapblock_score
+from .seeds import SeedIndex, core_kmers
 from .pmhc import PMHCStore, find_mimics
 
 __all__ = [
     "gapblock",
     "layout",
     "pmhc",
+    "seeds",
     "GapBlockIndex",
     "gapblock_score",
     "central_prior",
+    "SeedIndex",
+    "core_kmers",
     "PMHCStore",
     "find_mimics",
     "Index",

@@ -381,6 +381,48 @@ Two thresholding regimes for a family of $|\mathcal{Q}|$ tested queries:
 \end{enumerate}
 \end{proposition}
 
+\begin{remark}[The \emph{within}-query seed family]\label{rem:seedfamily}
+Proposition~\ref{prop:multiple} corrects multiplicity \emph{across} queries. A second family
+arises \emph{within} a single query when significance is read off shared $k$-mer seeds rather
+than off the ball: a junction of length $L$ carries $L-2F-k+1$ overlapping central seeds
+$w_1,\dots,w_s$ (flank width $F$), and ``$q$ shares \emph{some} $w_j$ with $x$'' is a union of
+$s$ dependent events. For one \emph{pre-specified} seed the estimator is the ordinary
+\eqref{eq:Ehat} with the ball replaced by the seed's occurrence set,
+\begin{equation}\label{eq:eseed}
+  \widehat E_{\mathrm{seed}}(w) = \frac{N}{M}\, n_C(w), \qquad n_C(w)=\#\{x\in C: w\subseteq x\},
+\end{equation}
+and no conditioning correction is needed: under $H_0$ the target draw $x$ is independent of $q$,
+so $\Pzero(w\subseteq x \mid w\subseteq q)=\Pzero(w\subseteq x)$ --- the query's content is fixed,
+not a second random draw, and the probability must \emph{not} be squared.
+
+For the family, do not correct: \textbf{count the union}. The event
+$\bigcup_j\{w_j\subseteq x\}$ is a single measurable set, so
+$\widehat E_{\cup} = (N/M)\,\#\{x\in C:\exists j,\ w_j\subseteq x\}$ is exact, inherits
+Propositions~\ref{prop:linearity} and~\ref{prop:composition} verbatim, and absorbs the seed
+dependence with no constant. The Boole bound $\widehat E_\cup\le\sum_j \widehat E_{\mathrm{seed}}(w_j)$
+is admissible but unnecessary; empirically it is only $\approx 7\%$ loose at $k=5$, because
+overlapping string seeds gather nearly \emph{disjoint} background sets (only $7.2\%$ of gathered
+control sequences share $\ge 2$ of a query's seeds). Implemented in \texttt{seqtree.seeds}
+(\texttt{SeedIndex.evalue}, \texttt{union\_evalue}).
+
+Two cautions. (i) $n_C(w)$ counts control \emph{sequences containing} $w$, not occurrences.
+(ii) $\Pzero(w)$ cannot be substituted by a per-position or low-order Markov background: the
+residual $\mathrm{KL}(\Pdata\|\hat P)$ over central $k$-mers of the human TRB control is
+$0.63/1.65/3.86$ bits at $k=4/5/6$ even after a second-order fit, and \emph{grows} with $k$,
+because the templated D segment injects long germline runs. Seed significance must be counted.
+\end{remark}
+
+\begin{remark}[Seed weighting versus ball weighting]\label{rem:noduplicate}
+Proposition~\ref{prop:tfidf} already places self-information at the level of the whole ball.
+Seed self-information $-\log \Pzero(w)$ is the same object restricted to a sub-feature, so the
+two must not be applied on top of one another. In particular, a per-position weight profile fed
+to a \texttt{PositionalMatrix} shapes the ball's \emph{geometry} (which substitutions to tolerate
+where) and carries no evidence at all: the engine's score is a non-negative penalty with
+$\mathrm{pen}(a,a)=0$, so a positional weight multiplies mismatch cost only and a \emph{match}
+--- however surprising --- contributes exactly zero. All statistical evidence stays in the
+control-calibrated $\widehat E$ of \eqref{eq:Ehat} and \eqref{eq:eseed}.
+\end{remark}
+
 \begin{figure}[ht]\centering
   \includegraphics[width=\linewidth]{evalue_matrix.pdf}
   \caption{Control-calibrated significance across reference structure and search scope
