@@ -42,6 +42,18 @@ DEFAULTS = {
 
 
 def spec_for(cls: str, override: AnchorSpec | None = None) -> AnchorSpec:
+    """Resolve the anchor layout for a presentation class, honouring an explicit override.
+
+    Args:
+        cls: One of the keys of :data:`DEFAULTS` (``"mhc1"``, ``"mhc2"``, ``"cdr3"``).
+        override: Use this spec instead of the default when given.
+
+    Returns:
+        The :class:`AnchorSpec` to apply.
+
+    Raises:
+        ValueError: If ``cls`` is unknown and no override is supplied.
+    """
     if override is not None:
         return override
     if cls not in DEFAULTS:

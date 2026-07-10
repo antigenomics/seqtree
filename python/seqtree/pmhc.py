@@ -109,6 +109,7 @@ class PMHCStore:
         return sum(len(ci.epitopes) for ci in self._cls.values())
 
     def size(self, cls):
+        """Number of indexed epitopes for a presentation class (``"mhc1"`` / ``"mhc2"``)."""
         return len(self._cls[cls].epitopes)
 
     # -- search ---------------------------------------------------------------
@@ -175,6 +176,7 @@ class PMHCStore:
 
 
 def spec_has_anchors(spec):
+    """Does this layout pin any anchor positions? Class II specs do not."""
     return bool(spec.anchors)
 
 

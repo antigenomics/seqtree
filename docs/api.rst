@@ -57,3 +57,11 @@ Seed E-values
    :members:
    :undoc-members:
    :show-inheritance:
+
+Layout and anchors
+------------------
+
+.. automodule:: seqtree.layout
+   :members:
+   :undoc-members:
+   :show-inheritance:
