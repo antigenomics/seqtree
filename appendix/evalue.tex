@@ -400,15 +400,16 @@ $\bigcup_j\{w_j\subseteq x\}$ is a single measurable set, so
 $\widehat E_{\cup} = (N/M)\,\#\{x\in C:\exists j,\ w_j\subseteq x\}$ is exact, inherits
 Propositions~\ref{prop:linearity} and~\ref{prop:composition} verbatim, and absorbs the seed
 dependence with no constant. The Boole bound $\widehat E_\cup\le\sum_j \widehat E_{\mathrm{seed}}(w_j)$
-is admissible but unnecessary; empirically it is only $\approx 7\%$ loose at $k=5$, because
-overlapping string seeds gather nearly \emph{disjoint} background sets (only $7.2\%$ of gathered
-control sequences share $\ge 2$ of a query's seeds). Implemented in \texttt{seqtree.seeds}
+is admissible and mildly conservative: empirically it is $\approx 16\%$ loose at the median and
+$36\%$ in the mean at $k=5$, because overlapping string seeds gather largely disjoint background
+sets ($19.9\%$ of gathered control sequences share $\ge 2$ of a query's seeds). Prefer the exact
+union count when it is available. Implemented in \texttt{seqtree.seeds}
 (\texttt{SeedIndex.evalue}, \texttt{union\_evalue}).
 
 Two cautions. (i) $n_C(w)$ counts control \emph{sequences containing} $w$, not occurrences.
 (ii) $\Pzero(w)$ cannot be substituted by a per-position or low-order Markov background: the
 residual $\mathrm{KL}(\Pdata\|\hat P)$ over central $k$-mers of the human TRB control is
-$0.63/1.65/3.86$ bits at $k=4/5/6$ even after a second-order fit, and \emph{grows} with $k$,
+$0.43/1.60/4.48$ bits at $k=4/5/6$ even after a second-order fit, and \emph{grows} with $k$,
 because the templated D segment injects long germline runs. Seed significance must be counted.
 \end{remark}
 

@@ -61,7 +61,9 @@ def main():
                     if j < args.n:
                         order[j] = s
 
-    order.sort()                      # order carries no information; make the asset deterministic
+    # Shuffle, do not sort. load_control(size=k) and the examples take a PREFIX of this file, so
+    # the prefix must itself be a uniform sample. Sorting would make it an alphabetical one.
+    rng.shuffle(order)
     with gzip.open(args.out, "wt", encoding="utf-8") as out:
         out.write("\n".join(order) + "\n")
     print(f"wrote {len(order):,} unique productive CDR3aa (uniform over {n_seen:,}) to {args.out}")

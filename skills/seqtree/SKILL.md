@@ -143,7 +143,7 @@ SeedIndex(seqs, k=5, flank=4) / SeedIndex.from_index(index, k, flank)
 
 Seeds buy **precision, not recall**: a shared rare central k-mer is real evidence (≈4× enriched),
 but only ~0.5% of co-specific cross-island pairs share one. Never assume a shared k-mer is
-significant — a D-gene run like `LAGG` sits in 4,218/250,000 control sequences (`E_seed` = 1,687).
+significant — a D-gene run like `LAGG` sits in 3,471/250,000 control sequences (`E_seed` = 1,388).
 Count it in the control.
 
 ## Layout / pMHC — `seqtree.layout`, `seqtree.pmhc`

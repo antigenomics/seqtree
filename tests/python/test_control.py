@@ -55,3 +55,23 @@ def test_bundled_control_is_productive():
     kept, dropped = sanitize(seqs)
     assert dropped == 0, f"{dropped} non-productive sequences in the bundled control"
     assert len(kept) == 250_000
+
+
+def test_a_prefix_of_the_bundled_control_is_a_uniform_sample():
+    """load_control(size=k) takes bundled[:k], so the asset's ORDER is part of its contract.
+
+    It used to be abundance-sorted (a public-clone head). Sorting it alphabetically would have
+    been just as bad. gen_control.py shuffles with a fixed seed, so any prefix is representative.
+    """
+    import statistics as stt
+
+    from seqtree.control import _read_bundled
+
+    seqs = _read_bundled("human_trb_aa")
+    whole_cass = sum(s.startswith("CASS") for s in seqs) / len(seqs)
+    whole_len = stt.mean(map(len, seqs))
+    for k in (2_000, 20_000, 50_000):
+        pre = seqs[:k]
+        cass = sum(s.startswith("CASS") for s in pre) / k
+        assert abs(cass - whole_cass) < 0.03, f"prefix[:{k}] CASS share {cass:.3f} vs {whole_cass:.3f}"
+        assert abs(stt.mean(map(len, pre)) - whole_len) < 0.2

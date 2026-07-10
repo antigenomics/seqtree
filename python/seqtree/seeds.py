@@ -1,8 +1,8 @@
 """E-values for shared k-mer seeds in the variable core of an anchored loop.
 
 The germline flanks of a CDR3 junction carry almost no evidence: an exact N-terminal
-4-mer is shared by 46.9% of a 250k human TRB control repertoire (``CASS`` alone by 68.1%),
-and a C-terminal 4-mer by 18.5%. A *central* 4-mer is shared by 0.112% -- about 420x more
+4-mer is shared by 31.0% of the 250k human TRB control repertoire (``CASS`` alone by 56.5%),
+and a C-terminal 4-mer by 14.1%. A *central* 4-mer is shared by 0.080% -- about 386x more
 selective. Same four residues, ~2e4-fold different evidence.
 
 So the significance of a shared seed has to be **computed, not assumed**. For a seed ``w``
@@ -14,13 +14,13 @@ with the query is
 where ``n_C(w)`` counts *control sequences containing* ``w`` and ``M = |C|``. Under the null
 the target draw is independent of the query, so conditioning on "the query contains ``w``"
 is vacuous -- do not square the probability. Occurrence-weighted over the bundled control
-with ``N = 1e5``, the median ``E_seed`` of a central k-mer is 32.4 (k=4), 3.2 (k=5), 0.80
-(k=6), 0.40 (k=7). A *typical* shared central 4-mer is therefore not significant, but 4.9%
-of them are; the median crosses ``E_seed < 1`` at k=6.
+with ``N = 1e5``, the median ``E_seed`` of a central k-mer is 20.8 (k=4), 2.0 (k=5), 0.40
+(k=6). A *typical* shared central 4-mer is therefore not significant, but 4.9% of them are;
+the median crosses ``E_seed < 1`` at k=6.
 
 This cannot be modelled. The residual KL divergence of the empirical central-k-mer
-distribution from a fitted background is 1.45 / 2.82 / 5.45 bits (independent per-position),
-0.85 / 1.98 / 4.33 (Markov-1) and 0.63 / 1.65 / 3.86 (Markov-2) at k = 4 / 5 / 6 -- growing
+distribution from a fitted background is 0.85 / 2.28 / 5.46 bits (independent per-position),
+0.49 / 1.77 / 4.79 (Markov-1) and 0.43 / 1.60 / 4.48 (Markov-2) at k = 4 / 5 / 6 -- growing
 with k, because D-gene germline runs (``GGG``, ``LAGG``, ``SGGG``) correlate. Count directly.
 
 **Scope.** Seeds buy *precision*, not recall. Among same-epitope VDJdb pairs that lie in
