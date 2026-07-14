@@ -25,11 +25,11 @@ CTX = mp.get_context("spawn")
 
 AA = "ACDEFGHIKLMNPQRSTVWY"
 
-#: The payload has to be big enough to keep the write window open. A few hundred short sequences
-#: serialize in well under a millisecond, and a reader will essentially never land inside that --
+#: The payload has to be big enough to keep the *write* window open. A few hundred short sequences
+#: serialize in well under a millisecond and a reader will essentially never land inside that --
 #: an earlier version of this file used 400 refs and passed happily against the *broken* code. At
-#: ~180k refs the index is tens of MB and takes ~50 ms to write, which is the real window a
-#: cold-cache fan-out races against.
+#: ~180k refs the index is tens of MB and takes ~50 ms to write, which is the window a cold-cache
+#: fan-out actually races against.
 N_REFS = 180_000
 
 
@@ -41,10 +41,24 @@ def _refs():
     return list(dict.fromkeys(out))
 
 
-def _save(path):
-    """Serialize a fresh index into `path` (the writer)."""
-    idx = seqtree.Index.build(_refs(), "aa")
-    idx.save(path)
+@pytest.fixture(scope="session")
+def big_index(tmp_path_factory):
+    """A large index on disk, built exactly once for the whole session.
+
+    Only ``save`` is under test here, so there is no reason for every spawned worker to *rebuild*
+    the payload -- that was the entire cost of this file (~9 s of a 25 s suite, on every core).
+    Workers now ``load`` this and re-``save`` it, which costs milliseconds and exercises precisely
+    the code path that was broken.
+    """
+    path = tmp_path_factory.mktemp("payload") / "big.sqtree"
+    seqtree.Index.build(_refs(), "aa").save(str(path))
+    return str(path), len(_refs())
+
+
+def _copy_save(args):
+    """The writer: load the prebuilt index, then serialize it to `path`."""
+    src, path = args
+    seqtree.Index.load(src).save(path)
     return "wrote"
 
 
@@ -69,20 +83,26 @@ def _load_control(args):
         return ("fail", f"{type(e).__name__}: {e}")
 
 
-def test_a_reader_never_observes_a_half_written_index(tmp_path):
-    """The regression. A reader racing a writer sees the complete file or no file, never a stub."""
+def test_a_reader_never_observes_a_half_written_index(tmp_path, big_index):
+    """The regression. A reader racing a writer sees the complete file or no file, never a stub.
+
+    Five rounds, one pool: against the pre-fix binary every single round tore, so this is not a
+    flaky-race hunt -- one round would very likely do. The pool is reused because spawning a fresh
+    interpreter per round cost more than the test.
+    """
+    src, n_refs = big_index
     path = str(tmp_path / "idx.sqtree")
-    for _ in range(5):
-        if os.path.exists(path):
-            os.remove(path)
-        with CTX.Pool(2) as pool:
+    with CTX.Pool(2) as pool:
+        for _ in range(5):
+            if os.path.exists(path):
+                os.remove(path)
             reader = pool.apply_async(_poll_then_load, (path,))
-            writer = pool.apply_async(_save, (path,))
+            writer = pool.apply_async(_copy_save, ((src, path),))
             writer.get(timeout=60)
             status, payload = reader.get(timeout=60)
-        assert status != "torn", f"reader observed a partially written index: {payload}"
-        if status == "ok":
-            assert payload == len(_refs())
+            assert status != "torn", f"reader observed a partially written index: {payload}"
+            if status == "ok":
+                assert payload == n_refs
 
 
 def test_save_leaves_no_temporary_behind(tmp_path):
@@ -102,18 +122,23 @@ def test_a_failed_save_leaves_no_temporary_behind(tmp_path):
     assert list(tmp_path.iterdir()) == []
 
 
-def test_concurrent_writers_leave_one_valid_index(tmp_path):
+def test_concurrent_writers_leave_one_valid_index(tmp_path, big_index):
     """Last writer wins, and what lands on disk is always a complete, loadable index."""
+    src, n_refs = big_index
     path = str(tmp_path / "idx.sqtree")
-    with CTX.Pool(6) as pool:
-        assert pool.map(_save, [path] * 6) == ["wrote"] * 6
-    assert len(seqtree.Index.load(path)) == len(_refs())
+    with CTX.Pool(4) as pool:
+        assert pool.map(_copy_save, [(src, path)] * 4) == ["wrote"] * 4
+    assert len(seqtree.Index.load(path)) == n_refs
     assert [f.name for f in tmp_path.iterdir()] == ["idx.sqtree"]
 
 
 def test_cold_cache_fanout_through_load_control(tmp_path):
-    """The end-to-end shape: staggered workers, one empty cache dir, the real 250k control."""
-    n = 8
+    """The end-to-end shape: staggered workers, one empty cache dir, the real 250k control.
+
+    This one genuinely has to build the control -- that is the thing being raced -- so it costs a
+    couple of seconds. It is the only test here that does.
+    """
+    n = 4
     args = [(str(tmp_path), i * 0.05) for i in range(n)]
     with CTX.Pool(n) as pool:
         results = pool.map(_load_control, args)
@@ -133,14 +158,15 @@ def test_a_corrupt_cache_is_rebuilt_rather_than_raised(tmp_path):
     """
     from seqtree import control
 
-    cache = tmp_path / control._cache_key("human_trb_aa", None, "aa", 0)
+    n = 5_000  # a subset: the cache logic is identical at any size, and the full control is slow
+    cache = tmp_path / control._cache_key("human_trb_aa", n, "aa", 0)
     cache.write_bytes(b"SQTR" + b"\x00" * 32)  # right magic, garbage body
     with pytest.raises(Exception):  # noqa: B017 -- it really is unloadable
         seqtree.Index.load(str(cache))
 
-    idx = seqtree.load_control("human_trb_aa", cache_dir=str(tmp_path))
-    assert len(idx) == 250_000
-    assert len(seqtree.Index.load(str(cache))) == 250_000  # and the cache was rewritten in place
+    idx = seqtree.load_control("human_trb_aa", size=n, cache_dir=str(tmp_path))
+    assert len(idx) == n
+    assert len(seqtree.Index.load(str(cache))) == n  # and the cache was rewritten in place
 
 
 def test_the_lock_is_optional_and_correctness_does_not_depend_on_it(monkeypatch):

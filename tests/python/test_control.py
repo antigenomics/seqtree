@@ -168,12 +168,13 @@ def test_a_superseded_cache_is_not_served_and_is_cleaned_up(tmp_path):
     """A pre-fingerprint cache from an older seqtree must be ignored, then removed."""
     import seqtree.control as control
 
-    legacy = tmp_path / "control_human_trb_aa_bundled.sqtree"
+    n = 5_000  # a subset: the cache logic is identical at any size, and the full control is slow
+    legacy = tmp_path / f"control_human_trb_aa_{n}.sqtree"          # the pre-0.3.1 filename
     seqtree.Index.build(["CASSLGQAYEQYF"], "aa").save(str(legacy))  # stand-in for a 0.2.0 cache
     assert legacy.exists()
 
-    idx = seqtree.load_control("human_trb_aa", cache_dir=str(tmp_path))
-    assert len(idx) == 250_000, "the stale cache was served instead of the real control"
+    idx = seqtree.load_control("human_trb_aa", size=n, cache_dir=str(tmp_path))
+    assert len(idx) == n, "the stale cache was served instead of the real control"
     assert not legacy.exists(), "the superseded cache was left behind"
     assert ([p.name for p in tmp_path.iterdir() if p.suffix == ".sqtree"]
-            == [control._cache_key("human_trb_aa", None, "aa", 0)])
+            == [control._cache_key("human_trb_aa", n, "aa", 0)])
