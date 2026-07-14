@@ -64,11 +64,12 @@ std::string alphabet_symbols(Alphabet a) {
 
 // Built-in matrix names. "identity" is the unit matrix (any alphabet); the rest are
 // amino-acid only. Keep this list in sync with the SubstitutionMatrix factories.
-constexpr const char* kMatrixNames = "'identity', 'BLOSUM62', 'PAM250', 'PAM100', 'structural'";
+constexpr const char* kMatrixNames =
+    "'identity', 'BLOSUM62', 'BLOSUM45', 'BLOSUM80', 'PAM250', 'PAM100', 'structural'";
 
 bool is_matrix_name(const std::string& l) {
-    return l.empty() || l == "identity" || l == "blosum62" || l == "pam250"
-        || l == "pam100" || l == "structural";
+    return l.empty() || l == "identity" || l == "blosum62" || l == "blosum45"
+        || l == "blosum80" || l == "pam250" || l == "pam100" || l == "structural";
 }
 
 SubstitutionMatrix named_matrix(const std::string& l, Alphabet a) {
@@ -76,6 +77,8 @@ SubstitutionMatrix named_matrix(const std::string& l, Alphabet a) {
     if (a != Alphabet::AminoAcid)
         throw py::value_error(l + " requires the amino-acid alphabet");
     if (l == "blosum62") return SubstitutionMatrix::blosum62();
+    if (l == "blosum45") return SubstitutionMatrix::blosum45();
+    if (l == "blosum80") return SubstitutionMatrix::blosum80();
     if (l == "pam250") return SubstitutionMatrix::pam250();
     if (l == "pam100") return SubstitutionMatrix::pam100();
     return SubstitutionMatrix::structural();  // l == "structural"
@@ -205,6 +208,13 @@ struct ScoreMatrix {
     size_t rows = 0, cols = 0;
 };
 
+AlignMode parse_align_mode(const std::string& m) {
+    std::string l = lower(m);
+    if (l == "global" || l == "nw" || l == "needleman-wunsch") return AlignMode::Global;
+    if (l == "local" || l == "sw" || l == "smith-waterman") return AlignMode::Local;
+    throw py::value_error("unknown mode '" + m + "' (use 'global' or 'local')");
+}
+
 ScoreMatrix py_gapblock_matrix(const std::vector<std::string>& queries,
                                const std::vector<std::string>& refs, const std::string& alphabet,
                                const std::optional<SubstitutionMatrix>& matrix, int32_t gap_open,
@@ -234,6 +244,8 @@ PYBIND11_MODULE(_core, m) {
                                    "whose row/column order matches ``amino_acids()`` (or "
                                    "``alphabet_symbols(alphabet)``).")
         .def_static("blosum62", &SubstitutionMatrix::blosum62)
+        .def_static("blosum45", &SubstitutionMatrix::blosum45)
+        .def_static("blosum80", &SubstitutionMatrix::blosum80)
         .def_static("pam250", &SubstitutionMatrix::pam250)
         .def_static("pam100", &SubstitutionMatrix::pam100)
         .def_static("structural", &SubstitutionMatrix::structural)
@@ -257,6 +269,20 @@ PYBIND11_MODULE(_core, m) {
             "s[a,a] + s[b,b] - 2*s[a,b] (clamped at 0). Row/column order must match the "
             "target alphabet's symbol order (see ``amino_acids()``).")
         .def("size", &SubstitutionMatrix::size)
+        .def(
+            "similarity",
+            [](const SubstitutionMatrix& s, const std::string& a, const std::string& b) {
+                if (a.size() != 1 || b.size() != 1)
+                    throw py::value_error("similarity() takes single characters");
+                Codec c(Alphabet::AminoAcid);
+                uint8_t ca = c.encode(a[0]), cb = c.encode(b[0]);
+                if (ca == Codec::kInvalid || cb == Codec::kInvalid)
+                    throw py::value_error("symbol not in the amino-acid alphabet");
+                return s.similarity(ca, cb);
+            },
+            py::arg("a"), py::arg("b"),
+            "Raw log-odds similarity (signed). penalty() is the non-negative Gram "
+            "transform of this; the transform is lossy, so both are kept.")
         .def("scale", &SubstitutionMatrix::scale,
              "Median penalty over all mismatched symbol pairs -- this matrix's natural unit. "
              "Gap costs must be on this scale: BLOSUM62 has scale() == 14, so the default "
@@ -466,6 +492,75 @@ PYBIND11_MODULE(_core, m) {
         .def("__repr__", [](const ScoreMatrix& s) {
             return "ScoreMatrix(" + std::to_string(s.rows) + ", " + std::to_string(s.cols) + ")";
         });
+
+    m.def(
+        "align_score",
+        [](const std::string& q, const std::string& r, const SubstitutionMatrix& mat,
+           const std::string& mode, int32_t gap_open, int32_t gap_extend,
+           const std::string& alphabet) {
+            return align_score(q, r, mat, parse_alphabet(alphabet), parse_align_mode(mode),
+                               gap_open, gap_extend);
+        },
+        py::arg("query"), py::arg("ref"), py::arg("matrix"), py::arg("mode") = "global",
+        py::arg("gap_open") = 11, py::arg("gap_extend") = 1, py::arg("alphabet") = "aa",
+        "Optimal similarity score. 'global' is Needleman-Wunsch, 'local' Smith-Waterman; "
+        "gap_open == gap_extend gives linear gaps. Gap costs are positive magnitudes.");
+
+    m.def(
+        "align_pair",
+        [](const std::string& q, const std::string& r, const SubstitutionMatrix& mat,
+           const std::string& mode, int32_t gap_open, int32_t gap_extend,
+           const std::string& alphabet) {
+            return align_pair(q, r, mat, parse_alphabet(alphabet), parse_align_mode(mode),
+                              gap_open, gap_extend);
+        },
+        py::arg("query"), py::arg("ref"), py::arg("matrix"), py::arg("mode") = "global",
+        py::arg("gap_open") = 11, py::arg("gap_extend") = 1, py::arg("alphabet") = "aa",
+        "As align_score, but also returns the aligned strings and ops (Alignment.score is the "
+        "similarity, not a penalty).");
+
+    m.def(
+        "align_score_matrix",
+        [](const std::vector<std::string>& q, const std::vector<std::string>& r,
+           const SubstitutionMatrix& mat, const std::string& mode, int32_t gap_open,
+           int32_t gap_extend, const std::string& alphabet, int threads) {
+            Alphabet a = parse_alphabet(alphabet);
+            AlignMode md = parse_align_mode(mode);
+            ScoreMatrix out;
+            out.rows = q.size();
+            out.cols = r.size();
+            {
+                py::gil_scoped_release release;
+                out.data = align_score_matrix(q, r, mat, a, md, gap_open, gap_extend, threads);
+            }
+            return out;
+        },
+        py::arg("queries"), py::arg("refs"), py::arg("matrix"), py::arg("mode") = "global",
+        py::arg("gap_open") = 11, py::arg("gap_extend") = 1, py::arg("alphabet") = "aa",
+        py::arg("threads") = 0,
+        "Dense (n_queries, n_refs) similarity matrix, GIL released.");
+
+    m.def(
+        "align_dist_matrix",
+        [](const std::vector<std::string>& q, const std::vector<std::string>& r,
+           const SubstitutionMatrix& mat, const std::string& mode, int32_t gap_open,
+           int32_t gap_extend, const std::string& alphabet, int threads) {
+            Alphabet a = parse_alphabet(alphabet);
+            AlignMode md = parse_align_mode(mode);
+            ScoreMatrix out;
+            out.rows = q.size();
+            out.cols = r.size();
+            {
+                py::gil_scoped_release release;
+                out.data = align_dist_matrix(q, r, mat, a, md, gap_open, gap_extend, threads);
+            }
+            return out;
+        },
+        py::arg("queries"), py::arg("refs"), py::arg("matrix"), py::arg("mode") = "global",
+        py::arg("gap_open") = 11, py::arg("gap_extend") = 1, py::arg("alphabet") = "aa",
+        py::arg("threads") = 0,
+        "Dense (n_queries, n_refs) distance matrix d = s(a,a) + s(b,b) - 2*s(a,b), the "
+        "sequence-level Gram transform of the alignment scores. Non-negative, zero on identity.");
 
     m.def("gapblock_matrix", &py_gapblock_matrix, py::arg("queries"), py::arg("refs"),
           py::arg("alphabet") = "aa", py::arg("matrix") = std::nullopt, py::arg("gap_open") = 1,

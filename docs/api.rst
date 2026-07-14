@@ -67,6 +67,14 @@ Functions
 
 .. autofunction:: thetas_from_scores
 
+Pairwise alignment (Needleman-Wunsch / Smith-Waterman)
+------------------------------------------------------
+
+.. automodule:: seqtree.pairwise
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
 Gap-block alignment
 -------------------
 

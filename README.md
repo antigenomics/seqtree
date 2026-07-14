@@ -26,7 +26,7 @@ to their own payloads (V gene, MHC, counts) and filter.
 
 Beyond search, seqtree ships:
 
-- **Substitution matrices** — built-in `identity`, `BLOSUM62`, `PAM250`, `PAM100`, and `structural`
+- **Substitution matrices** — built-in `identity`, `BLOSUM45`, `BLOSUM62`, `BLOSUM80`, `PAM250`, `PAM100`, and `structural`
   — a **Miyazawa–Jernigan interaction-strength** matrix: each residue's strength `q(a)=mean_b e(a,b)`
   is read off the MJ contact potential, so substitutions between residues of like interaction strength
   are cheap. It separates strong (hydrophobic `F W C L Y M I V`) from weak (polar/charged
@@ -48,6 +48,13 @@ Beyond search, seqtree ships:
   sequence score alone cannot. `score_matrix` scores a whole query set against a whole reference
   set in one GIL-released C++ call (**532 M pairs/s** on 16 cores; `numpy.asarray` wraps the
   result with no copy), the shape a prototype-distance embedding needs.
+- **Pairwise alignment without BioPython** — `seqtree.pairwise` is Needleman–Wunsch
+  (`mode="global"`) and Smith–Waterman (`mode="local"`) with affine or linear gaps, on the raw
+  log-odds scale. It is a **drop-in for `Bio.Align.PairwiseAligner`** — verified against it as an
+  oracle across three matrices, ten gap/mode settings and sixty sequence shapes with **zero
+  disagreements** — and **65–87× faster**, since there is no Python in the per-pair loop.
+  `dist_matrix` gives `d = s(a,a) + s(b,b) − 2·s(a,b)` directly. BioPython is a *test-only*
+  dependency; seqtree still needs nothing at runtime.
 - **Island profiles** — `IslandProfile.fit` builds a position weight matrix over a set of
   frame-aligned junctions (an *island*) and scores a query column by column against the island
   consensus, as a non-negative penalty that flows through `threshold_for_evalue` unchanged. At a
@@ -131,6 +138,15 @@ distances = np.asarray(sm)                          # (len(clonotypes), len(prot
 # a position weight matrix over an island, still a non-negative penalty (feeds threshold_for_evalue)
 profile = IslandProfile.fit(island_members)
 profile.score("CASSLGQAYEQYF")                      # 0 on the consensus, > 0 for deviations
+
+# ordinary pairwise alignment -- Needleman-Wunsch / Smith-Waterman, no BioPython
+from seqtree.pairwise import align, score, dist_matrix
+score("CASSLGQAYEQYF", "CASSPGQAYEQF", mat)                    # global, BLAST defaults (11/1)
+score("WWWAAAWWW", "KKKAAAKKK", mat, mode="local")             # Smith-Waterman
+score("AAA", "AAAAA", mat, gap_open=5, gap_extend=5)           # linear gaps: open == extend
+aln = align("CASSLGQAYEQYF", "CASSPGQAYEQF", mat)              # + aligned strings and ops
+
+d = np.asarray(dist_matrix(v_genes, v_genes, mat, threads=0))  # s(a,a)+s(b,b)-2s(a,b), zero diagonal
 ```
 
 ## Tests
