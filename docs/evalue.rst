@@ -59,6 +59,21 @@ Usage
 unique clonotypes. Meaningful E-values need a control at least as large as the target — see the
 precision bound below.
 
+.. note::
+
+   **Safe to call from many processes at once, on a cold cache.** The built index is cached under
+   ``~/.cache/seqtree``, and ``Index.save`` writes it through a temporary file which is then renamed
+   into place — an atomic operation on the same filesystem. A worker that arrives while another is
+   still writing therefore sees either no cache or a complete one, never a half-written index.
+
+   That matters on *first* use in any multi-process fan-out — pytest-xdist, a Snakemake or Nextflow
+   rule, a ``multiprocessing`` pool — all sharing one ``~/.cache``. Once the cache is warm it is
+   read-only and was never at risk. If ``filelock`` is installed (it arrives with
+   ``huggingface_hub``) the build is additionally serialized, so one worker builds and the rest
+   wait and load rather than all N rebuilding the same index; correctness does not depend on it.
+
+   A cache that is corrupt, truncated, or written by an older seqtree is silently rebuilt.
+
 Theory
 ------
 

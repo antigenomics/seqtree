@@ -71,6 +71,10 @@ threshold_for_evalue(target, control, queries, params, e_target, threads=0,
 thetas_from_scores(control_scores, n_target, m_control, e_target, theta_max,
                    *, exclude_exact=False) -> list[int]    # the pure-data core
 load_control(name="human_trb_aa", size=None) -> Index      # 250k bundled; larger via HuggingFace
+    # Cold-cache safe under a multi-process fan-out (xdist / Snakemake / Nextflow): Index.save
+    # writes a temp file and renames it into place, so a reader never sees a partial index.
+    # A corrupt/stale cache is rebuilt, not raised. filelock (optional) additionally dedupes
+    # the build work; correctness does not depend on it.
 ```
 
 **A fixed score cutoff is not a calibrated cutoff.** The control is dense near germline and

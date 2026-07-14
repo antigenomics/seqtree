@@ -1,4 +1,5 @@
 #include "seqtree/seqtree.hpp"
+#include "atomic_write.hpp"
 #include "trie.hpp"
 
 #include <algorithm>
@@ -36,23 +37,24 @@ void read_vec(std::istream& is, std::vector<T>& v) {
 }  // namespace
 
 void Index::save(const std::string& path) const {
-    std::ofstream os(path, std::ios::binary);
-    if (!os) throw std::runtime_error("seqtree: cannot open '" + path + "' for writing");
-    const Trie& t = *trie_;
-    os.write(kMagic, 4);
-    os.write(reinterpret_cast<const char*>(&kVersion), sizeof kVersion);
-    uint8_t alpha = static_cast<uint8_t>(t.codec.alphabet());
-    os.write(reinterpret_cast<const char*>(&alpha), 1);
-    os.write(reinterpret_cast<const char*>(&t.max_depth), sizeof(uint32_t));
-    write_vec(os, t.nodes);
-    write_vec(os, t.edge_code);
-    write_vec(os, t.edge_child);
-    write_vec(os, t.ref_ids);
-    write_vec(os, t.str_off);
-    uint64_t sd = t.str_data.size();
-    os.write(reinterpret_cast<const char*>(&sd), sizeof sd);
-    if (sd) os.write(t.str_data.data(), std::streamsize(sd));
-    if (!os) throw std::runtime_error("seqtree: write failed for '" + path + "'");
+    // Written to a temporary and renamed into place, so a concurrent reader never sees a
+    // half-written index -- see atomic_write.hpp.
+    detail::atomic_write(path, [this](std::ostream& os) {
+        const Trie& t = *trie_;
+        os.write(kMagic, 4);
+        os.write(reinterpret_cast<const char*>(&kVersion), sizeof kVersion);
+        uint8_t alpha = static_cast<uint8_t>(t.codec.alphabet());
+        os.write(reinterpret_cast<const char*>(&alpha), 1);
+        os.write(reinterpret_cast<const char*>(&t.max_depth), sizeof(uint32_t));
+        write_vec(os, t.nodes);
+        write_vec(os, t.edge_code);
+        write_vec(os, t.edge_child);
+        write_vec(os, t.ref_ids);
+        write_vec(os, t.str_off);
+        uint64_t sd = t.str_data.size();
+        os.write(reinterpret_cast<const char*>(&sd), sizeof sd);
+        if (sd) os.write(t.str_data.data(), std::streamsize(sd));
+    });
 }
 
 std::unique_ptr<Index> Index::load(const std::string& path) {
