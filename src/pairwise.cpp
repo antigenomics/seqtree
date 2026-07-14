@@ -19,6 +19,7 @@
 #include <atomic>
 #include <cstdint>
 #include <limits>
+#include <mutex>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -36,10 +37,14 @@ using Score = int64_t;
 constexpr Score kNegInf = std::numeric_limits<Score>::min() / 4;
 
 // Alignment::score and ScoreMatrix are int32. Refuse rather than truncate.
-int32_t narrow(Score v) {
+// `is_dist` only changes the message: d = s(a,a) + s(b,b) - 2*s(a,b) roughly doubles the
+// magnitude, so the distance can overflow where the score it is built from did not.
+int32_t narrow(Score v, bool is_dist = false) {
     if (v < std::numeric_limits<int32_t>::min() || v > std::numeric_limits<int32_t>::max())
-        throw std::overflow_error("seqtree: alignment score does not fit in 32 bits -- the gap "
-                                  "costs are absurdly large for these sequences");
+        throw std::overflow_error(std::string("seqtree: the alignment ") +
+                                  (is_dist ? "distance" : "score") +
+                                  " does not fit in 32 bits -- the gap costs are absurdly large "
+                                  "for these sequences");
     return int32_t(v);
 }
 
@@ -294,16 +299,29 @@ std::vector<int32_t> matrix_impl(const std::vector<std::string>& queries,
         threads > 0 ? unsigned(threads) : std::max(1u, std::thread::hardware_concurrency());
     nt = std::min<unsigned>(nt, std::max<size_t>(1, N));
 
+    // narrow() can throw, and an exception that escapes a std::thread entry function calls
+    // std::terminate -- which killed the whole interpreter with SIGABRT, uncatchable from Python,
+    // where the scalar path raised a clean OverflowError. Catch in the worker, rethrow after the
+    // join. (Same plumbing as Index::search_batch.)
     std::atomic<size_t> next{0};
+    std::exception_ptr err;
+    std::mutex emu;
+
     auto worker = [&] {
         for (;;) {
             const size_t i = next.fetch_add(1);
             if (i >= N) break;
-            int32_t* row = out.data() + i * K;
-            for (size_t k = 0; k < K; ++k) {
-                const Score s = score_encoded(qc[i].data(), qc[i].size(), rc[k].data(),
-                                              rc[k].size(), mat, mode, go, ge);
-                row[k] = narrow(dist ? (q_self[i] + r_self[k] - 2 * s) : s);
+            try {
+                int32_t* row = out.data() + i * K;
+                for (size_t k = 0; k < K; ++k) {
+                    const Score s = score_encoded(qc[i].data(), qc[i].size(), rc[k].data(),
+                                                  rc[k].size(), mat, mode, go, ge);
+                    row[k] = narrow(dist ? (q_self[i] + r_self[k] - 2 * s) : s, dist);
+                }
+            } catch (...) {
+                std::lock_guard<std::mutex> lk(emu);
+                if (!err) err = std::current_exception();
+                return;
             }
         }
     };
@@ -311,6 +329,7 @@ std::vector<int32_t> matrix_impl(const std::vector<std::string>& queries,
     std::vector<std::thread> pool;
     for (unsigned t = 0; t < nt; ++t) pool.emplace_back(worker);
     for (auto& th : pool) th.join();
+    if (err) std::rethrow_exception(err);
     return out;
 }
 

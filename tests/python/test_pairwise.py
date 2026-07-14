@@ -334,3 +334,46 @@ def test_bad_arguments_raise():
         score("AA", "AA", m, mode="semiglobal")
     with pytest.raises(ValueError, match="alphabet|symbol"):
         score("AA#", "AA", m)
+
+
+# ---------------------------------------------------------------------------------------------
+# Two crashes found by an adversarial audit, both of them regressions from the overflow fix
+# ---------------------------------------------------------------------------------------------
+
+@pytest.mark.parametrize("threads", [1, 0, 4])
+def test_an_overflow_in_a_worker_raises_instead_of_killing_the_process(threads):
+    """The batch paths run on std::thread. An exception escaping a thread entry function calls
+    std::terminate -- so the int64 narrowing guard, which raises cleanly on the scalar path, was
+    aborting the whole interpreter with SIGABRT. Uncatchable, no traceback, all in-process work
+    lost. A library must never terminate its host."""
+    m = MATRICES["BLOSUM62"]
+    with pytest.raises(OverflowError):
+        score_matrix(["A" * 100], ["C"], m, gap_open=10 ** 8, gap_extend=10 ** 8, threads=threads)
+    with pytest.raises(OverflowError):
+        dist_matrix(["A" * 100], ["C"], m, gap_open=10 ** 8, gap_extend=10 ** 8, threads=threads)
+
+
+def test_the_overflow_message_names_the_quantity_that_actually_overflowed():
+    """d = s(a,a) + s(b,b) - 2 s(a,b) roughly doubles the magnitude, so the distance can overflow
+    where the score it is built from did not. Saying 'score' there is a lie."""
+    m = MATRICES["BLOSUM62"]
+    with pytest.raises(OverflowError, match="distance"):
+        dist_matrix(["AAA"], ["C"], m, gap_open=2 ** 31 - 1, gap_extend=2 ** 31 - 1)
+
+
+def test_similarity_is_bounds_checked_like_penalty():
+    """similarity() indexed a 24-symbol amino-acid grid without checking the matrix's real size,
+    so on anything smaller -- unit(4) for nucleotides, say -- it read off the end of the heap and
+    returned plausible-looking garbage. penalty() has always checked."""
+    small = seqtree.SubstitutionMatrix.unit(4)
+    assert small.size() == 4
+    for residue in ("C", "G", "T"):                 # indices 4, 7, 16 in the AA order
+        with pytest.raises(ValueError, match="out of range"):
+            small.similarity(residue, residue)
+        with pytest.raises(ValueError, match="out of range"):
+            small.penalty(residue, residue)
+
+    m = MATRICES["BLOSUM62"]                        # the full alphabet still works
+    assert (m.similarity("C", "C"), m.similarity("W", "W")) == (9, 11)
+    with pytest.raises(ValueError):
+        m.similarity("#", "A")

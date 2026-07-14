@@ -113,8 +113,13 @@ Alignment Index::align(std::string_view query, uint32_t ref_id, const SearchPara
         throw std::invalid_argument("seqtree: gap_open and gap_extend must be >= 0");
 
     const int32_t go = p.gap_open, ge = p.gap_extend;
+    // Compare through the codec, never raw chars. The codec is case-insensitive, so 'a' and 'A'
+    // are the SAME residue -- and search() has always treated them that way. align() did not:
+    // unit cost called them a mismatch (penalty 1) while the matrix path called them identical
+    // (penalty 0), so the two modes disagreed, and the ops string labelled them 'S'.
+    auto same = [&](char a, char b) { return cod.encode(a) == cod.encode(b); };
     auto sub_pen = [&](char a, char b) -> int32_t {
-        if (unit) return a == b ? 0 : 1;
+        if (unit) return same(a, b) ? 0 : 1;
         return p.matrix->penalty(cod.encode(a), cod.encode(b));
     };
 
@@ -157,7 +162,7 @@ Alignment Index::align(std::string_view query, uint32_t ref_id, const SearchPara
         if (st == 0) {  // M: consumed one query and one ref char
             char q = query[i - 1], r = ref[j - 1];
             al.aligned_query += q; al.aligned_ref += r;
-            al.ops += (q == r ? 'M' : 'S');
+            al.ops += (same(q, r) ? 'M' : 'S');
             st = bM[k]; --i; --j;
         } else if (st == 1) {  // X: query char unmatched -> deletion
             al.aligned_query += query[i - 1]; al.aligned_ref += '-'; al.ops += 'D';

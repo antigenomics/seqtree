@@ -271,14 +271,19 @@ PYBIND11_MODULE(_core, m) {
         .def("size", &SubstitutionMatrix::size)
         .def(
             "similarity",
-            [](const SubstitutionMatrix& s, const std::string& a, const std::string& b) {
+            [](const SubstitutionMatrix& self, const std::string& a, const std::string& b) {
                 if (a.size() != 1 || b.size() != 1)
-                    throw py::value_error("similarity() takes single characters");
-                Codec c(Alphabet::AminoAcid);
-                uint8_t ca = c.encode(a[0]), cb = c.encode(b[0]);
-                if (ca == Codec::kInvalid || cb == Codec::kInvalid)
-                    throw py::value_error("symbol not in the amino-acid alphabet");
-                return s.similarity(ca, cb);
+                    throw py::value_error("similarity() takes two single amino-acid characters");
+                static const std::string aa = alphabet_symbols(Alphabet::AminoAcid);
+                auto ia = aa.find(a[0]), ib = aa.find(b[0]);
+                if (ia == std::string::npos || ib == std::string::npos)
+                    throw py::value_error("unknown amino acid; expected one of " + aa);
+                // Without this the 24-symbol AA index runs off the end of a smaller matrix
+                // (e.g. unit(4) for nucleotides) and returns heap garbage. penalty() has always
+                // checked; similarity() must too.
+                if (ia >= self.size() || ib >= self.size())
+                    throw py::value_error("residue out of range for this matrix's alphabet");
+                return self.similarity(uint8_t(ia), uint8_t(ib));
             },
             py::arg("a"), py::arg("b"),
             "Raw log-odds similarity (signed). penalty() is the non-negative Gram "
