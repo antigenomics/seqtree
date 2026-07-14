@@ -44,7 +44,11 @@ bump may carry breaking changes.
   wherever a matrix name is accepted. Shallower and deeper than BLOSUM62 — for remote and close
   homologs respectively.
 
-## [0.3.1] — 2026-07-10
+## [0.3.1] — 2026-07-10 (never published; folded into 0.4.0)
+
+> Tagged but not released to PyPI. Everything below ships in **0.4.0**, so upgrading from 0.3.0
+> straight to 0.4.0 picks it all up. Kept as its own section because it is a distinct set of fixes.
+
 
 ### Fixed
 
