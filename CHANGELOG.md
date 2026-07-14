@@ -3,7 +3,52 @@
 All notable changes to `seqtree`. Dates are release dates; the project is pre-1.0, so a **minor**
 bump may carry breaking changes.
 
-## [0.3.1] — 2026-07-10
+## [0.4.0] — 2026-07-11
+
+### Added
+
+- **`seqtree.pairwise` — Needleman-Wunsch and Smith-Waterman, so ordinary protein alignment no
+  longer needs BioPython.** Everything else in seqtree *minimises a non-negative penalty*, which
+  is what a search ball and an E-value need. These **maximise a raw log-odds similarity**, the way
+  BLAST and BioPython do, because that is what a pairwise alignment means.
+
+  | | |
+  |---|---|
+  | `pairwise.score(q, r, matrix, mode=...)` | optimal score, `O(min(m,n))` memory |
+  | `pairwise.align(...)` | plus the aligned strings and ops |
+  | `pairwise.score_matrix(queries, refs, ...)` | dense `n × K`, GIL released, zero-copy numpy |
+  | `pairwise.dist_matrix(...)` | `d = s(a,a) + s(b,b) − 2·s(a,b)`: non-negative, zero on the diagonal |
+
+  `mode="global"` is Needleman-Wunsch, `mode="local"` Smith-Waterman, and **`gap_open == gap_extend`
+  gives linear gaps** — no separate mode. A gap run of length `L` costs `gap_open + (L-1)·gap_extend`,
+  and global charges end gaps (true NW, not semi-global).
+
+  **It is a drop-in.** `tests/python/test_pairwise.py` runs it against `Bio.Align.PairwiseAligner`
+  as an oracle over three matrices × ten gap/mode settings × sixty sequence shapes — **zero
+  disagreements**, including on real germline V genes. BioPython is a *test-only* dependency;
+  seqtree still has **zero required runtime dependencies** and never imports it.
+
+  Measured on an M3 (all-against-all, BLOSUM62, global, 11/1):
+
+  | sequence length | seqtree, 1 thread | seqtree, 16 threads | BioPython | speedup |
+  |---|---|---|---|---|
+  | 15 (a junction) | 1.7 M pairs/s | **20.1 M pairs/s** | 0.31 M pairs/s | **65×** |
+  | 90 (a germline V gene) | 72 k pairs/s | **893 k pairs/s** | 10 k pairs/s | **87×** |
+
+- **`SubstitutionMatrix.similarity(a, b)`** — the raw signed log-odds, alongside the existing
+  non-negative `penalty(a, b)`. The Gram transform `pen = s(a,a) + s(b,b) − 2·s(a,b)` is **lossy**:
+  it forces the diagonal to zero and destroys `s(a,a)`, so a similarity cannot be recovered from a
+  penalty. Both views are now stored.
+
+- **`SubstitutionMatrix.blosum45()` and `.blosum80()`**, and the names `"BLOSUM45"` / `"BLOSUM80"`
+  wherever a matrix name is accepted. Shallower and deeper than BLOSUM62 — for remote and close
+  homologs respectively.
+
+## [0.3.1] — 2026-07-10 (never published; folded into 0.4.0)
+
+> Tagged but not released to PyPI. Everything below ships in **0.4.0**, so upgrading from 0.3.0
+> straight to 0.4.0 picks it all up. Kept as its own section because it is a distinct set of fixes.
+
 
 ### Fixed
 

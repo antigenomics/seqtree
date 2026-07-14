@@ -4,7 +4,7 @@ build-backend = "scikit_build_core.build"
 
 [project]
 name = "seqtree"
-version = "0.3.1"
+version = "0.4.0"
 description = "Fast fuzzy search over biological sequences (C++ core, Python bindings)"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -22,7 +22,9 @@ classifiers = [
 dependencies = []
 
 [project.optional-dependencies]
-test = ["pytest>=7.4", "pytest-cov>=4.1"]
+# biopython is the ORACLE for seqtree.pairwise (NW/SW) -- a test-only dependency.
+# seqtree itself has no runtime dependencies and must never import it.
+test = ["pytest>=7.4", "pytest-cov>=4.1", "biopython>=1.81"]
 bench = ["huggingface_hub", "psutil"]
 docs = ["sphinx", "pydata-sphinx-theme", "nbsphinx"]
 control = ["huggingface_hub"]  # only needed to download controls larger than the bundled subset

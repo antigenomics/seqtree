@@ -45,9 +45,11 @@ SearchParams.pos_matrix = PositionalMatrix | None
 ## Substitution matrices
 
 ```python
-SubstitutionMatrix.blosum62() / .pam250() / .pam100() / .structural() / .unit(n)
+SubstitutionMatrix.blosum62() / .blosum45() / .blosum80() / .pam250() / .pam100()
+                  / .structural() / .unit(n)
 SubstitutionMatrix.from_similarity(grid: list[list[int]])   # Gram: pen = s_aa + s_bb - 2*s_ab, clamped >= 0
 SubstitutionMatrix.penalty(a, b) -> int                      # pen(a, a) == 0 always
+SubstitutionMatrix.similarity(a, b) -> int                   # raw signed log-odds
 SubstitutionMatrix.scale() -> int                            # median mismatch; BLOSUM62 == 14
 PositionalMatrix.from_weights(base, weights) / .from_tables(size, width, data, masked=[])
 ```
@@ -86,6 +88,28 @@ lowering the bar.
 
 `threshold_for_evalue` needs `params.max_penalty > 0` as the ceiling to search the control at.
 One control scan supplies every query's cutoff.
+
+## Pairwise alignment — `seqtree.pairwise` (replaces BioPython)
+
+Everything else here MINIMISES a non-negative penalty. This module MAXIMISES a raw log-odds
+similarity, like BLAST/BioPython, because that is what pairwise alignment means.
+
+```python
+from seqtree.pairwise import score, align, score_matrix, dist_matrix
+score(q, r, matrix, mode="global", gap_open=11, gap_extend=1) -> int   # NW; "local" = SW
+align(...) -> Alignment          # + aligned strings/ops; .score is a SIMILARITY, not a penalty
+score_matrix(queries, refs, ...) -> ScoreMatrix        # dense n x K, GIL released
+dist_matrix(queries, refs, ...)  -> ScoreMatrix        # d = s(a,a)+s(b,b)-2s(a,b), 0 on diagonal
+```
+
+- Gap run of length L costs `gap_open + (L-1)*gap_extend`. **`gap_open == gap_extend` = linear
+  gaps** (no separate mode). Global charges end gaps (true NW, not semi-global). Local floors at 0.
+- **Drop-in for `Bio.Align.PairwiseAligner`**: 0 disagreements over 3 matrices x 10 gap/mode
+  settings x 60 shapes, and on real germline V genes. **65-87x faster.** BioPython is a TEST-only
+  dep; seqtree still has zero runtime deps.
+- `SubstitutionMatrix` now stores BOTH views: `penalty()` (>=0, Gram, for search/E-values) and
+  `similarity()` (signed log-odds, for these aligners). The Gram transform is lossy -- it zeroes
+  the diagonal -- so a similarity cannot be recovered from a penalty.
 
 ## Gap-block alignment — `seqtree.gapblock`
 

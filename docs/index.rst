@@ -51,6 +51,12 @@ seqtree
        edit count. Best for similarity-scored searches over a total-edit or penalty budget.</p>
      </div>
      <div class="proj-feature">
+       <h3>Pairwise alignment, no BioPython</h3>
+       <p>Needleman&ndash;Wunsch and Smith&ndash;Waterman with affine or linear gaps, verified
+       against <code>Bio.Align.PairwiseAligner</code> as an oracle with zero disagreements &mdash;
+       and 65&ndash;87&times; faster.</p>
+     </div>
+     <div class="proj-feature">
        <h3>Gap blocks &amp; calibrated cutoffs</h3>
        <p>One contiguous indel for V(D)J junctions, its position set by a prior rather than the
        score alone; E-value inversion for the cutoff that achieves a target false-positive rate,
@@ -70,6 +76,7 @@ map ``ref_id`` back to their own payloads (V gene, MHC, read counts) and filter 
    engines
    api
    evalue
+   pairwise
    gapblock
    examples
    pmhc
