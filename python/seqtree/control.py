@@ -54,6 +54,50 @@ def _cache_dir(cache_dir):
     return d
 
 
+class _NoLock:
+    """Stand-in when ``filelock`` is absent. Correctness does not depend on the lock."""
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+def _build_lock(cache):
+    """An inter-process lock around build-and-save, if ``filelock`` happens to be installed.
+
+    This is an *optimisation*, not the fix. ``Index.save`` writes to a temporary and renames it
+    into place, so a reader can never observe a half-written index whether or not this lock is
+    taken. What the lock buys is work: without it, a cold-cache fan-out of N workers has every
+    worker build the same 250k-clonotype index (seconds of CPU, 45 MB written) and N-1 of those
+    are thrown away. With it, one builds and the rest wait and load.
+
+    seqtree has no runtime dependencies, so ``filelock`` is used only if something else already
+    put it there -- ``huggingface_hub`` pulls it in, and that is installed whenever a control is
+    downloaded rather than read from the bundled asset.
+    """
+    try:
+        from filelock import FileLock
+    except ImportError:
+        return _NoLock()
+    return FileLock(cache + ".lock", timeout=600)
+
+
+def _load_cached(cache):
+    """The cached index, or ``None`` if there is nothing usable there.
+
+    A cache is *best effort*: a file written by an older seqtree, truncated by a full disk, or
+    left behind by a killed process must send us back to rebuilding it, never raise at the caller.
+    """
+    if not os.path.exists(cache):
+        return None
+    try:
+        return Index.load(cache)
+    except (RuntimeError, OSError):
+        return None
+
+
 def _read_bundled(name):
     with resources.files("seqtree").joinpath("data", _BUNDLED[name]).open("rb") as fh:
         with gzip.open(fh, "rt", encoding="utf-8") as gz:
@@ -162,24 +206,33 @@ def load_control(name="human_trb_aa", size=None, cache_dir=None, alphabet="aa", 
         raise ValueError(f"unknown control '{name}' (known: {sorted(set(_BUNDLED) | set(_HF))})")
 
     cache = os.path.join(_cache_dir(cache_dir), f"control_{name}_{size or 'bundled'}.sqtree")
-    if os.path.exists(cache):
-        return Index.load(cache)
+    cached = _load_cached(cache)
+    if cached is not None:
+        return cached
 
-    bundled = _read_bundled(name) if name in _BUNDLED else None
-    if bundled is not None and (size is None or size <= len(bundled)):
-        seqs = bundled if size is None else bundled[:size]
-        seqs, dropped = sanitize(seqs, alphabet)
-        if dropped:
-            warnings.warn(f"bundled control '{name}': dropped {dropped:,} invalid sequences")
-    else:
-        if size is not None and size > 5_000_000:
-            warnings.warn(f"downloading {size} control sequences may use several GB of memory")
-        seqs = _download(name, size, alphabet, seed)
+    # Cold cache. Several processes may arrive here at once -- pytest-xdist, a Snakemake or
+    # Nextflow fan-out, any multi-process pipeline sharing ~/.cache. Hold the lock, then look
+    # again: whoever we were queued behind has very likely just built it.
+    with _build_lock(cache):
+        cached = _load_cached(cache)
+        if cached is not None:
+            return cached
 
-    seqs = list(dict.fromkeys(seqs))  # unique clonotypes, stable order
-    idx = Index.build(seqs, alphabet=alphabet)
-    try:
-        idx.save(cache)
-    except OSError:
-        pass  # cache is best-effort
-    return idx
+        bundled = _read_bundled(name) if name in _BUNDLED else None
+        if bundled is not None and (size is None or size <= len(bundled)):
+            seqs = bundled if size is None else bundled[:size]
+            seqs, dropped = sanitize(seqs, alphabet)
+            if dropped:
+                warnings.warn(f"bundled control '{name}': dropped {dropped:,} invalid sequences")
+        else:
+            if size is not None and size > 5_000_000:
+                warnings.warn(f"downloading {size} control sequences may use several GB of memory")
+            seqs = _download(name, size, alphabet, seed)
+
+        seqs = list(dict.fromkeys(seqs))  # unique clonotypes, stable order
+        idx = Index.build(seqs, alphabet=alphabet)
+        try:
+            idx.save(cache)  # temp file + rename: a reader never sees a partial index
+        except (RuntimeError, OSError):
+            pass  # cache is best-effort; a read-only or full ~/.cache must not fail the call
+        return idx

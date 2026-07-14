@@ -1,5 +1,7 @@
 #include "seqtree/kmer_index.hpp"
 
+#include "atomic_write.hpp"
+
 #include <algorithm>
 #include <atomic>
 #include <cstring>
@@ -162,27 +164,30 @@ void rvec(std::istream& is, std::vector<T>& v) {
 }  // namespace
 
 void KmerIndex::save(const std::string& path) const {
-    std::ofstream os(path, std::ios::binary);
-    if (!os) throw std::runtime_error("KmerIndex: cannot open '" + path + "' for writing");
-    os.write(kMagic, 4);
-    os.write(reinterpret_cast<const char*>(&kVersion), sizeof kVersion);
-    uint8_t alpha = static_cast<uint8_t>(kmers_->alphabet());
-    os.write(reinterpret_cast<const char*>(&alpha), 1);
-    os.write(reinterpret_cast<const char*>(&num_peptides_), sizeof num_peptides_);
-    // unique k-mer strings (rebuild the Index on load)
-    uint32_t nk = kmers_->size();
-    os.write(reinterpret_cast<const char*>(&nk), sizeof nk);
-    std::vector<uint32_t> off(nk + 1, 0);
-    std::string blob;
-    for (uint32_t i = 0; i < nk; ++i) { blob += kmers_->ref_seq(i); off[i + 1] = uint32_t(blob.size()); }
-    wvec(os, off);
-    uint64_t bn = blob.size();
-    os.write(reinterpret_cast<const char*>(&bn), sizeof bn);
-    if (bn) os.write(blob.data(), std::streamsize(bn));
-    wvec(os, post_begin_);
-    wvec(os, post_ids_);
-    wvec(os, allele_);
-    if (!os) throw std::runtime_error("KmerIndex: write failed for '" + path + "'");
+    // Temporary + rename, so a concurrent reader never sees a half-written index.
+    detail::atomic_write(path, [this](std::ostream& os) {
+        os.write(kMagic, 4);
+        os.write(reinterpret_cast<const char*>(&kVersion), sizeof kVersion);
+        uint8_t alpha = static_cast<uint8_t>(kmers_->alphabet());
+        os.write(reinterpret_cast<const char*>(&alpha), 1);
+        os.write(reinterpret_cast<const char*>(&num_peptides_), sizeof num_peptides_);
+        // unique k-mer strings (rebuild the Index on load)
+        uint32_t nk = kmers_->size();
+        os.write(reinterpret_cast<const char*>(&nk), sizeof nk);
+        std::vector<uint32_t> off(nk + 1, 0);
+        std::string blob;
+        for (uint32_t i = 0; i < nk; ++i) {
+            blob += kmers_->ref_seq(i);
+            off[i + 1] = uint32_t(blob.size());
+        }
+        wvec(os, off);
+        uint64_t bn = blob.size();
+        os.write(reinterpret_cast<const char*>(&bn), sizeof bn);
+        if (bn) os.write(blob.data(), std::streamsize(bn));
+        wvec(os, post_begin_);
+        wvec(os, post_ids_);
+        wvec(os, allele_);
+    });
 }
 
 std::unique_ptr<KmerIndex> KmerIndex::load(const std::string& path) {

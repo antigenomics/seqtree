@@ -3,6 +3,39 @@
 All notable changes to `seqtree`. Dates are release dates; the project is pre-1.0, so a **minor**
 bump may carry breaking changes.
 
+## [0.3.1] — 2026-07-10
+
+### Fixed
+
+- **A cold cache shared by concurrent processes could hand back a half-written index.**
+  `Index::save` wrote straight into the destination, so for the whole duration of the write the
+  file existed but was truncated. A second process that checked `os.path.exists(cache)` in that
+  window loaded a stub and raised `RuntimeError: truncated or corrupt index`. On a 45 MB control
+  index the window is ~55 ms, and a reader racing a writer hit it **10 times out of 10**.
+
+  This is the first-use-only failure of any multi-process fan-out sharing `~/.cache`: pytest-xdist,
+  a Snakemake or Nextflow pipeline calling `load_control` in parallel, a `multiprocessing` pool.
+  Once the cache is warm it is read-only and was always safe. CI matrix jobs were never affected —
+  separate runners, separate caches.
+
+  `Index::save` and `KmerIndex::save` now serialize into a uniquely-named temporary beside the
+  destination and `rename` it into place. Rename is atomic on the same filesystem, on POSIX and
+  Windows alike, so a reader sees either the previous complete file or the new complete file and
+  never a partial one. A failed save cleans up its temporary and leaves any pre-existing index
+  intact.
+
+- **A corrupt or stale cache now rebuilds instead of raising.** A file truncated by a full disk,
+  left by a killed process, or written by an older seqtree sent `load_control` into an exception;
+  it now falls back to rebuilding. The cache was always best-effort and now behaves that way.
+
+### Added
+
+- **`load_control` takes an inter-process lock around build-and-save when `filelock` is available**
+  (it arrives with `huggingface_hub`). This is an optimisation, not the fix: correctness comes from
+  the atomic rename and holds with no lock at all. What the lock saves is work — without it, a cold
+  fan-out of N workers has every worker build the same 250k-clonotype index and discard N−1 of them.
+  seqtree still has **zero required runtime dependencies**; the import is guarded.
+
 ## [0.3.0] — 2026-07-10
 
 Gap-block alignment, calibrated cutoffs, seed significance — the removal of several engine paths
