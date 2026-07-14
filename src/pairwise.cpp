@@ -17,6 +17,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cstdint>
 #include <limits>
 #include <stdexcept>
 #include <string>
@@ -26,8 +27,21 @@
 namespace seqtree {
 namespace {
 
-// Low enough to be unreachable, with headroom so that kNegInf - gap does not overflow.
-constexpr int32_t kNegInf = std::numeric_limits<int32_t>::min() / 4;
+// The DP runs in int64 even though scores are returned as int32. With int32 cells, a gap_open
+// near 2^30 drove kNegInf - gap below INT32_MIN and wrapped, so an alignment that should have
+// scored about -10^9 came back as a large POSITIVE number -- a silent wrong answer. int64 makes
+// that unreachable for any input, and the callers below reject a result that will not fit int32
+// rather than truncate it.
+using Score = int64_t;
+constexpr Score kNegInf = std::numeric_limits<Score>::min() / 4;
+
+// Alignment::score and ScoreMatrix are int32. Refuse rather than truncate.
+int32_t narrow(Score v) {
+    if (v < std::numeric_limits<int32_t>::min() || v > std::numeric_limits<int32_t>::max())
+        throw std::overflow_error("seqtree: alignment score does not fit in 32 bits -- the gap "
+                                  "costs are absurdly large for these sequences");
+    return int32_t(v);
+}
 
 std::vector<uint8_t> encode(const Codec& c, std::string_view s) {
     std::vector<uint8_t> out(s.size());
@@ -49,21 +63,21 @@ void check(const SubstitutionMatrix& mat, const Codec& codec, int32_t open, int3
 }
 
 // Cost of a terminal gap run of length L in global mode.
-inline int32_t gap_run(int32_t L, int32_t open, int32_t extend) {
-    return L <= 0 ? 0 : open + (L - 1) * extend;
+inline Score gap_run(int64_t L, int32_t open, int32_t extend) {
+    return L <= 0 ? 0 : Score(open) + Score(L - 1) * Score(extend);
 }
 
 // Optimal score, two rows per state. O(n) memory, no traceback.
-int32_t score_encoded(const uint8_t* q, size_t m, const uint8_t* r, size_t n,
-                      const SubstitutionMatrix& mat, AlignMode mode, int32_t go, int32_t ge) {
+Score score_encoded(const uint8_t* q, size_t m, const uint8_t* r, size_t n,
+                    const SubstitutionMatrix& mat, AlignMode mode, int32_t go, int32_t ge) {
     const bool local = (mode == AlignMode::Local);
     if (m == 0 || n == 0) {
         if (local) return 0;
-        return -gap_run(int32_t(m ? m : n), go, ge);
+        return -gap_run(int64_t(m ? m : n), go, ge);
     }
 
-    std::vector<int32_t> Mp(n + 1), Xp(n + 1), Yp(n + 1);
-    std::vector<int32_t> Mc(n + 1), Xc(n + 1), Yc(n + 1);
+    std::vector<Score> Mp(n + 1), Xp(n + 1), Yp(n + 1);
+    std::vector<Score> Mc(n + 1), Xc(n + 1), Yc(n + 1);
 
     // Row 0. Global: the only way to consume ref[0..j) is a leading gap (state Y). Local: an
     // alignment may start anywhere, which the 0 floor on M expresses; the gap states cannot be
@@ -74,20 +88,20 @@ int32_t score_encoded(const uint8_t* q, size_t m, const uint8_t* r, size_t n,
     for (size_t j = 1; j <= n; ++j) {
         Mp[j] = local ? 0 : kNegInf;
         Xp[j] = kNegInf;
-        Yp[j] = local ? kNegInf : -gap_run(int32_t(j), go, ge);
+        Yp[j] = local ? kNegInf : -gap_run(int64_t(j), go, ge);
     }
 
-    int32_t best = local ? 0 : kNegInf;
+    Score best = local ? 0 : kNegInf;
 
     for (size_t i = 1; i <= m; ++i) {
         Mc[0] = local ? 0 : kNegInf;
-        Xc[0] = local ? kNegInf : -gap_run(int32_t(i), go, ge);
+        Xc[0] = local ? kNegInf : -gap_run(int64_t(i), go, ge);
         Yc[0] = kNegInf;
 
         for (size_t j = 1; j <= n; ++j) {
-            const int32_t s = mat.similarity(q[i - 1], r[j - 1]);
-            const int32_t diag = std::max(Mp[j - 1], std::max(Xp[j - 1], Yp[j - 1]));
-            int32_t mv = diag + s;
+            const Score s = mat.similarity(q[i - 1], r[j - 1]);
+            const Score diag = std::max(Mp[j - 1], std::max(Xp[j - 1], Yp[j - 1]));
+            Score mv = diag + s;
             if (local && mv < 0) mv = 0;
             Mc[j] = mv;
 
@@ -115,7 +129,8 @@ int32_t align_score(std::string_view query, std::string_view ref, const Substitu
     check(mat, codec, gap_open, gap_extend);
     const auto q = encode(codec, query);
     const auto r = encode(codec, ref);
-    return score_encoded(q.data(), q.size(), r.data(), r.size(), mat, mode, gap_open, gap_extend);
+    return narrow(score_encoded(q.data(), q.size(), r.data(), r.size(), mat, mode, gap_open,
+                                gap_extend));
 }
 
 Alignment align_pair(std::string_view query, std::string_view ref, const SubstitutionMatrix& mat,
@@ -130,7 +145,7 @@ Alignment align_pair(std::string_view query, std::string_view ref, const Substit
 
     Alignment al;
     if (m == 0 || n == 0) {
-        al.score = local ? 0 : -gap_run(m ? m : n, go, ge);
+        al.score = narrow(local ? 0 : -gap_run(m ? m : n, go, ge));
         if (!local) {
             for (int i = 0; i < m; ++i) {
                 al.aligned_query += query[size_t(i)];
@@ -148,32 +163,32 @@ Alignment align_pair(std::string_view query, std::string_view ref, const Substit
 
     const int W = n + 1;
     const size_t sz = size_t(m + 1) * W;
-    std::vector<int32_t> M(sz, kNegInf), X(sz, kNegInf), Y(sz, kNegInf);
+    std::vector<Score> M(sz, kNegInf), X(sz, kNegInf), Y(sz, kNegInf);
     std::vector<uint8_t> bM(sz, kStop), bX(sz, kM), bY(sz, kM);
 
     M[0] = 0;
     for (int j = 1; j <= n; ++j) {
         M[j] = local ? 0 : kNegInf;
-        Y[j] = local ? kNegInf : -gap_run(j, go, ge);
+        Y[j] = local ? kNegInf : -gap_run(int64_t(j), go, ge);
         bY[j] = (j > 1) ? kY : kM;
     }
     for (int i = 1; i <= m; ++i) {
         const size_t k = size_t(i) * W;
         M[k] = local ? 0 : kNegInf;
-        X[k] = local ? kNegInf : -gap_run(i, go, ge);
+        X[k] = local ? kNegInf : -gap_run(int64_t(i), go, ge);
         bX[k] = (i > 1) ? kX : kM;
     }
 
     // argmax over the three states, reporting which one won.
-    auto pick = [](int32_t vm, int32_t vx, int32_t vy, uint8_t& who) {
-        int32_t v = vm;
+    auto pick = [](Score vm, Score vx, Score vy, uint8_t& who) {
+        Score v = vm;
         who = kM;
         if (vx > v) { v = vx; who = kX; }
         if (vy > v) { v = vy; who = kY; }
         return v;
     };
 
-    int32_t best = local ? 0 : kNegInf;
+    Score best = local ? 0 : kNegInf;
     int bi = 0, bj = 0;
 
     for (int i = 1; i <= m; ++i) {
@@ -184,7 +199,7 @@ Alignment align_pair(std::string_view query, std::string_view ref, const Substit
             const size_t kl = size_t(i) * W + (j - 1);
 
             uint8_t who;
-            int32_t mv = pick(M[kd], X[kd], Y[kd], who) + mat.similarity(q[i - 1], r[j - 1]);
+            Score mv = pick(M[kd], X[kd], Y[kd], who) + Score(mat.similarity(q[i - 1], r[j - 1]));
             if (local && mv < 0) { mv = 0; who = kStop; }
             M[k] = mv;
             bM[k] = who;
@@ -199,14 +214,14 @@ Alignment align_pair(std::string_view query, std::string_view ref, const Substit
     int i, j;
     uint8_t st;
     if (local) {
-        al.score = best;
+        al.score = narrow(best);
         i = bi;
         j = bj;
         st = kM;
         if (best == 0) return al;  // no positive-scoring local alignment exists
     } else {
         const size_t end = size_t(m) * W + n;
-        al.score = pick(M[end], X[end], Y[end], st);
+        al.score = narrow(pick(M[end], X[end], Y[end], st));
         i = m;
         j = n;
     }
@@ -265,7 +280,7 @@ std::vector<int32_t> matrix_impl(const std::vector<std::string>& queries,
     for (size_t i = 0; i < N; ++i) qc[i] = encode(codec, queries[i]);
     for (size_t k = 0; k < K; ++k) rc[k] = encode(codec, refs[k]);
 
-    std::vector<int32_t> q_self(N), r_self(K);
+    std::vector<Score> q_self(N), r_self(K);
     if (dist) {
         for (size_t i = 0; i < N; ++i)
             q_self[i] = score_encoded(qc[i].data(), qc[i].size(), qc[i].data(), qc[i].size(), mat,
@@ -286,9 +301,9 @@ std::vector<int32_t> matrix_impl(const std::vector<std::string>& queries,
             if (i >= N) break;
             int32_t* row = out.data() + i * K;
             for (size_t k = 0; k < K; ++k) {
-                const int32_t s = score_encoded(qc[i].data(), qc[i].size(), rc[k].data(),
-                                                rc[k].size(), mat, mode, go, ge);
-                row[k] = dist ? (q_self[i] + r_self[k] - 2 * s) : s;
+                const Score s = score_encoded(qc[i].data(), qc[i].size(), rc[k].data(),
+                                              rc[k].size(), mat, mode, go, ge);
+                row[k] = narrow(dist ? (q_self[i] + r_self[k] - 2 * s) : s);
             }
         }
     };

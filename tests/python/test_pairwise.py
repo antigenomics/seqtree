@@ -27,6 +27,11 @@ MATRICES = {
 SETTINGS = [
     ("global", 11, 1), ("global", 12, 1), ("global", 5, 5), ("global", 1, 1),
     ("global", 0, 0), ("global", 100, 5),
+    # gap_extend > gap_open is legal and makes closing-and-reopening cheaper than extending.
+    # It is the regime that exposed a wrong re-scorer, and it must stay in the grid.
+    ("global", 1, 3), ("global", 0, 5), ("local", 1, 10),
+    # huge costs: these used to overflow int32 and come back POSITIVE.
+    ("global", 10 ** 8, 1), ("global", 2 ** 30, 1),
     ("local", 11, 1), ("local", 5, 5), ("local", 1, 1), ("local", 12, 1),
 ]
 
@@ -158,27 +163,75 @@ def test_score_is_symmetric():
             assert score(a, b, m, mode=mode) == score(b, a, m, mode=mode)
 
 
-def test_align_reproduces_its_own_score():
-    """The traceback must be an alignment that actually scores what was reported."""
-    rng = random.Random(17)
-    m = MATRICES["BLOSUM62"]
-    go, ge = 11, 1
-    for _ in range(60):
-        a, b = rand_seq(rng, 6, 18), rand_seq(rng, 6, 18)
-        aln = align(a, b, m, gap_open=go, gap_extend=ge)
-        assert len(aln.aligned_query) == len(aln.aligned_ref) == len(aln.ops)
-        assert aln.aligned_query.replace("-", "") == a
-        assert aln.aligned_ref.replace("-", "") == b
+def rescore(aln, matrix, gap_open, gap_extend):
+    """Re-score an alignment from its columns, the honest way.
 
-        total, in_gap = 0, False
-        for x, y in zip(aln.aligned_query, aln.aligned_ref):
-            if x == "-" or y == "-":
-                total -= ge if in_gap else go
-                in_gap = True
-            else:
-                total += m.similarity(x, y)
-                in_gap = False
-        assert total == aln.score == score(a, b, m, gap_open=go, gap_extend=ge)
+    A gap run only continues if it is the **same kind** of gap. An X-gap (a query residue against
+    ``-``) immediately followed by a Y-gap (``-`` against a ref residue) is *two* opens, not one
+    open and one extend -- they are different states in the recurrence.
+
+    That distinction is not academic: with ``gap_extend > gap_open`` it is cheaper to close and
+    reopen than to extend, so adjacent gaps of opposite type really do occur. An earlier version
+    of this helper ignored it, which made this test pass vacuously at 11/1 and report 178 phantom
+    failures at 1/3 -- against a traceback that was correct all along.
+    """
+    total, prev = 0, None            # prev in {None, "X", "Y"}
+    for x, y in zip(aln.aligned_query, aln.aligned_ref):
+        if y == "-":                 # query residue against a gap
+            total -= gap_extend if prev == "X" else gap_open
+            prev = "X"
+        elif x == "-":               # gap against a ref residue
+            total -= gap_extend if prev == "Y" else gap_open
+            prev = "Y"
+        else:
+            total += matrix.similarity(x, y)
+            prev = None
+    return total
+
+
+@pytest.mark.parametrize("mode", ["global", "local"])
+@pytest.mark.parametrize("go,ge", [(11, 1), (5, 5), (1, 3), (0, 0), (1, 10), (2, 100)])
+def test_align_reproduces_its_own_score(mode, go, ge):
+    """The traceback must be an alignment that actually scores what was reported.
+
+    ``gap_extend > gap_open`` is in the grid on purpose: it is legal, it makes closing and
+    reopening cheaper than extending, and it is exactly the regime a naive re-scorer gets wrong.
+    """
+    rng = random.Random(hash((mode, go, ge)) & 0xFFFF)
+    m = MATRICES["BLOSUM62"]
+    for _ in range(40):
+        a, b = rand_seq(rng, 4, 20), rand_seq(rng, 4, 20)
+        aln = align(a, b, m, mode=mode, gap_open=go, gap_extend=ge)
+        assert len(aln.aligned_query) == len(aln.aligned_ref) == len(aln.ops)
+        assert rescore(aln, m, go, ge) == aln.score
+        assert aln.score == score(a, b, m, mode=mode, gap_open=go, gap_extend=ge)
+        if mode == "global":         # local returns the matched sub-sequences, not the whole input
+            assert aln.aligned_query.replace("-", "") == a
+            assert aln.aligned_ref.replace("-", "") == b
+
+
+def test_huge_gap_costs_do_not_overflow_into_a_positive_score():
+    """The DP used to run in int32 and wrap.
+
+    At ``gap_open = 2**30`` the sentinel (INT32_MIN/4) minus the gap fell below INT32_MIN, so an
+    alignment that should have scored about **-10^9** came back as a large **positive** number --
+    a silently wrong answer, the worst kind. The DP is int64 now, so these are simply correct.
+    """
+    m = MATRICES["BLOSUM62"]
+    q, r = "CASSLGQAYEQYF", "CASSPGQAYEQF"
+    assert score(q, r, m, gap_open=10 ** 8) == -99_999_944
+    assert score(q, r, m, gap_open=2 ** 30) == -1_073_741_768      # was +2_147_483_639
+    assert score(q, r, m, gap_open=2 ** 31 - 1) == -2_147_483_591
+    for go in (2 ** 30, 2 ** 31 - 1):
+        assert score(q, r, m, gap_open=go) < 0, "a huge gap cost must not score positive"
+
+
+def test_a_score_that_cannot_fit_int32_is_refused_not_truncated():
+    """``Alignment.score`` and ``ScoreMatrix`` are int32. Where a result genuinely needs more,
+    say so rather than hand back a wrapped number."""
+    m = MATRICES["BLOSUM62"]
+    with pytest.raises(OverflowError, match="32 bits"):
+        score("A" * 400, "W" * 600, m, gap_open=2 ** 31 - 1, gap_extend=2 ** 31 - 1)
 
 
 # ---------------------------------------------------------------------------------------------
