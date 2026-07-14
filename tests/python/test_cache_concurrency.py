@@ -125,12 +125,22 @@ def test_cold_cache_fanout_through_load_control(tmp_path):
 
 
 def test_a_corrupt_cache_is_rebuilt_rather_than_raised(tmp_path):
-    """A cache truncated by a full disk, or written by an older seqtree, must self-heal."""
-    cache = tmp_path / "control_human_trb_aa_bundled.sqtree"
+    """A cache truncated by a full disk or left by a killed process must self-heal, not raise.
+
+    It has to sit at the *current* cache path to test anything: a file under an older release's
+    name is content-addressed away and never opened (that case is
+    `test_a_superseded_cache_is_not_served_and_is_cleaned_up` in test_control.py).
+    """
+    from seqtree import control
+
+    cache = tmp_path / control._cache_key("human_trb_aa", None, "aa", 0)
     cache.write_bytes(b"SQTR" + b"\x00" * 32)  # right magic, garbage body
+    with pytest.raises(Exception):  # noqa: B017 -- it really is unloadable
+        seqtree.Index.load(str(cache))
+
     idx = seqtree.load_control("human_trb_aa", cache_dir=str(tmp_path))
     assert len(idx) == 250_000
-    assert len(seqtree.Index.load(str(cache))) == 250_000  # and the cache was replaced
+    assert len(seqtree.Index.load(str(cache))) == 250_000  # and the cache was rewritten in place
 
 
 def test_the_lock_is_optional_and_correctness_does_not_depend_on_it(monkeypatch):

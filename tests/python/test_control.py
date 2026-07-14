@@ -116,3 +116,64 @@ def test_download_filters_productive_and_samples_uniformly(tmp_path, monkeypatch
 
     assert control._download("fake", k, seed=0) == sample     # reproducible from the seed
     assert control._download("fake", k, seed=1) != sample
+
+
+# ---------------------------------------------------------------------------------------------
+# The cache is content-addressed.
+#
+# It used to be keyed `control_{name}_{size}.sqtree`, naming neither the alphabet, nor the seed,
+# nor the source data. So two calls that must yield different sequences shared one file and the
+# second silently got the first's; and an upgrade that changed the bundled control kept the same
+# filename, serving the *previous release's* control from a warm cache. That last one is why
+# 0.3.0's notes had to ask people to delete ~/.cache/seqtree by hand.
+# ---------------------------------------------------------------------------------------------
+
+def test_the_cache_key_changes_when_the_bundled_asset_changes(monkeypatch):
+    """The regression that matters on upgrade: a new control must not hit the old cache."""
+    import seqtree.control as control
+
+    before = control._cache_key("human_trb_aa", None, "aa", 0)
+    monkeypatch.setattr(control, "_asset_digest", lambda name: "0" * 64)
+    assert control._cache_key("human_trb_aa", None, "aa", 0) != before
+
+
+def test_the_cache_key_separates_alphabets():
+    import seqtree.control as control
+
+    assert (control._cache_key("human_trb_aa", 500, "aa", 0)
+            != control._cache_key("human_trb_aa", 500, "nt", 0))
+
+
+def test_the_cache_key_separates_seeds_only_where_the_seed_matters():
+    """The download path reservoir-samples, so the seed picks the sequences. The bundled path
+    takes a prefix of a pre-shuffled asset and ignores it -- keying on the seed there would build
+    byte-identical caches under two names."""
+    import seqtree.control as control
+
+    big = control._BUNDLED_LEN["human_trb_aa"] * 2
+    assert (control._cache_key("human_trb_aa", big, "aa", 0)
+            != control._cache_key("human_trb_aa", big, "aa", 7))
+    assert (control._cache_key("human_trb_aa", 500, "aa", 0)
+            == control._cache_key("human_trb_aa", 500, "aa", 7))
+
+
+def test_bundled_len_cannot_drift_from_the_asset():
+    """`_cache_key` routes bundle-vs-download on this number without decompressing the asset."""
+    import seqtree.control as control
+
+    assert len(control._read_bundled("human_trb_aa")) == control._BUNDLED_LEN["human_trb_aa"]
+
+
+def test_a_superseded_cache_is_not_served_and_is_cleaned_up(tmp_path):
+    """A pre-fingerprint cache from an older seqtree must be ignored, then removed."""
+    import seqtree.control as control
+
+    legacy = tmp_path / "control_human_trb_aa_bundled.sqtree"
+    seqtree.Index.build(["CASSLGQAYEQYF"], "aa").save(str(legacy))  # stand-in for a 0.2.0 cache
+    assert legacy.exists()
+
+    idx = seqtree.load_control("human_trb_aa", cache_dir=str(tmp_path))
+    assert len(idx) == 250_000, "the stale cache was served instead of the real control"
+    assert not legacy.exists(), "the superseded cache was left behind"
+    assert ([p.name for p in tmp_path.iterdir() if p.suffix == ".sqtree"]
+            == [control._cache_key("human_trb_aa", None, "aa", 0)])

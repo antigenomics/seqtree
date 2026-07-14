@@ -28,6 +28,23 @@ bump may carry breaking changes.
   left by a killed process, or written by an older seqtree sent `load_control` into an exception;
   it now falls back to rebuilding. The cache was always best-effort and now behaves that way.
 
+- **The control cache is content-addressed, so a stale cache can no longer be served silently.**
+  The key was `control_{name}_{size}.sqtree`, which named neither the **alphabet**, nor the
+  **seed**, nor the **source data**. Three consequences, all live:
+
+  - Two calls differing only in `seed` — which must draw *different* reservoir samples — shared one
+    cache file, so the second silently received the first's sequences. Same for `alphabet`.
+  - An upgrade that changed the bundled control kept the same filename, so a warm cache served the
+    **previous release's** control. This is exactly how 0.3.0's corrected (uniform) control could be
+    masked by a stale 0.2.0 (abundance-head) cache — and why 0.3.0's notes had to ask people to
+    `rm ~/.cache/seqtree/control_*.sqtree` by hand.
+
+  The key now carries a fingerprint of the bundled asset's own bytes (or, on the download path, the
+  source and seed), so a control that changed simply misses the old cache. Superseded caches,
+  including pre-fingerprint ones from earlier releases, are deleted on the next build.
+
+  **You no longer need to clear `~/.cache/seqtree` when upgrading.** Doing so is harmless.
+
 ### Added
 
 - **`load_control` takes an inter-process lock around build-and-save when `filelock` is available**
@@ -53,9 +70,11 @@ E-value.
   (mean n_C 110.1 vs 35.5). Both are now uniform reservoir samples over unique **productive**
   clonotypes, seeded and shuffled so any prefix is itself a valid sub-sample.
 
-  **Every E-value moves.** Delete `~/.cache/seqtree/control_*.sqtree` after upgrading. Numbers
-  derived from the control are corrected throughout this file, `seeds.py`, `SKILL.md` and the
-  appendix.
+  **Every E-value moves.** Delete `~/.cache/seqtree/control_*.sqtree` after upgrading — a warm
+  cache from 0.2.0 would otherwise be served in place of the corrected control. (Fixed in 0.3.1:
+  the cache is now content-addressed and a stale one simply misses. Upgrading straight from 0.2.0
+  to ≥0.3.1 needs no manual step.) Numbers derived from the control are corrected throughout this
+  file, `seeds.py`, `SKILL.md` and the appendix.
 - **Controls are filtered to productive clonotypes.** VDJtools marks out-of-frame rearrangements
   with `_` and in-frame stops with `*`; 13.7% of the mouse TRB table is out of frame. `_` cannot be
   repaired at the amino-acid level — VDJtools collapses a *run* of untranslatable positions into one

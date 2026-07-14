@@ -74,6 +74,11 @@ precision bound below.
 
    A cache that is corrupt, truncated, or written by an older seqtree is silently rebuilt.
 
+   **The cache is content-addressed.** Its filename carries a fingerprint of everything that decides
+   the sequences — the bundled asset's own bytes, or the download's source and seed — so a release
+   that changes the control simply *misses* the old cache rather than serving it. Superseded caches
+   are removed on the next build. You never need to clear ``~/.cache/seqtree`` by hand.
+
 Theory
 ------
 

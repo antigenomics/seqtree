@@ -26,6 +26,7 @@ is shuffled so that ``bundled[:size]`` is itself a valid sub-sample.
    destroyed the residue count). Nothing calls for it yet; build it when something does.
 """
 import gzip
+import hashlib
 import os
 import random
 import warnings
@@ -48,10 +49,76 @@ _HF = {
 }
 
 
+#: Bump when the download or sampling pipeline changes what a given ``(name, size, seed)`` yields.
+#: The bundled path needs no epoch -- it is fingerprinted from the asset's own bytes.
+_DOWNLOAD_EPOCH = 1
+
+#: Clonotypes in each bundled asset. Lets :func:`_cache_key` tell "served from the bundle" from
+#: "served by a download" without decompressing the asset on every call; checked against the real
+#: thing whenever the asset is actually read, so it cannot drift silently.
+_BUNDLED_LEN = {"human_trb_aa": 250_000}
+
+
 def _cache_dir(cache_dir):
     d = cache_dir or os.path.join(os.path.expanduser("~"), ".cache", "seqtree")
     os.makedirs(d, exist_ok=True)
     return d
+
+
+def _asset_digest(name):
+    """SHA-256 of the bundled asset's *compressed* bytes -- a few ms, no decompression."""
+    h = hashlib.sha256()
+    with resources.files("seqtree").joinpath("data", _BUNDLED[name]).open("rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _cache_key(name, size, alphabet, seed):
+    """A cache filename that changes whenever the index's content would.
+
+    The old key was ``control_{name}_{size}.sqtree``, which named neither the **alphabet** nor the
+    **seed** nor the **source data**. Three ways that went wrong:
+
+    * Two calls differing only in ``seed`` -- which must draw different reservoir samples -- shared
+      one cache file, so the second silently received the first's sequences.
+    * The same for ``alphabet``.
+    * An upgrade that changed the bundled asset kept the same filename, so a warm cache served the
+      *previous release's* control. That is exactly how 0.3.0's corrected (uniform) control could
+      be masked by a stale 0.2.0 (abundance-head) cache, and why its release notes had to ask
+      people to delete ``~/.cache/seqtree`` by hand. Fingerprinting the asset makes a stale cache
+      simply miss.
+
+    ``seed`` enters the key only on the download path, because the bundled path takes a prefix of a
+    pre-shuffled asset and ignores the seed entirely -- including it there would build byte-identical
+    caches under different names.
+    """
+    from_bundle = name in _BUNDLED and (size is None or size <= _BUNDLED_LEN[name])
+    parts = [name, str(size or "bundled"), alphabet]
+    if from_bundle:
+        parts.append(_asset_digest(name))
+    else:
+        repo, fname, _ = _HF[name]
+        # There is no cheap *offline* way to learn the remote revision, and paying a network
+        # round-trip on every warm-cache hit would be worse than the problem. Pin an epoch instead.
+        parts += [repo, fname, f"epoch{_DOWNLOAD_EPOCH}", f"seed{seed}"]
+    digest = hashlib.sha256("|".join(parts).encode()).hexdigest()[:12]
+    return f"control_{name}_{size or 'bundled'}_{digest}.sqtree"
+
+
+def _prune_superseded(cache_dir, name, size, keep):
+    """Drop caches for the same control whose fingerprint no longer matches, and pre-fingerprint
+    ones from older seqtree releases. Best-effort: a cache we cannot delete is only wasted disk."""
+    prefix = f"control_{name}_{size or 'bundled'}"
+    for f in os.listdir(cache_dir):
+        if f == keep or not f.startswith(prefix) or not f.endswith(".sqtree"):
+            continue
+        rest = f[len(prefix):-len(".sqtree")]
+        if rest == "" or (rest.startswith("_") and "_" not in rest[1:]):  # legacy, or a stale digest
+            try:
+                os.remove(os.path.join(cache_dir, f))
+            except OSError:
+                pass
 
 
 class _NoLock:
@@ -101,7 +168,13 @@ def _load_cached(cache):
 def _read_bundled(name):
     with resources.files("seqtree").joinpath("data", _BUNDLED[name]).open("rb") as fh:
         with gzip.open(fh, "rt", encoding="utf-8") as gz:
-            return [line.strip() for line in gz if line.strip()]
+            seqs = [line.strip() for line in gz if line.strip()]
+    # _cache_key trusts this count to route bundle-vs-download without decompressing the asset on
+    # every call, so it must never drift from the asset itself.
+    if len(seqs) != _BUNDLED_LEN[name]:
+        raise RuntimeError(f"bundled control '{name}' holds {len(seqs):,} sequences but "
+                           f"_BUNDLED_LEN says {_BUNDLED_LEN[name]:,}; update it")
+    return seqs
 
 
 def sanitize(seqs, alphabet="aa"):
@@ -191,13 +264,21 @@ def load_control(name="human_trb_aa", size=None, cache_dir=None, alphabet="aa", 
     and, when subsampled, drawn uniformly over unique clonotypes rather than taken from the
     abundance-sorted head of the table.
 
+    The built index is cached under ``cache_dir``. The cache is **content-addressed**: its filename
+    carries a fingerprint of everything that determines the sequences -- the bundled asset's own
+    bytes, or the download's source and seed -- so an upgrade that changes the control simply misses
+    the old cache instead of silently serving it. Caches superseded that way are deleted.
+
+    Safe to call from many processes at once on a cold cache; see :meth:`Index.save`.
+
     Args:
         name: control identifier (e.g. ``"human_trb_aa"``).
         size: number of unique clonotypes. ``None`` uses the full bundled subset;
             a value larger than the bundled subset triggers a HuggingFace download.
         cache_dir: where to store the serialized index (default ``~/.cache/seqtree``).
         alphabet: sequence alphabet for the index.
-        seed: reservoir-sampling seed, so a given ``(name, size, seed)`` is reproducible.
+        seed: reservoir-sampling seed for the **download** path, so a given ``(name, size, seed)``
+            is reproducible. The bundled path takes a prefix of a pre-shuffled asset and ignores it.
 
     Returns:
         An immutable ``Index`` of unique control clonotypes.
@@ -205,7 +286,8 @@ def load_control(name="human_trb_aa", size=None, cache_dir=None, alphabet="aa", 
     if name not in _BUNDLED and name not in _HF:
         raise ValueError(f"unknown control '{name}' (known: {sorted(set(_BUNDLED) | set(_HF))})")
 
-    cache = os.path.join(_cache_dir(cache_dir), f"control_{name}_{size or 'bundled'}.sqtree")
+    cdir = _cache_dir(cache_dir)
+    cache = os.path.join(cdir, _cache_key(name, size, alphabet, seed))
     cached = _load_cached(cache)
     if cached is not None:
         return cached
@@ -233,6 +315,7 @@ def load_control(name="human_trb_aa", size=None, cache_dir=None, alphabet="aa", 
         idx = Index.build(seqs, alphabet=alphabet)
         try:
             idx.save(cache)  # temp file + rename: a reader never sees a partial index
+            _prune_superseded(cdir, name, size, os.path.basename(cache))
         except (RuntimeError, OSError):
             pass  # cache is best-effort; a read-only or full ~/.cache must not fail the call
         return idx
