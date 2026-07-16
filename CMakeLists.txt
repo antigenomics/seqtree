@@ -29,6 +29,7 @@ add_library(seqtree_core STATIC
   src/searcher.cpp
   src/gapblock.cpp
   src/pairwise.cpp
+  src/distance.cpp
 )
 target_include_directories(seqtree_core PUBLIC include PRIVATE src)
 target_link_libraries(seqtree_core PUBLIC Threads::Threads)

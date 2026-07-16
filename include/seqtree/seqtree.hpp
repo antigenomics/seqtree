@@ -221,4 +221,24 @@ std::vector<int32_t> gapblock_matrix(const std::vector<std::string>& queries,
                                      int32_t gap_extend, const std::vector<int32_t>& prior,
                                      uint32_t prior_width, int threads = 0);
 
+// ---------------------------------------------------------------------------------------
+// Plain string edit distances on raw characters, unit costs. Deliberately alphabet-agnostic:
+// no Codec, no substitution matrix, no gap model -- the distance you want when you just need a
+// number, not a scored alignment. Comparison is byte-for-byte and CASE-SENSITIVE; unlike the
+// search Codec, these do not fold case.
+//
+//   hamming     -- number of differing positions; defined only for EQUAL-length sequences and
+//                  throws std::invalid_argument otherwise;
+//   levenshtein -- classic insertion/deletion/substitution distance, each edit cost 1,
+//                  O(min(m,n)) memory.
+int hamming(std::string_view a, std::string_view b);
+int levenshtein(std::string_view a, std::string_view b);
+
+// Dense N*K distance matrices, row-major (row i is a[i] vs every b[k]). Parallel;
+// threads <= 0 => hardware_concurrency. hamming_matrix throws on any length-mismatched pair.
+std::vector<int32_t> hamming_matrix(const std::vector<std::string>& a,
+                                    const std::vector<std::string>& b, int threads = 0);
+std::vector<int32_t> levenshtein_matrix(const std::vector<std::string>& a,
+                                        const std::vector<std::string>& b, int threads = 0);
+
 }  // namespace seqtree

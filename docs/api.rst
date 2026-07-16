@@ -75,6 +75,14 @@ Pairwise alignment (Needleman-Wunsch / Smith-Waterman)
    :undoc-members:
    :show-inheritance:
 
+Plain edit distances (Hamming / Levenshtein)
+--------------------------------------------
+
+.. automodule:: seqtree.distance
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
 Gap-block alignment
 -------------------
 

@@ -3,6 +3,28 @@
 All notable changes to `seqtree`. Dates are release dates; the project is pre-1.0, so a **minor**
 bump may carry breaking changes.
 
+## [0.5.0] — 2026-07-16
+
+### Added
+
+- **`seqtree.distance` — plain Hamming and Levenshtein distances, in C++, without a dependency.**
+  The *unweighted* corner of the library: unit costs, no substitution matrix, no gap model, no
+  alphabet. When all you need is "how many edits apart are these two strings", you should not have
+  to build a `SubstitutionMatrix` or add `python-Levenshtein` / `rapidfuzz`. seqtree still needs
+  nothing at runtime.
+
+  | | |
+  |---|---|
+  | `distance.hamming(a, b)` | differing positions; **equal length only** (raises `ValueError` otherwise) |
+  | `distance.levenshtein(a, b)` | insertions + deletions + substitutions, each cost 1, `O(min(m,n))` memory |
+  | `distance.hamming_matrix(a, b, threads=0)` | dense `len(a) × len(b)` int32, GIL released, zero-copy numpy |
+  | `distance.levenshtein_matrix(a, b, threads=0)` | same, for mixed-length sequences |
+
+  Comparison is **case-sensitive**, byte for byte — the one place the library does not fold case,
+  since a generic string distance should report the difference it is asked about. For a *weighted*
+  alignment (a matrix, affine gaps, local mode) use `seqtree.pairwise` instead. Checked against
+  pure-Python oracles over random data in `tests/python/test_distance.py`.
+
 ## [0.4.0] — 2026-07-11
 
 ### Added
