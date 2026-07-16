@@ -575,6 +575,45 @@ PYBIND11_MODULE(_core, m) {
           "`prior` is the gap prior flattened to [m][d][i]; see seqtree.gapblock.score_matrix, "
           "which builds it for you.");
 
+    m.def("hamming", &hamming, py::arg("a"), py::arg("b"),
+          "Hamming distance: the number of positions at which two EQUAL-length sequences differ. "
+          "Raises ValueError on a length mismatch. Case-sensitive, byte-for-byte.");
+
+    m.def("levenshtein", &levenshtein, py::arg("a"), py::arg("b"),
+          "Levenshtein (edit) distance: the minimum number of single-character insertions, "
+          "deletions, and substitutions to turn `a` into `b`, each cost 1. Case-sensitive.");
+
+    m.def(
+        "hamming_matrix",
+        [](const std::vector<std::string>& a, const std::vector<std::string>& b, int threads) {
+            ScoreMatrix out;
+            out.rows = a.size();
+            out.cols = b.size();
+            {
+                py::gil_scoped_release release;
+                out.data = hamming_matrix(a, b, threads);
+            }
+            return out;
+        },
+        py::arg("a"), py::arg("b"), py::arg("threads") = 0,
+        "Dense (len(a), len(b)) int32 Hamming-distance matrix, GIL released. Raises ValueError "
+        "if any pair has mismatched lengths.");
+
+    m.def(
+        "levenshtein_matrix",
+        [](const std::vector<std::string>& a, const std::vector<std::string>& b, int threads) {
+            ScoreMatrix out;
+            out.rows = a.size();
+            out.cols = b.size();
+            {
+                py::gil_scoped_release release;
+                out.data = levenshtein_matrix(a, b, threads);
+            }
+            return out;
+        },
+        py::arg("a"), py::arg("b"), py::arg("threads") = 0,
+        "Dense (len(a), len(b)) int32 Levenshtein-distance matrix, GIL released.");
+
     py::class_<Candidate>(m, "Candidate",
                           "A seed-and-gather hit: peptide_id, shared_kmers (distinct query k-mers "
                           "that hit it), best_score. Iterable as (peptide_id, shared_kmers, best_score).")

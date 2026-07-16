@@ -55,6 +55,12 @@ Beyond search, seqtree ships:
   disagreements** — and **65–87× faster**, since there is no Python in the per-pair loop.
   `dist_matrix` gives `d = s(a,a) + s(b,b) − 2·s(a,b)` directly. BioPython is a *test-only*
   dependency; seqtree still needs nothing at runtime.
+- **Plain edit distances** — `seqtree.distance` is unweighted `hamming` and `levenshtein` (unit
+  costs, no matrix, no alphabet) for when you just need a number, not a scored alignment.
+  `hamming_matrix` / `levenshtein_matrix` score a whole set against a whole set in one GIL-released
+  C++ call (`numpy.asarray` wraps the result with no copy) — no `python-Levenshtein` or `rapidfuzz`
+  dependency needed. Hamming requires equal lengths (it raises otherwise); comparison is
+  case-sensitive.
 - **Island profiles** — `IslandProfile.fit` builds a position weight matrix over a set of
   frame-aligned junctions (an *island*) and scores a query column by column against the island
   consensus, as a non-negative penalty that flows through `threshold_for_evalue` unchanged. At a
@@ -147,6 +153,12 @@ score("AAA", "AAAAA", mat, gap_open=5, gap_extend=5)           # linear gaps: op
 aln = align("CASSLGQAYEQYF", "CASSPGQAYEQF", mat)              # + aligned strings and ops
 
 d = np.asarray(dist_matrix(v_genes, v_genes, mat, threads=0))  # s(a,a)+s(b,b)-2s(a,b), zero diagonal
+
+# plain edit distances -- unweighted Hamming / Levenshtein, no matrix, no dependency
+from seqtree.distance import hamming, levenshtein, hamming_matrix, levenshtein_matrix
+hamming("CASSLGQYF", "CASSPGQYF")                             # 1  (equal length only)
+levenshtein("kitten", "sitting")                             # 3
+h = np.asarray(hamming_matrix(umis, umis, threads=0))        # (len, len) int32, zero-copy
 ```
 
 ## Tests
