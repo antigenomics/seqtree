@@ -3,7 +3,7 @@
 All notable changes to `seqtree`. Dates are release dates; the project is pre-1.0, so a **minor**
 bump may carry breaking changes.
 
-## [Unreleased]
+## [0.6.0] — 2026-07-17
 
 ### Fixed
 
