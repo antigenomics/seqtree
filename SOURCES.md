@@ -32,11 +32,17 @@ possible; and out-of-frame junctions escape thymic selection, making them a samp
 | | |
 |---|---|
 | provenance | **derived** (published log-odds / interaction-strength matrices) |
-| origin | BLOSUM62 (NCBI); EMBOSS EPAM250, EPAM100; Miyazawa–Jernigan interaction strengths |
+| origin | BLOSUM62 (NCBI); EMBOSS EPAM250, EPAM100; Miyazawa–Jernigan interaction strengths, transcribed into `MJ_CONTACT` in `bench/gen_matrices.py` from the `MJ` rows of `tcren-ms/src/tcren/data/MJ_Keskin_potentials.csv` (Miyazawa & Jernigan, J Mol Biol 1996, as tabulated by Keskin et al., Protein Sci 1998) |
 | regenerate | `python bench/gen_matrices.py` |
 
 Stored as non-negative penalties via the Gram transform `pen[a][b] = s[a][a] + s[b][b] − 2·s[a][b]`,
 clamped at zero, so `penalty(a, a) == 0` and the score defines a ball.
+
+**Known corruption in the MJ source.** `MJ_Keskin_potentials.csv` has no `A,N` row: the lower-triangle
+slot where `N-A` belongs is mangled to `V,1` (mirrored `1,V`) for *both* the `MJ` and `Keskin`
+potentials. `MJ_CONTACT` carries the correct `A-N = 0.15` from that row, so the constant will not
+diff cleanly against the CSV at that pair. The `Keskin` rows are unused here. Fix not yet upstreamed
+to `tcren-ms`.
 
 ## Downloaded on demand
 

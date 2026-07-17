@@ -3,6 +3,33 @@
 All notable changes to `seqtree`. Dates are release dates; the project is pre-1.0, so a **minor**
 bump may carry breaking changes.
 
+## [Unreleased]
+
+### Fixed
+
+- **`structural` scored A–N contacts as if they did not interact, because the source table is
+  corrupted there.** The Miyazawa–Jernigan A–N contact energy was transcribed as `0.00` — the
+  generator's comment excused it as a pair the source left unlisted. It is not unlisted. In
+  `MJ_Keskin_potentials.csv` the lower triangle runs `A-A`, `R-A`, `R-R`, `[N-A]`, `N-R`, …, and
+  the `N-A` slot reads `V,1` (mirrored `1,V`), where `1` is a mangled residue symbol. The true
+  value is **0.15**. It is not a stray duplicate of `V-N` either — the V row separately lists
+  `N = 0.12`.
+
+  Substituting `0.00` for `0.15` understated A's interaction strength and overstated N's
+  (`q(A)` −0.04100 → −0.03350, `q(N)` +0.04350 → +0.05100). Since `structural` is rank-1 by
+  construction — every cell is a function of the 20 per-residue strengths — this moved the
+  strong→weak ordering that the matrix exists to encode, swapping N and P:
+  `FWCLYMIVHGAT`**`NP`**`RSQDEK` → `FWCLYMIVHGAT`**`PN`**`RSQDEK`.
+
+  Four cells of the 24×24 grid change: `A-W`/`W-A` 6 → 5, and `B-C`/`C-B` 4 → 3 (`B` is
+  `mean(N, D)`, so N's shift carries into it). **Scores from `structural()` change for sequences
+  containing A, W, or B**; all other matrices are untouched. N and P were near-tied, which is why
+  a real correction to the ordering moves so few cells.
+
+- **The same comment claimed the source is "near- but not perfectly symmetric".** It is perfectly
+  symmetric — 0 asymmetric directed pairs across all 400. The symmetrisation in
+  `structural_grid()` is a no-op guard, not a repair, and is now documented as such.
+
 ## [0.5.0] — 2026-07-16
 
 ### Added
