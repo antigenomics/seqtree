@@ -1,30 +1,30 @@
-#!/usr/bin/env fish
-# Repo-local venv + editable install, via uv. Flags:
+#!/bin/sh
+# Repo-local venv + editable install, via uv. POSIX sh -- runs under bash and zsh. Flags:
 #   --tests  also install pytest extra
 #   --bench  also install benchmark extras (huggingface_hub, psutil)
 #
 # Needs uv (https://docs.astral.sh/uv/); `brew install uv` or the standalone installer.
-set repo (dirname (status --current-filename))
-cd $repo
+cd "$(dirname "$0")" || exit 1
 
-if not command -q uv
+if ! command -v uv >/dev/null 2>&1; then
     echo "setup.sh needs uv -- install it with 'brew install uv' or see https://docs.astral.sh/uv/"
     exit 1
-end
+fi
 
 # uv creates and manages .venv. `uv pip` finds .venv in the cwd without an active
 # venv, but we activate so the pytest/cmake commands echoed below use it too.
-if not test -d .venv
+if [ ! -d .venv ]; then
     uv venv
-end
-source .venv/bin/activate.fish
+fi
+. .venv/bin/activate
 
-set extras ""
-if contains -- --tests $argv
-    set extras "[test]"
-else if contains -- --bench $argv
-    set extras "[bench]"
-end
+extras=""
+for arg in "$@"; do
+    case "$arg" in
+        --tests) extras="[test]" ;;
+        --bench) extras="[bench]" ;;
+    esac
+done
 
 uv pip install -e ".$extras"
 
