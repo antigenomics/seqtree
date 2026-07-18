@@ -80,8 +80,11 @@ needs a C++17 compiler and CMake (pulled in automatically by the build).
 
 ## Build from source
 
+Needs [uv](https://docs.astral.sh/uv/) (`brew install uv`); `setup.sh` uses it for the venv and
+the editable install.
+
 ```fish
-bash setup.sh            # repo-local .venv + editable install
+bash setup.sh            # uv-managed .venv + editable install
 bash setup.sh --tests    # + pytest
 bash setup.sh --bench     # + benchmark deps (huggingface_hub, psutil)
 ```

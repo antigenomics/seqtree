@@ -36,11 +36,12 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
+      - uses: astral-sh/setup-uv@v6
       - name: Install package
-        run: pip install -e ".[test]"
+        run: uv pip install --system -e ".[test]"
       - name: Install OLGA (optional, for realistic-sequence tests)
         continue-on-error: true
-        run: pip install olga
+        run: uv pip install --system olga
       - name: Test
         run: pytest tests/python -q
 
@@ -52,10 +53,11 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - uses: astral-sh/setup-uv@v6
       - name: Install gnuplot
         run: sudo apt-get update && sudo apt-get install -y gnuplot
       - name: Install package (compiles seqtree from this repo state)
-        run: pip install -e ".[test]"
+        run: uv pip install --system -e ".[test]"
       # Regenerate the deterministic table on the freshly compiled seqtree and assert
       # it matches the committed oracle (ints exact, metrics within 1e-9); a real change
       # means rerunning bench/tables/make_tables.sh and committing the new oracle. The

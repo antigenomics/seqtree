@@ -16,11 +16,13 @@ Prebuilt wheels are published on `PyPI <https://pypi.org/project/seqtree/>`_ for
    There are no Intel/x86-64 macOS wheels — Intel Macs build from source (below), which only needs
    a C++17 compiler and CMake.
 
-To build the C++17/20 core + pybind11 binding from a clone instead:
+To build the C++17/20 core + pybind11 binding from a clone instead, first install
+`uv <https://docs.astral.sh/uv/>`_ (``brew install uv``); ``setup.sh`` uses it for the venv and
+the editable install:
 
 .. code-block:: fish
 
-   bash setup.sh            # repo-local .venv + editable install
+   bash setup.sh            # uv-managed .venv + editable install
    bash setup.sh --tests    # also install pytest
    bash setup.sh --bench    # also install benchmark deps
 

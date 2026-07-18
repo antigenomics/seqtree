@@ -237,7 +237,7 @@ Count it in the control.
 4. OLGA generates from `P_gen`, which is **not** the post-selection background `P_0`. Do not use
    an OLGA sample as the null for an operational cutoff.
 5. Rebuild after pulling: a stale `_core.so` has silently shadowed new Python-visible C++ methods
-   more than once (`pip install -e .`).
+   more than once (`bash setup.sh`, or `uv pip install -e .`).
 
 ## Layering
 
