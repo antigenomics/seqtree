@@ -3,6 +3,17 @@
 All notable changes to `seqtree`. Dates are release dates; the project is pre-1.0, so a **minor**
 bump may carry breaking changes.
 
+## [0.6.1] — 2026-07-30
+
+### Fixed
+
+- **`gapblock_matrix`'s out-of-alphabet error named only the bad symbol**, not which sequence it
+  came from (`"symbol '_' is not in the alphabet"`) — unhelpful when a single malformed row (e.g.
+  a `junction_aa` containing a legacy out-of-frame marker) is buried in a batch of hundreds of
+  thousands. The message now names the side, index, and offending string:
+  `"queries[42] ('CASSIRS_YEQYF'): symbol '_' is not in the alphabet"`. No change to which symbols
+  are accepted (still the standard 20 + B/Z/X/* for `alphabet="aa"`).
+
 ## [0.6.0] — 2026-07-17
 
 ### Fixed
