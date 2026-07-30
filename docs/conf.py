@@ -3,8 +3,8 @@
 project = "seqtree"
 copyright = "2026, antigenomics"
 author = "antigenomics"
-release = "0.6.0"
-version = "0.6.0"
+release = "0.6.1"
+version = "0.6.1"
 
 extensions = [
     "sphinx.ext.autodoc",
