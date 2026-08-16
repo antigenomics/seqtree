@@ -3,6 +3,52 @@
 All notable changes to `seqtree`. Dates are release dates; the project is pre-1.0, so a **minor**
 bump may carry breaking changes.
 
+## [0.7.0] — 2026-08-16
+
+### Added
+
+- **`seqtree.distance` now enumerates a Hamming ball, not just scores one.**
+  `neighbourhood(seq, r=1, alphabet=None, include_self=True, shell=False)` lists the members of
+  the closed ball (`19·L + 1` at `r = 1` over the 20 standard residues);
+  `neighbourhood_union(seqs, ...)` takes the union over many centres, emitting each distinct
+  sequence **once**; `union_size(seqs, ...)` returns the cardinality without building or sorting
+  the result list. `shell=True` returns the sphere at exactly `r` from the *nearest* centre —
+  a per-shell quantity has to be estimated per shell.
+
+  Substitution only, fixed length: Hamming distance is undefined across lengths (`hamming`
+  already raises), and indels are `gapblock`'s problem. Deduplication happens during a
+  multi-source breadth-first walk, so the `Σ 19·L_i` multiset is never materialised — which is
+  the point, since near-duplicate centres overlap heavily. For 200 length-14 junctions all within
+  distance 1 of a common centre, the per-sequence balls double-count **41.7%** (53,400 → 31,122);
+  at spread 2, 4.5%; at spread ≥ 3, nothing.
+
+  Pure Python, measured before being written in C++: 300 junctions of length 14 at `r = 1` is
+  80,100 distinct sequences in **23 ms** on one M3 core (11 ms for `union_size`). `r = 2` over
+  the same input is 9.9 M sequences, 6.8 s and ~1.8 GB.
+
+  `alphabet=None` defaults to the 20 standard amino acids — `amino_acids()` **minus** the
+  ambiguity codes `B`/`Z`/`X` and the stop `*`, which that function does include.
+
+  Shells **partition** the closed ball exactly: shells `0..r` are pairwise disjoint, their union
+  is the ball, and every member sits at distance exactly `d` from its *nearest* centre. A
+  per-shell quantity therefore sums back to the per-ball one. Pinned by a test that checks the
+  distance with the C++ `hamming`, not with the generator's own bookkeeping.
+
+  `neighbourhood_union` and `union_size` **raise `TypeError` on a single string** rather than
+  iterating it. A `str` is iterable, so `union_size("CASSLGQYF")` would otherwise take the
+  sequence's 8 distinct *characters* as the centres and answer `20` instead of `172` — a
+  plausible integer, no error, no way to notice. Pass `["CASSLGQYF"]`, or call `neighbourhood`.
+
+- **`seqtree.__version__`.** Read from the installed distribution metadata, so `pyproject.toml`'s
+  `project.version` is the single source and a release that bumps it cannot leave a stale literal
+  behind. Asserted against the distribution metadata *and* against `pyproject.toml` by a test.
+
+### Fixed
+
+- **The documentation build stamped every page `0.6.1` while the package was `0.7.0`.**
+  `docs/conf.py` hand-copied the version into `release`/`version` and the 0.7.0 bump touched only
+  `pyproject.toml`. Both now read `seqtree.__version__`, which the docs job already installs.
+
 ## [0.6.1] — 2026-07-30
 
 ### Fixed

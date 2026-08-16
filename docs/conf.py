@@ -1,10 +1,12 @@
 """Sphinx configuration for seqtree."""
+import seqtree
 
 project = "seqtree"
 copyright = "2026, antigenomics"
 author = "antigenomics"
-release = "0.6.1"
-version = "0.6.1"
+# From the installed package, not a literal: these two read 0.6.1 while the package was 0.7.0.
+release = seqtree.__version__
+version = release
 
 extensions = [
     "sphinx.ext.autodoc",
