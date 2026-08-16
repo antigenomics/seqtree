@@ -111,6 +111,31 @@ dist_matrix(queries, refs, ...)  -> ScoreMatrix        # d = s(a,a)+s(b,b)-2s(a,
   `similarity()` (signed log-odds, for these aligners). The Gram transform is lossy -- it zeroes
   the diagonal -- so a similarity cannot be recovered from a penalty.
 
+## Plain distances and Hamming balls — `seqtree.distance`
+
+```python
+hamming(a, b) -> int                 # equal length only; RAISES otherwise. Case-SENSITIVE.
+levenshtein(a, b) -> int
+hamming_matrix(a, b, threads=0) / levenshtein_matrix(...) -> ScoreMatrix   # GIL released
+
+neighbourhood(seq, r=1, alphabet=None, include_self=True, shell=False) -> list[str]
+neighbourhood_union(seqs, r=1, ...) -> list[str]      # dedup DURING the walk
+union_size(seqs, r=1, ...) -> int                     # size the job first
+```
+
+Enumeration is **substitution only, fixed length** — no indels, because Hamming is undefined
+across lengths and `P_gen` is length-conditioned. `alphabet=None` is the 20 standard residues,
+which is `amino_acids()` **minus** `B`/`Z`/`X`/`*` — passing `amino_acids()` itself gives 23·L
+neighbours, not 19·L. `shell=True` is the sphere at exactly `r` from the *nearest* centre;
+`include_self=False` drops the whole `r = 0` shell, i.e. every centre.
+
+**Take the union, never the sum of the balls.** 200 length-14 junctions drawn within distance `d`
+of a common centre, `r = 1`: at `d = 1` the per-sequence balls double-count **41.7%**
+(53,400 → 31,122), at `d = 2` 4.5%, at `d ≥ 3` nothing. 300 junctions of length 14 at `r = 1` is
+80,100 distinct sequences in **23 ms** on one M3 core (`union_size` 11 ms), so this is pure
+Python and does not need the C++ core. `r = 2` over the same 300 is 9.9 M sequences, 6.8 s,
+~1.8 GB — there the dedup is what keeps it to one copy.
+
 ## Gap-block alignment — `seqtree.gapblock`
 
 A V(D)J junction's length variation is **one** contiguous indel event, so restrict alignment to

@@ -60,7 +60,11 @@ Beyond search, seqtree ships:
   `hamming_matrix` / `levenshtein_matrix` score a whole set against a whole set in one GIL-released
   C++ call (`numpy.asarray` wraps the result with no copy) — no `python-Levenshtein` or `rapidfuzz`
   dependency needed. Hamming requires equal lengths (it raises otherwise); comparison is
-  case-sensitive.
+  case-sensitive. The same module *enumerates* a Hamming ball as well as scoring one:
+  `neighbourhood(seq, r)` lists its `19·L + 1` members, and `neighbourhood_union(seqs, r)` takes
+  the union over many centres with each distinct sequence emitted **once** — deduplicated during
+  the walk, so the `Σ 19·L_i` multiset never exists. For a tight specificity group that is a 41.7%
+  saving, not a rounding correction.
 - **Island profiles** — `IslandProfile.fit` builds a position weight matrix over a set of
   frame-aligned junctions (an *island*) and scores a query column by column against the island
   consensus, as a non-negative penalty that flows through `threshold_for_evalue` unchanged. At a
@@ -162,6 +166,13 @@ from seqtree.distance import hamming, levenshtein, hamming_matrix, levenshtein_m
 hamming("CASSLGQYF", "CASSPGQYF")                             # 1  (equal length only)
 levenshtein("kitten", "sitting")                             # 3
 h = np.asarray(hamming_matrix(umis, umis, threads=0))        # (len, len) int32, zero-copy
+
+# enumerate the ball, deduplicated across centres (substitution only, fixed length)
+from seqtree.distance import neighbourhood, neighbourhood_union, union_size
+neighbourhood("CASSLGQYF")                                   # 172 = 19*9 + 1
+union_size(junctions)                                        # size the job before running it
+for variant in neighbourhood_union(junctions, r=1):          # each distinct sequence once
+    ...
 ```
 
 ## Tests

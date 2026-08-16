@@ -3,6 +3,32 @@
 All notable changes to `seqtree`. Dates are release dates; the project is pre-1.0, so a **minor**
 bump may carry breaking changes.
 
+## [0.7.0] — 2026-08-16
+
+### Added
+
+- **`seqtree.distance` now enumerates a Hamming ball, not just scores one.**
+  `neighbourhood(seq, r=1, alphabet=None, include_self=True, shell=False)` lists the members of
+  the closed ball (`19·L + 1` at `r = 1` over the 20 standard residues);
+  `neighbourhood_union(seqs, ...)` takes the union over many centres, emitting each distinct
+  sequence **once**; `union_size(seqs, ...)` returns the cardinality without building or sorting
+  the result list. `shell=True` returns the sphere at exactly `r` from the *nearest* centre —
+  a per-shell quantity has to be estimated per shell.
+
+  Substitution only, fixed length: Hamming distance is undefined across lengths (`hamming`
+  already raises), and indels are `gapblock`'s problem. Deduplication happens during a
+  multi-source breadth-first walk, so the `Σ 19·L_i` multiset is never materialised — which is
+  the point, since near-duplicate centres overlap heavily. For 200 length-14 junctions all within
+  distance 1 of a common centre, the per-sequence balls double-count **41.7%** (53,400 → 31,122);
+  at spread 2, 4.5%; at spread ≥ 3, nothing.
+
+  Pure Python, measured before being written in C++: 300 junctions of length 14 at `r = 1` is
+  80,100 distinct sequences in **23 ms** on one M3 core (11 ms for `union_size`). `r = 2` over
+  the same input is 9.9 M sequences, 6.8 s and ~1.8 GB.
+
+  `alphabet=None` defaults to the 20 standard amino acids — `amino_acids()` **minus** the
+  ambiguity codes `B`/`Z`/`X` and the stop `*`, which that function does include.
+
 ## [0.6.1] — 2026-07-30
 
 ### Fixed
