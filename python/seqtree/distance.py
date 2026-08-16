@@ -145,6 +145,11 @@ def _shells(seqs: Iterable[str], r: int, alphabet: str | None,
     """
     if r < 0:
         raise ValueError(f"radius must be non-negative, got r={r}")
+    if isinstance(seqs, str):
+        # A str is iterable, so set(seqs) would silently take its CHARACTERS as the centres:
+        # union_size("CASSLGQYF") would answer 20 instead of 172 -- a plausible number, no error.
+        raise TypeError(f"seqs must be a collection of sequences, not one string; "
+                        f"pass [{seqs!r}] or call neighbourhood({seqs!r})")
     alpha = _STANDARD_AA if alphabet is None else alphabet
     frontier = set(seqs)
     seen = set(frontier)
@@ -195,6 +200,8 @@ def neighbourhood_union(seqs: Iterable[str], r: int = 1, alphabet: str | None = 
 
     Raises:
         ValueError: If ``r`` is negative.
+        TypeError: If ``seqs`` is a single string -- its characters would otherwise become the
+            centres, silently. Use :func:`neighbourhood` for one sequence.
 
     Example:
         >>> neighbourhood_union(["AA", "AC"], 1, alphabet="AC")
@@ -264,6 +271,7 @@ def union_size(seqs: Iterable[str], r: int = 1, alphabet: str | None = None,
 
     Raises:
         ValueError: If ``r`` is negative.
+        TypeError: If ``seqs`` is a single string, as for :func:`neighbourhood_union`.
 
     Example:
         >>> union_size(["CASSLGQYF", "CASSPGQYF"])          # 344 with double-counting

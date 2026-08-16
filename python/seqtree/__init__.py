@@ -9,6 +9,8 @@ it ignores the per-type caps). Payload-agnostic: results are
 For anchored loops (CDR3 / junction), :mod:`seqtree.gapblock` restricts the alignment
 to one contiguous indel and picks its position with a gap prior.
 """
+from importlib.metadata import version as _distribution_version
+
 from ._core import (
     Index,
     SearchParams,
@@ -31,6 +33,11 @@ from .gapblock import (
 )
 from .seeds import SeedIndex, core_kmers
 from .pmhc import PMHCStore, find_mimics
+
+#: Read from the installed distribution metadata, so ``pyproject.toml``'s ``project.version``
+#: is the single source. A hand-copied literal here would silently drift from the version
+#: actually published to PyPI.
+__version__ = _distribution_version("seqtree")
 
 __all__ = [
     "distance",

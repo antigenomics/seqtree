@@ -290,6 +290,43 @@ def test_union_shell_uses_the_distance_to_the_nearest_centre():
     assert len(shell) == 38 * len(s) - 18 - 2
 
 
+def test_shells_partition_the_union_exactly():
+    """The property downstream shell-profiling relies on: shells 0..r tile the closed ball.
+
+    Disjoint, exhaustive, and each member sits at distance exactly d from its *nearest* centre
+    -- checked against the C++ ``hamming``, not against the generator's own bookkeeping. Were a
+    shell to silently drop or double-count members, a per-shell quantity summed back up would
+    stop reproducing the ball, with nothing raised anywhere.
+    """
+    centres = ["CASSLGQ", "CATSLGQ", "CASSPGQ", "CASSLGY"]      # near-duplicates: balls overlap
+    R = 2
+    ball = neighbourhood_union(centres, R)
+    shells = [set(neighbourhood_union(centres, d, shell=True)) for d in range(R + 1)]
+
+    for i in range(R + 1):
+        for j in range(i + 1, R + 1):
+            assert not (shells[i] & shells[j]), f"shells {i} and {j} overlap"
+    assert set().union(*shells) == set(ball)
+    assert sum(len(s) for s in shells) == len(ball)
+    assert union_size(centres, R) == sum(union_size(centres, d, shell=True) for d in range(R + 1))
+
+    for d, members in enumerate(shells):
+        for m in members:
+            assert min(hamming(c, m) for c in centres) == d
+
+
+def test_a_bare_string_is_rejected_rather_than_split_into_centres():
+    """``set("CASSLGQYF")`` is 8 one-character centres, so the union would be 20, not 172.
+
+    A plausible integer and no error -- exactly the shape of a silent wrong answer. Callers hold
+    a single junction often enough that this has to raise rather than answer.
+    """
+    for fn in (neighbourhood_union, union_size):
+        with pytest.raises(TypeError, match="not one string"):
+            fn("CASSLGQYF")
+    assert union_size(["CASSLGQYF"]) == 172      # the call that was meant
+
+
 def test_union_size_agrees_with_the_materialised_union():
     rng = random.Random(11)
     seqs = [rand_seq(rng, AA, 8, 8) for _ in range(5)] + [S, S]

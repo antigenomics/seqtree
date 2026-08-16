@@ -29,6 +29,26 @@ bump may carry breaking changes.
   `alphabet=None` defaults to the 20 standard amino acids — `amino_acids()` **minus** the
   ambiguity codes `B`/`Z`/`X` and the stop `*`, which that function does include.
 
+  Shells **partition** the closed ball exactly: shells `0..r` are pairwise disjoint, their union
+  is the ball, and every member sits at distance exactly `d` from its *nearest* centre. A
+  per-shell quantity therefore sums back to the per-ball one. Pinned by a test that checks the
+  distance with the C++ `hamming`, not with the generator's own bookkeeping.
+
+  `neighbourhood_union` and `union_size` **raise `TypeError` on a single string** rather than
+  iterating it. A `str` is iterable, so `union_size("CASSLGQYF")` would otherwise take the
+  sequence's 8 distinct *characters* as the centres and answer `20` instead of `172` — a
+  plausible integer, no error, no way to notice. Pass `["CASSLGQYF"]`, or call `neighbourhood`.
+
+- **`seqtree.__version__`.** Read from the installed distribution metadata, so `pyproject.toml`'s
+  `project.version` is the single source and a release that bumps it cannot leave a stale literal
+  behind. Asserted against the distribution metadata *and* against `pyproject.toml` by a test.
+
+### Fixed
+
+- **The documentation build stamped every page `0.6.1` while the package was `0.7.0`.**
+  `docs/conf.py` hand-copied the version into `release`/`version` and the 0.7.0 bump touched only
+  `pyproject.toml`. Both now read `seqtree.__version__`, which the docs job already installs.
+
 ## [0.6.1] — 2026-07-30
 
 ### Fixed
