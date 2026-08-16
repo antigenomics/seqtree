@@ -9,13 +9,13 @@
 namespace seqtree {
 namespace {
 
-std::vector<uint8_t> encode(const Codec& c, const std::string& s) {
+std::vector<uint8_t> encode(const Codec& c, const std::string& s, const char* label, size_t idx) {
     std::vector<uint8_t> out(s.size());
     for (size_t i = 0; i < s.size(); ++i) {
         uint8_t v = c.encode(s[i]);
         if (v == Codec::kInvalid)
-            throw std::invalid_argument(std::string("symbol '") + s[i] +
-                                        "' is not in the alphabet");
+            throw std::invalid_argument(label + std::string("[") + std::to_string(idx) + "] ('" + s +
+                                        "'): symbol '" + s[i] + "' is not in the alphabet");
         out[i] = v;
     }
     return out;
@@ -85,11 +85,11 @@ std::vector<int32_t> gapblock_matrix(const std::vector<std::string>& queries,
     std::vector<std::vector<uint8_t>> qc(N), rc(K);
     uint32_t longest = 0;
     for (size_t i = 0; i < N; ++i) {
-        qc[i] = encode(codec, queries[i]);
+        qc[i] = encode(codec, queries[i], "queries", i);
         longest = std::max<uint32_t>(longest, uint32_t(qc[i].size()));
     }
     for (size_t k = 0; k < K; ++k) {
-        rc[k] = encode(codec, refs[k]);
+        rc[k] = encode(codec, refs[k], "refs", k);
         longest = std::max<uint32_t>(longest, uint32_t(rc[k].size()));
     }
 
