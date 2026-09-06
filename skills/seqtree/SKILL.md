@@ -1,6 +1,6 @@
 ---
 name: seqtree
-description: Fast fuzzy search over biological sequences — C++20 arena trie + pybind11, with control-calibrated E-values, single-gap-block alignment, and seed significance.
+description: Fast fuzzy search over biological sequences — C++20 arena trie + nanobind, with control-calibrated E-values, single-gap-block alignment, and seed significance.
 ---
 
 # seqtree

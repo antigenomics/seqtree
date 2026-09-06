@@ -13,7 +13,7 @@ endif()  # MSVC Release already uses /O2; -O3 is not a valid MSVC flag
 
 option(SEQTREE_TESTS "Build C++ tests" OFF)
 option(SEQTREE_BENCH "Build C++ benchmarks" OFF)
-option(SEQTREE_PYTHON "Build the pybind11 module" OFF)
+option(SEQTREE_PYTHON "Build the nanobind module" OFF)
 
 find_package(Threads REQUIRED)
 
@@ -35,10 +35,21 @@ target_include_directories(seqtree_core PUBLIC include PRIVATE src)
 target_link_libraries(seqtree_core PUBLIC Threads::Threads)
 
 if(SEQTREE_PYTHON)
-  find_package(pybind11 CONFIG REQUIRED)
-  pybind11_add_module(_core src/_bindings.cpp)
+  find_package(Python 3.10 REQUIRED COMPONENTS Interpreter Development.Module)
+  # nanobind ships its CMake package inside the wheel rather than on CMAKE_PREFIX_PATH.
+  execute_process(COMMAND "${Python_EXECUTABLE}" -m nanobind --cmake_dir
+                  OUTPUT_STRIP_TRAILING_WHITESPACE OUTPUT_VARIABLE nanobind_ROOT)
+  find_package(nanobind CONFIG REQUIRED)
+  # NB_STATIC: one extension module, so link nanobind's runtime into it rather than
+  # building the shared libnanobind nobody else would use.
+  nanobind_add_module(_core NB_STATIC src/_bindings.cpp)
   target_link_libraries(_core PRIVATE seqtree_core)
   install(TARGETS _core DESTINATION seqtree)
+
+  # py.typed has always promised types the package never shipped; nanobind generates them.
+  nanobind_add_stub(_core_stub MODULE _core OUTPUT _core.pyi
+                    PYTHON_PATH $<TARGET_FILE_DIR:_core> DEPENDS _core)
+  install(FILES ${CMAKE_CURRENT_BINARY_DIR}/_core.pyi DESTINATION seqtree)
 endif()
 
 if(SEQTREE_TESTS)

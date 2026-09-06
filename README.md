@@ -80,7 +80,7 @@ pip install seqtree       # prebuilt wheels for CPython 3.10–3.13
 
 Prebuilt wheels cover **Linux x86-64**, **macOS arm64 (Apple Silicon)**, and **Windows x86-64**.
 There are **no Intel/x86-64 macOS wheels** — Intel Macs build from source (see below), which just
-needs a C++17 compiler and CMake (pulled in automatically by the build).
+needs a C++20 compiler and CMake (pulled in automatically by the build).
 
 ## Build from source
 
