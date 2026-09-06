@@ -1,11 +1,13 @@
 #include "seqtree/seqtree.hpp"
 #include "seqtree/kmer_index.hpp"
+#include "seqtree/text_index.hpp"
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/pair.h>
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/string_view.h>
+#include <nanobind/stl/tuple.h>
 #include <nanobind/stl/unique_ptr.h>
 #include <nanobind/stl/vector.h>
 
@@ -42,6 +44,14 @@ Alphabet parse_alphabet(const std::string& a) {
     if (l == "nt" || l == "dna" || l == "nucleotide") return Alphabet::Nucleotide;
     if (l == "nt_iupac" || l == "iupac") return Alphabet::NucleotideIUPAC;
     throw nb::value_error(("unknown alphabet '" + a + "' (use 'aa', 'nt', or 'iupac')").c_str());
+}
+
+const char* alphabet_name(Alphabet a) {
+    switch (a) {
+        case Alphabet::Nucleotide:      return "nt";
+        case Alphabet::NucleotideIUPAC: return "iupac";
+        default:                        return "aa";
+    }
 }
 
 Engine parse_engine(const std::string& e) {
@@ -248,6 +258,81 @@ PyType_Slot kScoreMatrixSlots[] = {
     { Py_bf_releasebuffer, (void*)score_matrix_releasebuffer },
     { 0, nullptr }
 };
+
+// A read-only 1-D typed window onto memory a TextResult owns. Same reasoning as ScoreMatrix:
+// seqtree has no runtime dependencies, so the way out is the buffer protocol, not an ndarray.
+// `owner` is a strong reference to the TextResult, so a view outlives the dict it came from.
+struct ArrayView {
+    nb::object  owner;
+    const void* data = nullptr;
+    size_t      n = 0;
+    size_t      itemsize = 0;
+    char        fmt = 'i';
+};
+
+int array_view_getbuffer(PyObject* obj, Py_buffer* view, int flags) {
+    const ArrayView* a = nb::inst_ptr<ArrayView>(obj);
+    auto* dims = new Py_ssize_t[2]{Py_ssize_t(a->n), Py_ssize_t(a->itemsize)};
+    view->buf = const_cast<void*>(a->data);
+    view->len = Py_ssize_t(a->n * a->itemsize);
+    view->readonly = 1;
+    view->itemsize = Py_ssize_t(a->itemsize);
+    static thread_local char fmt_buf[2] = {0, 0};
+    fmt_buf[0] = a->fmt;
+    view->format = (flags & PyBUF_FORMAT) == PyBUF_FORMAT ? fmt_buf : nullptr;
+    view->ndim = 1;
+    view->shape = dims;
+    view->strides = dims + 1;
+    view->suboffsets = nullptr;
+    view->internal = dims;
+    view->obj = Py_NewRef(obj);
+    return 0;
+}
+
+void array_view_releasebuffer(PyObject*, Py_buffer* view) {
+    delete[] static_cast<Py_ssize_t*>(view->internal);
+    view->internal = nullptr;
+}
+
+PyType_Slot kArrayViewSlots[] = {
+    { Py_bf_getbuffer, (void*)array_view_getbuffer },
+    { Py_bf_releasebuffer, (void*)array_view_releasebuffer },
+    { 0, nullptr }
+};
+
+template <class T>
+ArrayView view_of(const nb::object& owner, const std::vector<T>& v, char fmt) {
+    return ArrayView{owner, v.data(), v.size(), sizeof(T), fmt};
+}
+
+// One hit as a Python object. Built only for the query actually asked for, never for the whole
+// batch -- the flat arrays are what a 445k-query run should read.
+struct PyTextHit {
+    uint32_t ref_id = 0, offset = 0;
+    uint16_t n_subs = 0;
+    int32_t  score = 0;
+    std::vector<std::tuple<uint16_t, std::string, std::string>> mismatches;
+};
+
+nb::dict text_result_arrays(const nb::object& self) {
+    const TextResult& r = nb::cast<const TextResult&>(self);
+    nb::dict d;
+    d["query_begin"] = view_of(self, r.query_begin, 'I');
+    d["ref_id"] = view_of(self, r.ref_id, 'I');
+    d["offset"] = view_of(self, r.offset, 'I');
+    d["n_subs"] = view_of(self, r.n_subs, 'H');
+    d["score"] = view_of(self, r.score, 'i');
+    d["mm_begin"] = view_of(self, r.mm_begin, 'I');
+    d["mm_pos"] = view_of(self, r.mm_pos, 'H');
+    d["mm_query_aa"] = view_of(self, r.mm_query_aa, 'c');
+    d["mm_text_aa"] = view_of(self, r.mm_text_aa, 'c');
+    d["truncated"] = view_of(self, r.truncated, 'B');
+    d["group_begin"] = view_of(self, r.group_begin, 'I');
+    d["group_id"] = view_of(self, r.group_id, 'I');
+    d["group_min_subs"] = view_of(self, r.group_min_subs, 'H');
+    d["group_n_hits"] = view_of(self, r.group_n_hits, 'I');
+    return d;
+}
 
 AlignMode parse_align_mode(const std::string& m) {
     std::string l = lower(m);
@@ -707,4 +792,185 @@ NB_MODULE(_core, m) {
             "k-mers; allele_filter >= 0 restricts to that allele tag.")
         .def("save", &KmerIndex::save, nb::arg("path"))
         .def_static("load", &KmerIndex::load, nb::arg("path"));
+
+    nb::class_<ArrayView>(m, "ArrayView", nb::type_slots(kArrayViewSlots),
+                          "A read-only 1-D view over one of a TextResult's arrays. Exposes the "
+                          "buffer protocol, so ``numpy.asarray(v)`` and ``memoryview(v)`` wrap "
+                          "it without copying, and it keeps its TextResult alive.")
+        .def("__len__", [](const ArrayView& a) { return a.n; })
+        .def_prop_ro("format", [](const ArrayView& a) { return std::string(1, a.fmt); })
+        .def("__repr__", [](const ArrayView& a) {
+            return "ArrayView(len=" + std::to_string(a.n) + ", format='" + std::string(1, a.fmt) +
+                   "')";
+        });
+
+    nb::class_<PyTextHit>(m, "TextHit",
+                          "One match of a query against the text. ``offset`` is the start within "
+                          "record ``ref_id``; ``n_subs`` is the Hamming distance; ``score`` is "
+                          "the substitution score (0 unless a matrix was passed). "
+                          "``mismatches`` lists ``(pos, query_aa, text_aa)`` -- the PAIR, so a "
+                          "caller ranking by chemistry can tell L->I from L->D without "
+                          "re-fetching the window. Iterable as "
+                          "``(ref_id, offset, n_subs, score)``.")
+        .def_ro("ref_id", &PyTextHit::ref_id)
+        .def_ro("offset", &PyTextHit::offset)
+        .def_ro("n_subs", &PyTextHit::n_subs)
+        .def_ro("score", &PyTextHit::score)
+        .def_ro("mismatches", &PyTextHit::mismatches)
+        .def("__iter__", [](const PyTextHit& h) {
+            return nb::iter(nb::make_tuple(h.ref_id, h.offset, h.n_subs, h.score));
+        })
+        .def("__repr__", [](const PyTextHit& h) {
+            return "TextHit(ref_id=" + std::to_string(h.ref_id) +
+                   ", offset=" + std::to_string(h.offset) +
+                   ", n_subs=" + std::to_string(h.n_subs) +
+                   ", score=" + std::to_string(h.score) + ")";
+        });
+
+    nb::class_<TextResult>(m, "TextResult",
+                           "Results of a TextIndex batch, held as flat parallel arrays rather "
+                           "than one object per hit -- a 445k-query run comes back as a handful "
+                           "of arrays. ``len(res)`` is the query count and ``res[i]`` builds the "
+                           "TextHit list for query i on demand, so iterating pairs up with the "
+                           "query list. For the whole batch use ``arrays()`` (zero-copy views) "
+                           "or ``to_numpy()``. Hits are ordered (n_subs, ref_id, offset), stable "
+                           "across runs and thread counts.")
+        .def("__len__", [](const TextResult& r) { return r.num_queries(); })
+        .def_prop_ro("num_hits", [](const TextResult& r) { return r.num_hits(); },
+                     "Total hits across every query.")
+        .def(
+            "__getitem__",
+            [](const TextResult& r, Py_ssize_t i) {
+                const Py_ssize_t n = Py_ssize_t(r.num_queries());
+                if (i < 0) i += n;
+                if (i < 0 || i >= n) throw nb::index_error("query index out of range");
+                std::vector<PyTextHit> out;
+                for (uint32_t h = r.query_begin[size_t(i)]; h < r.query_begin[size_t(i) + 1]; ++h) {
+                    PyTextHit hit{r.ref_id[h], r.offset[h], r.n_subs[h], r.score[h], {}};
+                    for (uint32_t j = r.mm_begin[h]; j < r.mm_begin[h + 1]; ++j)
+                        hit.mismatches.emplace_back(r.mm_pos[j], std::string(1, r.mm_query_aa[j]),
+                                                    std::string(1, r.mm_text_aa[j]));
+                    out.push_back(std::move(hit));
+                }
+                return out;
+            },
+            nb::arg("query"), "The hits for one query, as TextHit objects.")
+        .def(
+            "groups",
+            [](const TextResult& r, Py_ssize_t i) {
+                const Py_ssize_t n = Py_ssize_t(r.num_queries());
+                if (i < 0) i += n;
+                if (i < 0 || i >= n) throw nb::index_error("query index out of range");
+                if (r.group_begin.empty())
+                    throw nb::value_error("this result was not computed with group_by=True");
+                std::vector<std::tuple<uint32_t, uint16_t, uint32_t>> out;
+                for (uint32_t g = r.group_begin[size_t(i)]; g < r.group_begin[size_t(i) + 1]; ++g)
+                    out.emplace_back(r.group_id[g], r.group_min_subs[g], r.group_n_hits[g]);
+                return out;
+            },
+            nb::arg("query"),
+            "``(group_id, min_subs, n_hits)`` per group reached by query i, sorted by group id. "
+            "More than one row means the nearest parents disagree -- the tie is a first-class "
+            "output rather than something each caller re-derives.")
+        .def_prop_ro(
+            "truncated",
+            [](const TextResult& r) { return std::vector<uint8_t>(r.truncated); },
+            "One flag per query: 1 if max_hits capped it. A cap that is invisible is a recall "
+            "bug wearing a performance costume, so it is always reported.")
+        .def("arrays", &text_result_arrays,
+             "Every underlying array as a zero-copy ArrayView, keyed by name: query_begin, "
+             "ref_id, offset, n_subs, score, mm_begin, mm_pos, mm_query_aa, mm_text_aa, "
+             "truncated, group_begin, group_id, group_min_subs, group_n_hits.")
+        .def(
+            "to_numpy",
+            [](const nb::object& self) {
+                // Imported here, not at module scope: seqtree declares no runtime dependencies
+                // and numpy stays an optional accessor.
+                nb::object asarray = nb::module_::import_("numpy").attr("asarray");
+                nb::dict out;
+                for (auto item : text_result_arrays(self)) out[item.first] = asarray(item.second);
+                return out;
+            },
+            "The same arrays as numpy views, sharing memory with this result. Requires numpy; "
+            "it is imported on the call, never at import time.")
+        .def("__repr__", [](const TextResult& r) {
+            return "TextResult(queries=" + std::to_string(r.num_queries()) +
+                   ", hits=" + std::to_string(r.num_hits()) + ")";
+        });
+
+    nb::class_<TextIndex>(m, "TextIndex",
+                          "Exact k-mismatch (Hamming) search over a CONCATENATED reference text "
+                          "-- a proteome, a genome, a transcript set. Unlike Index, which builds "
+                          "a trie over reference *strings* and so needs one index per query "
+                          "length, ``k`` here belongs to the index: ONE build answers every "
+                          "length and every ``max_subs``. Full length, no gaps, no score in the "
+                          "predicate; the answer is exact, not a heuristic.")
+        .def_static(
+            "build",
+            [](const std::vector<std::string>& refs, const std::string& alphabet, uint8_t k,
+               const std::vector<uint32_t>& group_ids) {
+                return TextIndex::build(refs, parse_alphabet(alphabet), k, group_ids);
+            },
+            nb::arg("refs"), nb::arg("alphabet") = "aa", nb::arg("k") = 4,
+            nb::arg("group_ids") = std::vector<uint32_t>{},
+            "Build from whole records (NOT windows). ``k`` is the seed width; the table is "
+            "direct-addressed, so alphabet_size**k buckets are allocated (24**4 = 331,776 for "
+            "amino acids) and larger k is refused. ``group_ids`` optionally labels each record "
+            "-- gene ids, species, clusters -- so hits can be folded onto them; seqtree does "
+            "not know what a group means. Raises ValueError on a symbol outside the alphabet, "
+            "naming the record.")
+        .def("__len__", &TextIndex::num_refs)
+        .def_prop_ro("num_refs", &TextIndex::num_refs, "Number of records in the text.")
+        .def_prop_ro("num_residues", &TextIndex::num_residues,
+                     "Total residues, excluding the inter-record separators.")
+        .def_prop_ro("num_unknown", &TextIndex::num_unknown,
+                     "Text residues outside the alphabet (36 U in the human proteome, 33 in "
+                     "mouse). They are kept as holes -- no hit may cross one -- and reported "
+                     "here rather than dropped silently. A *query* containing one is refused.")
+        .def_prop_ro("k", &TextIndex::k, "Seed width this index was built with.")
+        .def_prop_ro("alphabet",
+                     [](const TextIndex& t) { return alphabet_name(t.alphabet()); },
+                     "'aa', 'nt' or 'iupac'.")
+        .def("ref_seq", &TextIndex::ref_seq, nb::arg("ref_id"),
+             "Return record ``ref_id`` as a string.")
+        .def(
+            "search_batch",
+            [](const TextIndex& ix, const std::vector<std::string>& queries, uint16_t max_subs,
+               bool exclude_exact, bool best_only, bool group_by, uint32_t max_hits,
+               const std::optional<SubstitutionMatrix>& matrix, int threads) {
+                TextQueryOpts o;
+                o.max_subs = max_subs;
+                o.exclude_exact = exclude_exact;
+                o.best_only = best_only;
+                o.group_by = group_by;
+                o.max_hits = max_hits;
+                o.matrix = matrix ? &*matrix : nullptr;
+                TextResult res;
+                {
+                    nb::gil_scoped_release release;  // pure C++, no Python objects touched
+                    res = ix.search_batch(queries, o, threads);
+                }
+                return res;
+            },
+            nb::arg("queries"), nb::arg("max_subs") = 0, nb::arg("exclude_exact") = false,
+            nb::arg("best_only") = false, nb::arg("group_by") = false, nb::arg("max_hits") = 0,
+            nb::arg("matrix") = std::nullopt, nb::arg("threads") = 0,
+            "Find every position matching each query within ``max_subs`` substitutions "
+            "(releases the GIL; ``threads=0`` uses all cores). ``best_only`` walks the distance "
+            "upward and stops at the first shell with any hit, returning ALL of it. "
+            "``exclude_exact`` drops 0-mismatch hits. ``max_hits`` caps a query after sorting, "
+            "so the best hits survive, and sets ``truncated``. ``matrix`` only SCORES hits the "
+            "Hamming predicate already accepted -- it never changes which are returned. Every "
+            "query must be at least ``k`` long; a shorter one raises rather than being answered "
+            "incompletely.")
+        .def("save", &TextIndex::save, nb::arg("path"),
+             "Write a flat, mmap-able index file.")
+        .def_static("load", &TextIndex::load, nb::arg("path"), nb::arg("mmap") = true,
+                    "Load an index written by save(). With ``mmap`` the file is mapped rather "
+                    "than read, so several processes share one copy of the pages.")
+        .def("__repr__", [](const TextIndex& t) {
+            return "TextIndex(refs=" + std::to_string(t.num_refs()) +
+                   ", residues=" + std::to_string(t.num_residues()) +
+                   ", k=" + std::to_string(t.k()) + ")";
+        });
 }

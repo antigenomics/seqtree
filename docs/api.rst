@@ -31,6 +31,25 @@ Alignment
    :members:
    :undoc-members:
 
+Text search
+-----------
+
+.. autoclass:: TextIndex
+   :members:
+   :undoc-members:
+
+.. autoclass:: TextResult
+   :members:
+   :undoc-members:
+
+.. autoclass:: TextHit
+   :members:
+   :undoc-members:
+
+.. autoclass:: ArrayView
+   :members:
+   :undoc-members:
+
 Scoring
 -------
 

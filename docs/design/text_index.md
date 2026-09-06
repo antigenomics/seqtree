@@ -1,6 +1,30 @@
 # `TextIndex` — exact k-mismatch search over a concatenated reference text
 
-**Status: proposed, 2026-09-06. Target `seqtree` 0.8.0.** Implementation not started.
+**Status: implemented in `seqtree` 1.0.0, 2026-09-06.** Steps 1-6 of §8 shipped; §3.7 gapped
+q-grams and §9's `mhcmatch` adapter did not. Five things below were corrected during
+implementation and the code, not this document, is authoritative on them:
+
+1. **The amino-acid codec is 24 symbols** (`ARNDCQEGHILKMFPSTWYVBZX*`), not 20. So `A^k` at
+   `k = 4` is 331,776 buckets (§5.2's 160,001 assumed 20), and the ball's branching factor is
+   23, not 19.
+2. **The ball is enumerated over `q[0:k]`, not over the whole query** (§5.3). The two give the
+   *same* candidate set -- the distinct leading k-mers of the full-query ball are exactly the
+   ball of `q[0:k]` -- at 3,267 probes instead of 19,252 for `k = 4, m = 2`, and independently
+   of `L`.
+3. **§5.3's "reuses 0.7.0's neighbourhood work" does not hold.** That work is pure Python with
+   a BFS and a shared `seen` set, whose dedup exists only because it unions over many centres.
+   The C++ ball is new code; what transferred was the duplicate-free guarantee.
+4. **Queries shorter than `k` are refused.** Seeds are indexed only where a whole k-mer fits
+   inside a record, so a shorter query could match within `k - L` of a record end and be missed.
+5. **An out-of-alphabet residue in the TEXT is a counted hole, not an error.** The human
+   proteome has 36 `U`; refusing the build over them would make the class unusable on its own
+   reference data. A *query* containing one is still refused, as §7.2 requires.
+
+§5.4's bit-packed verification was measured as the wrong lever and not built: the short path is
+bound by one cache miss per candidate, not by the comparison loop, and §5.4.5's locality sort
+made it **1.6x slower** when tried. §7.1's acceptance targets were met at `L >= 12` (0.12-0.20
+ms/query against <= 0.5) and missed at `L = 8-11` (3.3-4.9 ms at `k = 5` against <= 1.0);
+see `docs/text-index.rst` for the measured `k` trade-off.
 
 Driven by a measured failure in `mhcmatch`, but the primitive is generic and stays generic
 (`ROADMAP.md` §4, "seqtree is upstream and stays generic"). The reference implementation to beat is

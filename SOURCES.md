@@ -101,3 +101,18 @@ length-14 TRB does not transfer.
 Not currently read by any committed benchmark. Recorded because a germline-templated-flank prior was
 built against it and **falsified**: it recovers the structurally correct block position 0.4% of the
 time on TRA against 42.4% for a central prior.
+
+### UniProt reference proteomes (`isalgo/pmhc_data`)
+
+| | |
+|---|---|
+| what | whole-proteome FASTA: `mouse` (UP000000589, 54,857 records / 23,131,234 residues), `human` (UP000005640, 147,506 records / 69,578,135 residues), plus `ecoli_K12_UP000000625` and `fluA_PR8_UP000009255` as size steps |
+| provenance | **experimental** (UniProt reference proteomes, mirrored) |
+| origin | HuggingFace dataset `isalgo/pmhc_data`, path `proteome/<name>.fasta.gz` |
+| regenerate | `hf_hub_download("isalgo/pmhc_data", "proteome/human.fasta.gz", repo_type="dataset")` |
+| used by | `bench/bench_text_index.py` (large tier only, `RUN_BENCHMARK=1`) |
+
+Carries residues the amino-acid codec does not name — **36 `U`** (selenocysteine) in human and
+**33** in mouse — plus 8,417 human and 4,263 mouse `X`. `TextIndex` keeps the unnamed ones as
+holes and reports the count, rather than refusing the build or silently treating them as
+wildcards; `X`/`B`/`Z`/`*` are real symbols that match only themselves.

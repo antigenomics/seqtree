@@ -8,6 +8,10 @@ it ignores the per-type caps). Payload-agnostic: results are
 
 For anchored loops (CDR3 / junction), :mod:`seqtree.gapblock` restricts the alignment
 to one contiguous indel and picks its position with a gap prior.
+
+For the other shape of the problem -- a short query against a long *text* (a proteome, a
+genome) rather than against a set of equal-length references -- :class:`TextIndex` does
+exact k-mismatch search from a single index that serves every query length.
 """
 from importlib.metadata import version as _distribution_version
 
@@ -20,6 +24,10 @@ from ._core import (
     PositionalMatrix,
     KmerIndex,
     Candidate,
+    TextIndex,
+    TextResult,
+    TextHit,
+    ArrayView,
     pairwise_batch,
     alphabet_symbols,
     amino_acids,
@@ -68,6 +76,10 @@ __all__ = [
     "PositionalMatrix",
     "KmerIndex",
     "Candidate",
+    "TextIndex",
+    "TextResult",
+    "TextHit",
+    "ArrayView",
     "pairwise_batch",
     "alphabet_symbols",
     "amino_acids",

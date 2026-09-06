@@ -32,6 +32,10 @@ seqtree
        <h3>API Reference</h3>
        <p>Index, matrices, gap-block scoring, E-values.</p>
      </a>
+     <a class="proj-card" href="text-index.html">
+       <h3>Text Search</h3>
+       <p>k-mismatch search over a proteome, one index for every query length.</p>
+     </a>
      <a class="proj-card" href="benchmarks.html">
        <h3>Benchmarks</h3>
        <p>Throughput, scaling, alignment cost.</p>
@@ -79,6 +83,7 @@ map ``ref_id`` back to their own payloads (V gene, MHC, read counts) and filter 
    pairwise
    distance
    gapblock
+   text-index
    examples
    pmhc
    benchmarks

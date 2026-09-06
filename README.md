@@ -34,6 +34,15 @@ Beyond search, seqtree ships:
   ([Košmrlj et al., *PNAS* 2008](https://doi.org/10.1073/pnas.0808081105); MJ contact energies from
   Miyazawa & Jernigan, *J Mol Biol* 1996) — letting dissimilar-but-chemically-equivalent loops align.
   Plus custom matrices via `SubstitutionMatrix.from_similarity` (Gram penalty `s(a,a)+s(b,b)−2·s(a,b)`).
+- **Text search** — `TextIndex` does exact k-mismatch (Hamming) search over a *concatenated text*
+  — a proteome, a genome — where `Index` would need one build per query length. The human proteome
+  has **68,389,335** nine-mer windows, so a query set spanning **45 distinct lengths** costs 45
+  multi-gigabyte builds; here `k` belongs to the index and **one build answers every length and
+  every `max_subs`**. Exact, not heuristic: pigeonhole blocks above `k`, a duplicate-free
+  substitution ball below it, with completeness pinned by brute-force **set equality** over
+  L 6–30 × `max_subs` 0–3 × k ∈ {3,4,5}. Results come back as flat CSR arrays with zero-copy
+  `numpy` views, mismatches as `(pos, query_aa, text_aa)` pairs, an optional fold onto
+  caller-supplied group ids that makes a tie explicit, and a cap that is always reported.
 - **E-values / significance** — calibrate hit counts against a background control repertoire
   (`load_control` + `evalues`), the TCRNET approach on a finite-sample footing. See the
   [E-value guide](https://antigenomics.github.io/seqtree/evalue.html).

@@ -22,6 +22,7 @@ add_library(seqtree_core STATIC
   src/substitution_matrix.cpp
   src/positional_matrix.cpp
   src/kmer_index.cpp
+  src/text_index.cpp
   src/trie.cpp
   src/index.cpp
   src/engine_seqtm.cpp
@@ -63,6 +64,7 @@ if(SEQTREE_TESTS)
     tests/cpp/test_serialize.cpp
     tests/cpp/test_positional.cpp
     tests/cpp/test_kmer_index.cpp
+    tests/cpp/test_text_index.cpp
   )
   target_include_directories(seqtree_tests PRIVATE tests/cpp src)
   target_link_libraries(seqtree_tests PRIVATE seqtree_core)
