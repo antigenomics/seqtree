@@ -227,3 +227,74 @@ def test_load_rejects_a_file_that_is_not_a_text_index(tmp_path):
     path.write_bytes(b"NOPE" + bytes(200))
     with pytest.raises(Exception):
         TextIndex.load(str(path))
+
+
+# --- the search scheme, from Python -------------------------------------------------------
+
+@pytest.mark.parametrize("k", [3, 4, 5])
+def test_the_oracle_still_holds_across_every_dispatch_boundary(k):
+    """`b = min(max_subs + 1, L // k)` changes at every multiple of k, and the per-block error
+    budget changes with it. Sweep across those boundaries rather than sampling near one."""
+    rng = random.Random(20260906 + k)
+    alpha = "ACDEFG"
+    refs = ["".join(rng.choice(alpha) for _ in range(rng.randint(40, 80))) for _ in range(10)]
+    ixr = TextIndex.build(refs, alphabet="aa", k=k)
+    queries = []
+    for L in range(k, 4 * k + 3):
+        r = refs[rng.randrange(len(refs))]
+        off = rng.randrange(len(r) - L + 1)
+        queries.append(r[off:off + L])
+        mut = list(queries[-1])
+        mut[rng.randrange(L)] = rng.choice(alpha)
+        queries.append("".join(mut))
+    for m in range(4):
+        res = ixr.search_batch(queries, max_subs=m)
+        for i, q in enumerate(queries):
+            assert triples(res, i) == brute_force(refs, q, m), (k, q, m)
+
+
+def test_k_changes_the_work_and_never_the_answer():
+    rng = random.Random(1234)
+    alpha = "ACDEFG"
+    refs = ["".join(rng.choice(alpha) for _ in range(60)) for _ in range(8)]
+    queries = [refs[rng.randrange(8)][5:5 + L] for L in (5, 6, 8, 10, 13, 19)]
+    for m in range(4):
+        got = [TextIndex.build(refs, alphabet="aa", k=k).search_batch(queries, max_subs=m)
+               for k in (3, 4, 5)]
+        for i in range(len(queries)):
+            assert triples(got[0], i) == triples(got[1], i) == triples(got[2], i)
+
+
+def test_a_hit_reachable_from_two_blocks_comes_back_once(ix):
+    """An exact query matches every block's seed, so each block proposes the same start. Dedup
+    is by block ownership rather than a sort, and a duplicated hit is the way that fails."""
+    res = ix.search_batch(["MKTAYIAKQRQISFVKSHFSRQ"], max_subs=3)
+    seen = [(h.ref_id, h.offset, h.n_subs) for h in res[0]]
+    assert len(seen) == len(set(seen))
+    assert set(seen) == brute_force(REFS, "MKTAYIAKQRQISFVKSHFSRQ", 3)
+
+
+# --- limits that would otherwise be silent ------------------------------------------------
+
+def test_a_query_too_long_for_a_16_bit_mismatch_position_is_refused(ix):
+    with pytest.raises(ValueError, match="16-bit and caps a query at 65535"):
+        ix.search_batch(["A" * 65536])
+
+
+def test_ref_seq_reports_what_the_index_holds_not_what_was_handed_in():
+    """A residue the codec never named comes back as 'X' -- and 'X' is a real symbol here, so
+    the round-trip is lossy in a way that would search differently. Pinned, not discovered."""
+    ixr = TextIndex.build(["CASSUGQYF"], alphabet="aa", k=4)
+    assert ixr.ref_seq(0) == "CASSXGQYF"
+    assert ixr.num_unknown == 1
+    assert ixr.search_batch(["CASSXGQYF"]).num_hits == 0  # the hole is not an X, it is a hole
+
+
+def test_an_index_file_from_an_older_format_is_refused(ix, tmp_path):
+    path = tmp_path / "v1.sti"
+    ix.save(str(path))
+    raw = bytearray(path.read_bytes())
+    raw[4] = 1  # version 2 -> 1
+    path.write_bytes(bytes(raw))
+    with pytest.raises(Exception, match="text index"):
+        TextIndex.load(str(path))

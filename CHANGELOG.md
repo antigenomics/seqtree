@@ -22,39 +22,69 @@ versioning: breaking changes need a **major** bump.
   res = ix.search_batch(peptides, max_subs=2, best_only=True, group_by=True, threads=0)
   ```
 
-  Two paths share the one table, chosen per query on `s = L / (max_subs + 1)`. At `s >= k` the
-  query splits into `max_subs + 1` disjoint blocks and pigeonhole guarantees one block's
-  leading k-mer is exact. At `s < k` the `<= max_subs` ball of the query's **first `k`**
-  residues is enumerated and every variant probed — lossless because a match carrying `<= m`
-  mismatches carries at most `m` of them in its first `k` residues. Under proper substitutions
-  that ball is duplicate-free by construction, so it is a direct write into a preallocated
-  buffer with no sort and no hash set: **3,267 probes** at `k = 4, m = 2` over the 24-symbol
-  amino-acid codec, and the cost does not depend on `L`.
+  **One search scheme**, not a special case per query shape. Split the query into
+  `b = min(max_subs + 1, L // k)` disjoint blocks of width `L // b >= k`, and probe block `j`'s
+  leading k-mer at radius `c_j` — every k-mer within `c_j` substitutions of it. That is
+  **lossless exactly when `sum(c_j) >= max_subs - b + 1`**: the lightest error vector that could
+  evade every block is `e_j = c_j + 1`, of weight `sum(c_j) + b`, so nothing within `max_subs`
+  can hide below that threshold. Probing at radius `c` costs `N(c) = sum(C(k,i)(A-1)^i, i <= c)`,
+  whose increments climb steeply and are the same for every block, so the cheapest legal scheme
+  takes as many blocks as fit and spreads `r = max(0, max_subs - b + 1)` budget units evenly.
+  `b = max_subs + 1` recovers plain pigeonhole (one exact seed per error) and `b = 1` a single
+  substitution ball over `q[0:k]`; **the useful schemes are in between**, which is where short
+  queries live: at `L = 8, max_subs = 2, k = 4` two disjoint 4-mers fit, so `c = (0, 1)` probes
+  **94** variants where a one-block ball probes **3,267**.
 
-  **Neither path is a heuristic**, and that is checked rather than asserted: `tests/cpp/
+  Two details are not incidental. Spare budget units go on the **last** blocks, worth a further
+  **1.4x**: a candidate already matches its own block's k-mer, so left-to-right verification
+  meets the unconstrained prefix first and rejects after a residue or two — and the high-budget
+  block contributes nearly all the candidates. And a start that two blocks both reach is
+  returned **once**, emitted by the lowest-indexed block that could have produced it, a test read
+  straight off the mismatch positions verification has already computed — so deduplication needs
+  no sort and no hash set, which also removed the candidate sort from the all-exact path.
+
+  The framing is the search scheme of Kianfar, Pockrandt, Torkamandi, Luo & Reinert,
+  *Optimum Search Schemes for Approximate String Matching Using Bidirectional FM-Index*,
+  [arXiv:1711.02035](https://doi.org/10.48550/arXiv.1711.02035). Only the partition-and-budget
+  half transfers: a direct-addressed seed table has no bidirectional extension, so there is no
+  search *order* to optimise over.
+
+  **None of this is a heuristic**, and that is checked rather than asserted: `tests/cpp/
   test_text_index.cpp` compares against an independent brute-force scan over query length 6–30
   × `max_subs` 0–3 × `k` ∈ {3, 4, 5}, requiring **set equality** of `(ref_id, offset, n_subs)`
-  *and* of the mismatch detail — not merely that hits were found. A missed hit does not degrade
-  the caller's answer, it changes it, from ambiguous to confidently wrong.
+  *and* of the mismatch detail — not merely that hits were found — plus a case straddling every
+  block boundary, and a separate case asserting the answer is *identical* across `k`, so a
+  dispatch bug cannot pass by agreeing with itself. `bench/bench_text_index.py` repeats the
+  `k`-invariance check on the real proteomes, where hit counts match cell for cell. A missed hit
+  does not degrade the caller's answer, it changes it, from ambiguous to confidently wrong.
 
   Measured on the human proteome (UP000005640, 147,506 records / **69,578,135 residues**), one
-  thread, Apple M-series, `bench/bench_text_index.py`:
+  thread, Apple M-series, `bench/bench_text_index.py`. The last column is the two-path dispatch
+  this scheme replaced, on the same benchmark:
 
-  | | |
-  |---|--:|
-  | build, `k = 4` | **0.59 s** |
-  | peak RSS | ~750 MB |
-  | ms/query, `L >= 12`, `max_subs <= 3` | **0.12 – 0.20** |
-  | ms/query, `L = 8–11`, `max_subs = 2`, `k = 4` | 27 – 35 |
-  | ms/query, `L = 8–11`, `max_subs = 2`, `k = 5` | **3.3 – 4.9** |
-  | 8 threads, `L = 12`, `max_subs = 2` | 0.017 ms/query (**8.3x**) |
-  | all cores | 0.010 ms/query (**13.9x**) |
+  | `L` | `max_subs` | `k = 4` | `k = 5` | two-path dispatch |
+  |--:|--:|--:|--:|--:|
+  | 8 | 2 | **1.468** | 4.694 | 34.505 |
+  | 9 | 2 | **1.334** | 4.526 | 35.453 |
+  | 10 | 2 | 1.298 | **0.129** | 40.940 |
+  | 11 | 2 | 1.138 | **0.108** | 30.196 |
+  | 12 | 2 | **0.097** | 0.126 | 0.148 |
+  | 10 | 3 | 3.595 | **0.347** | 423.762 |
+  | 12 | 3 | 1.567 | **0.394** | 415.578 |
+  | 15 | 3 | 1.514 | **0.138** | 400.484 |
 
-  Hit counts are identical at `k = 4` and `k = 5` in every cell — `k` changes the work, never
-  the answer. The short-query ball path is where the cost is: a 4-residue seed returns ~210
-  positions on a text that size, and verifying a candidate is one cache miss. Raising `k` to 5
-  is a **7x** improvement there for 0.08 s more build time, at the price of pushing `L = 12,
-  m = 2` off the seed path; `docs/text-index.rst` has the trade-off table.
+  ms/query, single-threaded, and hit counts identical across `k` in every cell — the benchmark
+  asserts that rather than reporting it. So **24–32x at `L = 8–11, max_subs = 2`, and 87–1,221x
+  at `max_subs = 3`**. Against the design document's acceptance targets of <= 0.5 ms/query at
+  `L >= 12` and <= 1.0 at `L = 8–11`: with `k` chosen by the `L = 2k` crossover, **every target
+  from length 10 up is met with an order of magnitude of margin**, and lengths 8–9 land at
+  1.33–1.47 ms — 1.4x over, down from 35x over. Build is 0.55 s at `k = 4` and 0.59 s at
+  `k = 5`, so a corpus spanning both regimes can hold both indexes.
+
+  Threads, human proteome, `L = 12`, `max_subs = 2`, 50,000 queries: 0.103 ms/query on one,
+  0.013 on eight (**7.8x**), 0.008 on all cores (**12.6x**). The ratio is now bounded by the
+  serial CSR flatten rather than by the search, which is why it is short of linear; the flatten
+  preallocates from the workers' actual output instead of growing nine vectors by doubling.
 
   Results come back as flat CSR arrays rather than one object per hit — a 445 k-query run
   returns a handful of arrays. `res[i]` materialises `TextHit` objects for one query on demand,
@@ -74,7 +104,13 @@ versioning: breaking changes need a **major** bump.
   costume.
 
   Saved files are flat with their arrays at known aligned offsets, so `TextIndex.load(path)`
-  **maps** rather than parses and several processes share one copy of the pages.
+  **maps** rather than parses and several processes share one copy of the pages — the human
+  `k = 4` index is **348.2 MB** and maps in **0.1 ms** regardless (0.12 s to read it instead,
+  0.46 s to save it). That is 5.0x the text, and 79 % of it is `post_ids`: one `uint32` per
+  in-record k-mer start, every one of which has to be addressable for the answer to be exact.
+  A `.sti` is treated as untrusted input — the header's record, bucket and posting counts are
+  cross-checked against each other and against the file length before any of them sizes an
+  allocation or indexes into the mapping.
 
 - **The alphabet is handled asymmetrically, on purpose.** A residue outside the codec in the
   **text** — 36 `U` in the human proteome, 33 in mouse — becomes a hole that no seed spans and
@@ -84,6 +120,21 @@ versioning: breaking changes need a **major** bump.
   `B`/`Z`/`X`/`*` are real symbols, not wildcards — `X` matches only `X`. The hole marker is
   also what separates records, so a hit spanning a record boundary is structurally impossible
   rather than prevented by a check that could be forgotten.
+
+- **Limits that would otherwise be silent are now refused.** A query longer than 65,535 residues
+  raises rather than wrapping its 16-bit mismatch positions. A `.sti` whose header disagrees with
+  itself or with the file length is rejected before any field sizes an allocation or indexes into
+  a mapping — on the `mmap` path there is no short read to catch it, so it has to be explicit.
+  `TextIndex.ref_seq` documents that it renders an out-of-alphabet residue as `'X'`, which is
+  lossy and where `'X'` is itself a real symbol: it reports what the index holds, not what was
+  handed to `build`. And the seed table's two counting-sort passes now assert that they visited
+  the same positions, since a disagreement would silently overrun a bucket into its neighbour.
+
+- **`TextIndex.search_batch` no longer terminates the process on an allocation failure.** Its
+  workers were exempted from the tree's `exception_ptr` plumbing on the grounds that queries are
+  validated up front — true, but they still allocate, and a `std::bad_alloc` escaping a
+  `std::thread` entry function calls `std::terminate`, which is an uncatchable `SIGABRT` from
+  Python. It now captures and rethrows after the join, like every other batch entry point.
 
 - **`_core.pyi`.** The package has shipped `py.typed` since the beginning while providing no
   stubs at all, so every C++ symbol resolved to `Any`. nanobind generates them at build time.

@@ -18,6 +18,12 @@ from gen_retrieval_table import lcg_pool  # shared deterministic pool
 
 N_REFS, N_QUERIES, LENGTH, SEED = 50_000, 5_000, 14, 1
 
+# TextIndex reads the same pool as a concatenated text (~700 k residues). Two search rows, not
+# one: L=14 takes an all-exact scheme (b = max_subs + 1) and L=9 takes a multi-block scheme
+# carrying a per-block error budget. Only the second moves if the dispatch regresses, which is
+# the whole reason it is gated -- restoring the pre-1.0 two-path dispatch made it 23x slower.
+TEXT_K, TEXT_SHORT, TEXT_LONG, TEXT_SUBS = 4, 9, 14, 2
+
 
 def peak_rss_mb():
     try:
@@ -49,12 +55,31 @@ def main():
         idx.search_batch(queries, p, threads=1)
         search_ms = min(search_ms, (time.perf_counter() - t0) * 1000)
 
+    text_build_ms = text_short_ms = text_long_ms = float("inf")
+    for _ in range(args.repeats):
+        t0 = time.perf_counter()
+        tix = st.TextIndex.build(refs, alphabet="aa", k=TEXT_K)
+        text_build_ms = min(text_build_ms, (time.perf_counter() - t0) * 1000)
+        for length, slot in ((TEXT_SHORT, "short"), (TEXT_LONG, "long")):
+            tq = [refs[(i * 7919) % N_REFS][:length] for i in range(N_QUERIES)]
+            t0 = time.perf_counter()
+            tix.search_batch(tq, max_subs=TEXT_SUBS, threads=1)
+            dt = (time.perf_counter() - t0) * 1000
+            if slot == "short":
+                text_short_ms = min(text_short_ms, dt)
+            else:
+                text_long_ms = min(text_long_ms, dt)
+
     out = sys.stdout if args.out == "-" else open(args.out, "w")
     out.write(f"# perf: n_refs={N_REFS} n_queries={N_QUERIES} length={LENGTH} "
-              f"scope=2subs threads=1 best_of={args.repeats}\n")
+              f"scope=2subs threads=1 best_of={args.repeats} "
+              f"text_k={TEXT_K} text_L={TEXT_SHORT},{TEXT_LONG}\n")
     out.write("metric\tvalue\n")
     out.write(f"build_ms\t{build_ms:.1f}\n")
     out.write(f"search_ms\t{search_ms:.1f}\n")
+    out.write(f"text_build_ms\t{text_build_ms:.1f}\n")
+    out.write(f"text_search_short_ms\t{text_short_ms:.1f}\n")
+    out.write(f"text_search_long_ms\t{text_long_ms:.1f}\n")
     out.write(f"peak_rss_mb\t{peak_rss_mb():.1f}\n")
     if out is not sys.stdout:
         out.close()
