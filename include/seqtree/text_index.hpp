@@ -13,12 +13,24 @@ struct TextStore;  // internal, src/text_index.cpp
 // One row of the optional group fold: hits collapsed onto the build-time group ids.
 struct TextGroup {
     uint32_t group_id = 0;
-    uint16_t min_subs = 0;  // best (smallest) Hamming distance reaching this group
+    uint16_t min_subs = 0;  // best (smallest) substitution count reaching this group
     uint32_t n_hits   = 0;  // how many hits fell in it, at any distance
 };
 
 struct TextQueryOpts {
     uint16_t max_subs      = 0;
+    // Insertions + deletions allowed, capped independently of max_subs. 0 keeps the pure
+    // Hamming predicate and its verification path untouched.
+    //
+    // The seed table does not change: with b = max_subs + max_indels + 1 disjoint blocks the
+    // total edit count is below the block count, so by pigeonhole SOME block still matches
+    // EXACTLY -- the existing exact lookup finds every occurrence, indels included. What that
+    // costs is verification, which becomes a banded alignment over the 2*max_indels+1 possible
+    // starts rather than one Hamming scan at a fixed start.
+    //
+    // Because every block must be exact, this needs L >= (max_subs + max_indels + 1) * k;
+    // search_batch refuses a shorter query rather than answering incompletely.
+    uint16_t max_indels    = 0;
     bool     exclude_exact = false;  // drop 0-mismatch hits (a candidate that IS the text)
     bool     best_only     = false;  // keep only the minimum-n_subs shell (still ALL of it)
     bool     group_by      = false;  // also fold hits onto the build-time group ids
@@ -40,6 +52,11 @@ struct TextResult {
     std::vector<uint32_t> query_begin;  // n_queries + 1, CSR into the hit arrays
     std::vector<uint32_t> ref_id, offset;
     std::vector<uint16_t> n_subs;
+    // Indels in the alignment, and the matched substring's length in the text. With
+    // max_indels = 0 these are 0, 0 and the query length for every hit. With indels the match
+    // is no longer len(query) residues wide, so `length` is what bounds it:
+    // ref_seq(ref_id)[offset : offset + length].
+    std::vector<uint16_t> n_ins, n_dels, length;
     std::vector<int32_t>  score;
     std::vector<uint32_t> mm_begin;     // n_hits + 1, CSR into the mismatch arrays
     std::vector<uint16_t> mm_pos;

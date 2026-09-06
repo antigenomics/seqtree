@@ -3,6 +3,66 @@
 All notable changes to `seqtree`. Dates are release dates. From 1.0.0 the project follows semantic
 versioning: breaking changes need a **major** bump.
 
+## [Unreleased]
+
+### Added
+
+- **`TextIndex` searches with insertions and deletions.** `search_batch` takes `max_indels`
+  alongside `max_subs`, capped independently — `max_subs=2, max_indels=1` accepts two
+  substitutions *and* one gap, not three edits of any kind.
+
+  ```python
+  res = ix.search_batch(peptides, max_subs=1, max_indels=1, threads=0)
+  h = res[0][0]
+  ix.ref_seq(h.ref_id)[h.offset : h.offset + h.length]   # the matched text
+  h.n_subs, h.n_ins, h.n_dels
+  ```
+
+  **The index, the build and the probe enumeration are unchanged.** With
+  `b = max_subs + max_indels + 1` disjoint blocks the total edit count cannot reach the block
+  count, so the same pigeonhole argument still leaves a **zero-error** block — and a zero-error
+  block matches the text exactly whether or not the occurrence carries gaps, so the existing
+  exact seed lookup finds it. Verified before any of this was written: 2,800 planted
+  occurrences with random insertions and deletions, **recall 1.000** from the unmodified exact
+  lookup.
+
+  What changes is verification. A seed no longer pins the start — the prefix before the block
+  may have gained or lost up to `max_indels` residues — so every start in
+  `[pos - base - max_indels, pos - base + max_indels]` is aligned by a banded DP over the states
+  `(query position, net offset, indels spent)`. An alignment must begin and end on an aligned
+  pair: a gap at either edge would stretch the reported interval over a residue that matches
+  nothing, and a leading gap is the same occurrence starting one residue over, so allowing it
+  would report one match several times.
+
+  `TextHit` gains `n_ins`, `n_dels` and **`length`** — a gapped match is no longer `len(query)`
+  residues wide, and `length` is `len(query) + n_dels - n_ins`. `TextResult.arrays()` gains the
+  three matching columns.
+
+  Two limits, both refusals rather than partial answers. Every seed block must be exact, so a
+  query must be at least `(max_subs + max_indels + 1) * k` long — at `k = 4` with
+  `max_subs=1, max_indels=1` that is 12 residues — and a shorter one raises with the bound in
+  the message. And `mismatches` is empty on this path, with `matrix=` ignored: recovering which
+  columns were substituted needs an alignment traceback the verifier does not keep.
+
+  Measured on a synthetic 5,000,000-residue corpus at `k = 4`, one thread, against the same
+  queries with `max_indels = 0`:
+
+  | query length | `max_subs` | ms/query, no indels | ms/query, `max_indels=1` |
+  |--:|--:|--:|--:|
+  | 16 | 1 | 0.001 | 0.028 |
+  | 16 | 2 | 0.001 | 0.043 |
+  | 20 | 3 | 0.002 | 0.065 |
+  | 24 | 3 | 0.002 | 0.067 |
+
+  25–37× an ungapped search at the same length and `max_subs`, and still under 0.1 ms/query.
+  An early exit when every banded state has already breached a cap is worth 2.5–3× of that; the
+  DP was otherwise walking all L rows on candidates the Hamming path rejects after two residues.
+
+  Completeness is held to the same standard as the substitution path: **set equality against an
+  independent brute force**, over `k` ∈ {3, 4, 5} × `max_subs` 0–3 × `max_indels` 1–2,
+  **6,732 occurrences, zero missing and zero extra**. `max_indels=0` is byte-identical to the
+  previous substitution path, hit for hit, and pays none of the cost.
+
 ## [1.0.0] — 2026-09-06
 
 ### Added

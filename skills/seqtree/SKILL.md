@@ -144,11 +144,12 @@ Python and does not need the C++ core. `r = 2` over the same 300 is 9.9 M sequen
 
 ```python
 ix  = TextIndex.build(records, alphabet="aa", k=4, group_ids=None)   # WHOLE records, not windows
-res = ix.search_batch(queries, max_subs=2, exclude_exact=False, best_only=False,
+res = ix.search_batch(queries, max_subs=2, max_indels=0, exclude_exact=False, best_only=False,
                       group_by=False, max_hits=0, matrix=None, threads=0)   # GIL released
 
 len(res); res.num_hits; res[i]          # TextHit list for query i, built on demand
 res[i][0].mismatches                    # [(pos, query_aa, text_aa), ...] -- the PAIR
+res[i][0].n_ins / .n_dels / .length     # indels, and the width of the match in the text
 res.groups(i)                           # [(group_id, min_subs, n_hits), ...] with group_by
 res.truncated                           # per query, 1 if max_hits capped it
 res.arrays(); res.to_numpy()            # zero-copy views over the flat CSR
@@ -176,6 +177,19 @@ full radius-`max_subs` ball, which is one to two orders of magnitude dearer. So 
 `k = 4` is right down to length 8, and `k = 5` is worth a second index when the query set starts
 at 10 (human proteome, `L = 12, max_subs = 3`: **1.46 ms/query at k=4, 0.32 at k=5**). Building
 is ~0.6 s either way, so a corpus spanning both lengths can hold both indexes.
+
+**`max_indels` allows gaps, and costs nothing in the index.** The two caps are independent:
+`max_subs=2, max_indels=1` is two substitutions AND one gap, not three edits. Seeding is
+unchanged -- with `b = max_subs + max_indels + 1` blocks the edit count is below the block
+count, so pigeonhole still leaves a **zero-error** block, which matches exactly whether or not
+the occurrence has gaps. Only verification changes, to a banded DP over the
+`2*max_indels + 1` possible starts. Three things to know: a match is **no longer `len(query)`
+wide** (read `.length`, which is `len(query) + n_dels - n_ins`); every block must be exact, so a
+query must be at least **`(max_subs + max_indels + 1) * k`** long or it raises; and
+`.mismatches` is empty and `matrix=` ignored, because the per-column detail would need a
+traceback the verifier does not keep. Costs 25-37x an ungapped search at the same length, still
+under 0.1 ms/query on 5 M residues. Pinned by set equality against brute force over
+k in {3,4,5} x max_subs 0-3 x max_indels 1-2, 6,732 occurrences, zero missing and zero extra.
 
 - **`matrix=` only scores** hits the Hamming predicate already accepted (similarity summed over
   the mismatched positions) — it never changes which hits return.
