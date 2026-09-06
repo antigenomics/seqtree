@@ -2,22 +2,38 @@
 //
 // The structure is one direct-addressed k-mer seed table over a flat text, so `k` belongs to
 // the INDEX and not to the query: one build answers every query length and every max_subs.
-// Two query paths share that one table:
 //
-//   s = L / (max_subs + 1) >= k  -- pigeonhole. Split the query into max_subs + 1 disjoint
-//                                  blocks; a match within max_subs leaves at least one block
-//                                  untouched, so at least one block's leading k-mer is exact.
-//   s < k                        -- ball. Enumerate the <= max_subs neighbourhood of the
-//                                  query's FIRST k residues and probe every variant. Lossless
-//                                  for the same reason: a match with <= m mismatches carries
-//                                  <= m of them in its first k residues.
+// ONE SEARCH SCHEME, not two paths. Split the query into `b` disjoint blocks of width
+// bw = L / b >= k, give block j an error budget c_j, and probe the radius-c_j neighbourhood of
+// that block's leading k-mer.
 //
-// The ball is enumerated over q[0:k] rather than over the whole query, which the two produce
-// the same candidate set from: the distinct leading k-mers of the full-query ball ARE the ball
-// of q[0:k]. At k=4, m=2 over the 24-symbol amino-acid codec that is 3,267 probes instead of
-// 19,252, and the cost stops depending on L. Under proper substitutions (replacement != the
-// original residue) the enumeration is duplicate-free by construction, so it is a direct write
-// into a preallocated buffer -- no sort, no hash set, no allocation per query.
+//   LOSSLESS  <=>  sum_j c_j >= m - b + 1.
+//
+//   Proof. The scheme misses an occurrence only if its error vector (e_0 .. e_{b-1}), with
+//   sum e_j <= m, has e_j > c_j for EVERY j. The cheapest such vector is e_j = c_j + 1, whose
+//   sum is sum(c_j) + b. So no missing vector exists iff sum(c_j) + b > m. Errors landing past
+//   b*bw belong to no block and only shrink sum e_j, so an uncovered tail is free.
+//
+// Probing block j at radius c costs N(c) = sum_{i<=c} C(k,i)(A-1)^i, whose increments
+// C(k,c)(A-1)^c rise steeply in c and are the same for every block -- so the cheapest legal
+// scheme takes b as large as it can and spreads the budget as evenly as possible:
+//
+//   b = min(m + 1, L / k);  r = max(0, m - b + 1);  c_j = r/b + (j < r%b)
+//
+// Both of the two paths this replaced are special cases: b = m+1 gives r = 0 and all-exact
+// seeds (pigeonhole), b = 1 gives c_0 = m and a single ball over q[0:k]. What was missing was
+// everything between, which is where the short queries live: at L = 8, m = 2, k = 4 two
+// disjoint 4-mers plainly fit, and the scheme (1,0) probes 94 variants where a one-block ball
+// probes 3,267 -- 35x fewer candidates on the human proteome, and 186-279x at m = 3.
+// The framing is the "search scheme" of Kianfar, Pockrandt, Torkamandi, Luo & Reinert,
+// arXiv:1711.02035; only the partition-and-budget half transfers, since a direct-addressed
+// table has no bidirectional extension to optimise a search ORDER over.
+//
+// Under proper substitutions (replacement != the original residue) each block's enumeration is
+// duplicate-free by construction, so it is a direct write into a reused buffer -- no sort, no
+// hash set, no allocation per query. Across blocks a start CAN repeat, and it is emitted by the
+// lowest-indexed block that could have produced it; that test is read off the mismatch positions
+// verification already computed, so deduplication costs no extra memory traffic and no sort.
 //
 // Codec::kInvalid between records is load-bearing: a k-mer containing it is never inserted, so
 // a seed cannot span a record boundary, and verification refuses it outright, so a hit cannot
@@ -32,6 +48,7 @@
 #include <atomic>
 #include <cstring>
 #include <fstream>
+#include <mutex>
 #include <stdexcept>
 #include <thread>
 
@@ -52,13 +69,16 @@ namespace seqtree {
 namespace {
 
 constexpr char kMagic[4] = {'S', 'Q', 'T', 'X'};
-constexpr uint32_t kVersion = 1;
+constexpr uint32_t kVersion = 2;
 constexpr size_t kHeaderBytes = 64;
 
 // Direct addressing means alphabet_size^k uint32 buckets are allocated up front, so k has to be
 // capped or a k=8 amino-acid index would ask for 44 GB. 2^27 buckets is 512 MB, already far more
 // than any measured configuration needs (24^4 = 331,776; 24^5 = 7,962,624).
-constexpr uint64_t kMaxBuckets = 1u << 27;
+constexpr uint64_t kMaxBuckets = uint64_t(1) << 27;
+
+// TextResult::mm_pos is uint16_t, so a longer query would wrap a mismatch position silently.
+constexpr size_t kMaxQueryLen = 65535;
 
 // The first read-only memory map in the tree. Only load(mmap=true) uses it: a 280 MB seed table
 // is then paged in on demand and SHARED across processes rather than copied into each.
@@ -144,14 +164,13 @@ struct TextStore {
     bool     has_group = false;
 
     const uint8_t*  text = nullptr;
-    const uint64_t* starts = nullptr;      // num_refs + 1
+    const uint32_t* starts = nullptr;      // num_refs + 1; 32-bit, build caps text at 2^32
     const uint32_t* post_begin = nullptr;  // num_buckets + 1
     const uint32_t* post_ids = nullptr;    // num_post
     const uint32_t* group = nullptr;       // num_refs, null when unused
 
     std::vector<uint8_t>  text_own;
-    std::vector<uint64_t> starts_own;
-    std::vector<uint32_t> post_begin_own, post_ids_own, group_own;
+    std::vector<uint32_t> starts_own, post_begin_own, post_ids_own, group_own;
     Mapping map;
 
     void point_at_owned() {
@@ -162,7 +181,7 @@ struct TextStore {
         group = group_own.empty() ? nullptr : group_own.data();
     }
 
-    uint32_t ref_of(uint64_t abs_pos) const {
+    uint32_t ref_of(uint32_t abs_pos) const {
         return uint32_t(std::upper_bound(starts, starts + num_refs + 1, abs_pos) - starts - 1);
     }
 };
@@ -238,14 +257,14 @@ struct RawHit {
     uint16_t n_subs;
     int32_t  score;
     uint32_t mm_off;
-    uint64_t abs;
+    uint32_t abs;
 };
 
-// Reused across every query a worker handles, so the probe and candidate buffers are allocated
-// once per thread rather than once per query.
+// Reused across every query a worker handles, so the probe buffer is allocated once per thread
+// rather than once per query. There is no candidate buffer: a posting is verified the moment it
+// is read, which is also what removes the sort the old two-path dispatch needed to deduplicate.
 struct Work {
     std::vector<uint32_t> probes;  // k-mer codes to look up
-    std::vector<uint32_t> cand;    // candidate absolute start positions
 };
 
 // Per-query results. Mismatch positions are appended in discovery order and referenced by
@@ -258,65 +277,65 @@ struct QueryOut {
 };
 
 // One query against the text at a fixed max_subs. Appends to out.hits / out.mm_pos.
+// The scheme and why it is lossless are at the top of this file.
 void search_one(const TextStore& st, const uint8_t* q, size_t L, uint16_t m,
                 const SubstitutionMatrix* matrix, const uint64_t* pw, Work& s, QueryOut& out) {
     const uint8_t k = st.k, A = st.A;
-    const size_t blocks = size_t(m) + 1;
-    const size_t bw = L / blocks;  // block width
+    const size_t b  = std::min<size_t>(size_t(m) + 1, L / k);  // >= 1: search_batch enforces L >= k
+    const size_t bw = L / b;
+    const size_t r  = size_t(m) + 1 > b ? size_t(m) + 1 - b : 0;
+    // Spare budget units go to the LAST blocks, and that is worth 1.4x on the human proteome
+    // (L=8, m=2, k=4: 1.51 -> 1.09 ms/query). The lemma is symmetric in j, so this is free to
+    // choose; verification is not symmetric. A candidate produced by block j matches its own
+    // k-mer, so scanning left-to-right hits the UNCONSTRAINED prefix [0, j*bw) first and
+    // early-exits after a residue or two -- and it is the high-budget block that contributes
+    // almost all the candidates, so that is the one whose rejects must be cheap.
+    auto budget = [r, b](size_t j) { return uint16_t(r / b + (j >= b - r % b ? 1 : 0)); };
 
-    s.probes.clear();
-    s.cand.clear();
-
-    if (bw >= k) {
-        // Pigeonhole: probe each block's leading k-mer and translate hits back to a start.
-        for (size_t b = 0; b < blocks; ++b) {
-            const uint32_t code = kmer_code(q + b * bw, k, A);
+    for (size_t j = 0; j < b; ++j) {
+        const size_t base = j * bw;
+        s.probes.clear();
+        enumerate_ball(q + base, k, A, budget(j), pw, 0, 0, 0, s.probes);
+        for (uint32_t code : s.probes) {
             const uint32_t lo = st.post_begin[code], hi = st.post_begin[code + 1];
             for (uint32_t i = lo; i < hi; ++i) {
                 const uint32_t pos = st.post_ids[i];
-                if (pos >= b * bw) s.cand.push_back(uint32_t(pos - b * bw));
+                if (pos < base) continue;
+                const uint32_t c = uint32_t(pos - base);
+                if (uint64_t(c) + L > st.text_len) continue;
+                const uint8_t* t = st.text + c;
+                const uint32_t mm_off = uint32_t(out.mm_pos.size());
+                uint16_t n = 0;
+                bool ok = true;
+                for (size_t x = 0; x < L; ++x) {
+                    const uint8_t ch = t[x];
+                    if (ch == Codec::kInvalid) { ok = false; break; }  // never match through a hole
+                    if (ch == q[x]) continue;
+                    if (n == m) { ok = false; break; }  // early exit: already too far
+                    ++n;
+                    out.mm_pos.push_back(uint16_t(x));
+                }
+                // Deduplicate across blocks without a sort: block i produces this same start
+                // exactly when its leading k-mer carries <= c_i mismatches, and the positions
+                // just written already name them. Emit only from the lowest such block.
+                for (size_t i = 0; ok && i < j; ++i) {
+                    uint16_t e = 0;
+                    for (uint16_t x = 0; x < n; ++x)
+                        e += size_t(out.mm_pos[mm_off + x]) - i * bw < k;  // unsigned wrap: p < i*bw
+                    ok = e > budget(i);
+                }
+                if (!ok) {
+                    out.mm_pos.resize(mm_off);
+                    continue;
+                }
+                const uint32_t ref = st.ref_of(c);
+                int32_t score = 0;
+                if (matrix)
+                    for (uint32_t x = mm_off; x < mm_off + n; ++x)
+                        score += matrix->similarity(q[out.mm_pos[x]], t[out.mm_pos[x]]);
+                out.hits.push_back(RawHit{ref, c - st.starts[ref], n, score, mm_off, c});
             }
         }
-        std::sort(s.cand.begin(), s.cand.end());
-        s.cand.erase(std::unique(s.cand.begin(), s.cand.end()), s.cand.end());
-    } else {
-        // Ball: every variant code is distinct, and a text position belongs to exactly one
-        // k-mer code, so no candidate can be produced twice -- no dedup pass at all.
-        enumerate_ball(q, k, A, m, pw, 0, 0, 0, s.probes);
-        for (uint32_t code : s.probes) {
-            const uint32_t lo = st.post_begin[code], hi = st.post_begin[code + 1];
-            for (uint32_t i = lo; i < hi; ++i) s.cand.push_back(st.post_ids[i]);
-        }
-        // Measured, not assumed: sorting these into text order to improve locality was tried
-        // and is 1.6x SLOWER on the human proteome (L=8, m=2, k=5: 4.24 -> 6.73 ms/query), so
-        // the candidates are verified in probe order. Verification is bound by one cache miss
-        // per candidate, which is also why bit-packing the comparison is not the lever here.
-    }
-
-    for (uint32_t c : s.cand) {
-        if (uint64_t(c) + L > st.text_len) continue;
-        const uint8_t* t = st.text + c;
-        const uint32_t mm_off = uint32_t(out.mm_pos.size());
-        uint16_t n = 0;
-        bool ok = true;
-        for (size_t i = 0; i < L; ++i) {
-            const uint8_t ch = t[i];
-            if (ch == Codec::kInvalid) { ok = false; break; }  // never match through a boundary
-            if (ch == q[i]) continue;
-            if (n == m) { ok = false; break; }  // early exit: this window is already too far
-            ++n;
-            out.mm_pos.push_back(uint16_t(i));
-        }
-        if (!ok) {
-            out.mm_pos.resize(mm_off);
-            continue;
-        }
-        const uint32_t ref = st.ref_of(c);
-        int32_t score = 0;
-        if (matrix)
-            for (uint32_t j = mm_off; j < mm_off + n; ++j)
-                score += matrix->similarity(q[out.mm_pos[j]], t[out.mm_pos[j]]);
-        out.hits.push_back(RawHit{ref, uint32_t(c - st.starts[ref]), n, score, mm_off, c});
     }
 }
 
@@ -331,6 +350,9 @@ uint64_t TextIndex::num_unknown() const { return store_->num_unknown; }
 uint8_t TextIndex::k() const { return store_->k; }
 Alphabet TextIndex::alphabet() const { return store_->alphabet; }
 
+// Residues the codec never named come back as 'X'. That is LOSSY and 'X' is a real symbol in
+// this codec, so a record containing U round-trips to a string that would search differently
+// from the one that was indexed; ref_seq reports what the index holds, not what was handed in.
 std::string TextIndex::ref_seq(uint32_t ref_id) const {
     const TextStore& st = *store_;
     if (ref_id >= st.num_refs)
@@ -378,11 +400,11 @@ std::unique_ptr<TextIndex> TextIndex::build(const std::vector<std::string>& refs
     st.text_own.reserve(size_t(total));
     st.starts_own.reserve(refs.size() + 1);
     for (size_t i = 0; i < refs.size(); ++i) {
-        st.starts_own.push_back(st.text_own.size());
+        st.starts_own.push_back(uint32_t(st.text_own.size()));
         st.num_unknown += encode_text_into(codec, refs[i], st.text_own);
         st.text_own.push_back(Codec::kInvalid);
     }
-    st.starts_own.push_back(st.text_own.size());
+    st.starts_own.push_back(uint32_t(st.text_own.size()));
     st.text_len = st.text_own.size();
     st.num_residues = st.text_len - refs.size();
     if (!group_ids.empty()) {
@@ -415,6 +437,11 @@ std::unique_ptr<TextIndex> TextIndex::build(const std::vector<std::string>& refs
     st.post_ids_own.resize(size_t(st.num_post));
     std::vector<uint32_t> cursor(st.post_begin_own.begin(), st.post_begin_own.end() - 1);
     roll([&](uint32_t code, uint32_t pos) { st.post_ids_own[cursor[code]++] = pos; });
+    // The two roll() passes must visit exactly the same positions or the scatter overruns its
+    // bucket and silently corrupts a neighbour's postings. Nothing else ties them together.
+    for (uint64_t bkt = 0; bkt < buckets; ++bkt)
+        if (cursor[size_t(bkt)] != st.post_begin_own[size_t(bkt) + 1])
+            throw std::logic_error("seqtree: TextIndex seed-table scatter disagreed with its count");
 
     st.point_at_owned();
     return ix;
@@ -438,6 +465,11 @@ TextResult TextIndex::search_batch(const std::vector<std::string>& queries,
                 "queries[" + std::to_string(i) + "] ('" + queries[i] + "') is " +
                 std::to_string(queries[i].size()) + " long; TextIndex indexes seeds of k=" +
                 std::to_string(st.k) + " and cannot answer a shorter query completely");
+        if (queries[i].size() > kMaxQueryLen)
+            throw std::invalid_argument(
+                "queries[" + std::to_string(i) + "] is " + std::to_string(queries[i].size()) +
+                " long; TextIndex reports mismatch positions as 16-bit and caps a query at " +
+                std::to_string(kMaxQueryLen));
         encode_into(codec, queries[i], "queries", i, qbuf);
         qoff[i + 1] = qbuf.size();
     }
@@ -495,28 +527,72 @@ TextResult TextIndex::search_batch(const std::vector<std::string>& queries,
         s.truncated = capped ? 1 : 0;
     };
 
+    if (n == 0) return TextResult{};
+
     unsigned nt = threads > 0 ? unsigned(threads)
                               : std::max(1u, std::thread::hardware_concurrency());
-    nt = std::min<unsigned>(nt, std::max<size_t>(1, n));
-    if (n) {
+    nt = std::min<unsigned>(nt, unsigned(n));
+    {
         std::atomic<size_t> next{0};
-        const size_t chunk = std::clamp<size_t>(n / (size_t(nt) * 8), size_t(1), size_t(1024));
+        // Adaptive chunk, as everywhere else in the tree -- but with a floor of 8 rather than 1:
+        // QueryOut is ~80 bytes, so a chunk of 1 has neighbouring threads writing into the same
+        // cache line for the whole batch.
+        const size_t chunk = std::clamp<size_t>(n / (size_t(nt) * 8), size_t(8), size_t(1024));
+        // The queries were all encoded above, so nothing here throws on bad input -- but the
+        // workers still allocate (hits, mismatch positions, the probe buffer), and a bad_alloc
+        // escaping a std::thread entry function calls std::terminate, which killed the whole
+        // interpreter with an uncatchable SIGABRT (see src/pairwise.cpp).
+        std::exception_ptr err;
+        std::mutex emu;
         auto worker = [&] {
-            Work w;  // probe/candidate buffers, allocated once per worker
+            Work w;  // probe buffer, allocated once per worker
             for (;;) {
                 size_t start = next.fetch_add(chunk);
                 if (start >= n) break;
-                for (size_t i = start; i < std::min(n, start + chunk); ++i) run_query(i, w);
+                size_t end = std::min(n, start + chunk);
+                for (size_t i = start; i < end; ++i) {
+                    try {
+                        run_query(i, w);
+                    } catch (...) {
+                        std::lock_guard<std::mutex> lk(emu);
+                        if (!err) err = std::current_exception();
+                        return;
+                    }
+                }
             }
         };
         std::vector<std::thread> pool;
         for (unsigned t = 0; t < nt; ++t) pool.emplace_back(worker);
         for (auto& th : pool) th.join();
+        if (err) std::rethrow_exception(err);
     }
 
+    // The flatten is serial, and after the search scheme cut per-query time it is a real share
+    // of the batch -- so size every array once from what the workers actually produced rather
+    // than growing nine vectors by doubling.
+    size_t n_hits = 0, n_mm = 0, n_groups = 0;
+    for (const QueryOut& s : per_query) {
+        n_hits += s.hits.size();
+        n_groups += s.groups.size();
+        for (const RawHit& h : s.hits) n_mm += h.n_subs;
+    }
     TextResult out;
     out.query_begin.reserve(n + 1);
     out.truncated.reserve(n);
+    out.ref_id.reserve(n_hits);
+    out.offset.reserve(n_hits);
+    out.n_subs.reserve(n_hits);
+    out.score.reserve(n_hits);
+    out.mm_begin.reserve(n_hits + 1);
+    out.mm_pos.reserve(n_mm);
+    out.mm_query_aa.reserve(n_mm);
+    out.mm_text_aa.reserve(n_mm);
+    if (opts.group_by) {
+        out.group_begin.reserve(n + 1);
+        out.group_id.reserve(n_groups);
+        out.group_min_subs.reserve(n_groups);
+        out.group_n_hits.reserve(n_groups);
+    }
     out.query_begin.push_back(0);
     out.mm_begin.push_back(0);
     if (opts.group_by) out.group_begin.push_back(0);
@@ -571,7 +647,7 @@ void TextIndex::save(const std::string& path) const {
         auto put = [&os](const void* p, size_t bytes) {
             os.write(reinterpret_cast<const char*>(p), std::streamsize(bytes));
         };
-        put(st.starts, (size_t(st.num_refs) + 1) * 8);
+        put(st.starts, (size_t(st.num_refs) + 1) * 4);
         put(st.post_begin, (size_t(st.num_buckets) + 1) * 4);
         put(st.post_ids, size_t(st.num_post) * 4);
         if (st.has_group) put(st.group, size_t(st.num_refs) * 4);
@@ -605,11 +681,35 @@ std::unique_ptr<TextIndex> TextIndex::load(const std::string& path, bool mmap) {
         st.k = kk;
         st.has_group = hg != 0;
         st.A = Codec(st.alphabet).size();
+        // A .sti is untrusted input: every size below is read from the file and then used for
+        // resize() or, on the mmap path, for raw pointer arithmetic into the mapping. Cross-check
+        // them against each other before anything is dereferenced.
+        auto bad = [&](const char* why) {
+            throw std::runtime_error("seqtree: corrupt text index '" + path + "': " +
+                                     std::string(why));
+        };
+        if (st.A == 0 || st.k == 0) bad("alphabet or k is zero");
+        if (st.num_buckets != pow_checked(st.A, st.k) || st.num_buckets > kMaxBuckets)
+            bad("bucket count does not match the alphabet and k in the header");
+        if (st.text_len >= (uint64_t(1) << 32)) bad("text length exceeds the 32-bit posting cap");
+        if (st.num_post > st.text_len) bad("more postings than text positions");
+        if (st.num_residues > st.text_len || st.num_unknown > st.text_len)
+            bad("residue or unknown count exceeds the text length");
+        if (uint64_t(st.num_refs) + 1 > st.text_len + 1) bad("more records than text positions");
+    };
+    // Checked once the arrays are readable, on either path.
+    auto validate_arrays = [&] {
+        if (st.starts[0] != 0 || st.starts[st.num_refs] != st.text_len)
+            throw std::runtime_error("seqtree: corrupt text index '" + path +
+                                     "': record offsets do not span the text");
+        if (st.post_begin[0] != 0 || st.post_begin[st.num_buckets] != st.num_post)
+            throw std::runtime_error("seqtree: corrupt text index '" + path +
+                                     "': seed table does not span its postings");
     };
     // Sizes are all derived from the header, so a truncated file has to be caught explicitly
     // rather than by a short read -- with mmap there is no read to come up short.
     auto expected_bytes = [&] {
-        return kHeaderBytes + (size_t(st.num_refs) + 1) * 8 + (size_t(st.num_buckets) + 1) * 4 +
+        return kHeaderBytes + (size_t(st.num_refs) + 1) * 4 + (size_t(st.num_buckets) + 1) * 4 +
                size_t(st.num_post) * 4 + (st.has_group ? size_t(st.num_refs) * 4 : 0) +
                size_t(st.text_len);
     };
@@ -623,8 +723,8 @@ std::unique_ptr<TextIndex> TextIndex::load(const std::string& path, bool mmap) {
         if (st.map.len < expected_bytes())
             throw std::runtime_error("seqtree: truncated or corrupt text index '" + path + "'");
         size_t at = kHeaderBytes;
-        st.starts = reinterpret_cast<const uint64_t*>(base + at);
-        at += (size_t(st.num_refs) + 1) * 8;
+        st.starts = reinterpret_cast<const uint32_t*>(base + at);
+        at += (size_t(st.num_refs) + 1) * 4;
         st.post_begin = reinterpret_cast<const uint32_t*>(base + at);
         at += (size_t(st.num_buckets) + 1) * 4;
         st.post_ids = reinterpret_cast<const uint32_t*>(base + at);
@@ -634,6 +734,7 @@ std::unique_ptr<TextIndex> TextIndex::load(const std::string& path, bool mmap) {
             at += size_t(st.num_refs) * 4;
         }
         st.text = reinterpret_cast<const uint8_t*>(base + at);
+        validate_arrays();
         return ix;
     }
 
@@ -647,7 +748,7 @@ std::unique_ptr<TextIndex> TextIndex::load(const std::string& path, bool mmap) {
         is.read(reinterpret_cast<char*>(p), std::streamsize(bytes));
     };
     st.starts_own.resize(size_t(st.num_refs) + 1);
-    get(st.starts_own.data(), st.starts_own.size() * 8);
+    get(st.starts_own.data(), st.starts_own.size() * 4);
     st.post_begin_own.resize(size_t(st.num_buckets) + 1);
     get(st.post_begin_own.data(), st.post_begin_own.size() * 4);
     st.post_ids_own.resize(size_t(st.num_post));
@@ -660,6 +761,7 @@ std::unique_ptr<TextIndex> TextIndex::load(const std::string& path, bool mmap) {
     get(st.text_own.data(), st.text_own.size());
     if (!is) throw std::runtime_error("seqtree: truncated or corrupt text index '" + path + "'");
     st.point_at_owned();
+    validate_arrays();
     return ix;
 }
 

@@ -1,5 +1,8 @@
-# perf: n_refs=50000 n_queries=5000 length=14 scope=2subs threads=1 best_of=3
+# perf: n_refs=50000 n_queries=5000 length=14 scope=2subs threads=1 best_of=3 text_k=4 text_L=9,14
 metric	value
-build_ms	42.2
-search_ms	272.3
-peak_rss_mb	138.7
+build_ms	29.6
+search_ms	298.2
+text_build_ms	3.4
+text_search_short_ms	18.5
+text_search_long_ms	1.8
+peak_rss_mb	140.4

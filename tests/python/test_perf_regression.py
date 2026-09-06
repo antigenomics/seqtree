@@ -15,7 +15,11 @@ PRODUCER = REPO / "bench" / "tables" / "gen_perf_table.py"
 BASELINE = REPO / "bench" / "tables" / "perf_baseline.tsv"
 
 # metric -> max allowed (measured / baseline). Time is loose, memory tight.
-TOLERANCE = {"build_ms": 10.0, "search_ms": 8.0, "peak_rss_mb": 1.6}
+# text_search_short_ms is the exception: it is the only row that moves when TextIndex's search
+# scheme regresses, and the regression it guards against was 23x, so a 4x limit still leaves
+# room for a slow runner while catching that decisively.
+TOLERANCE = {"build_ms": 10.0, "search_ms": 8.0, "peak_rss_mb": 1.6,
+             "text_build_ms": 10.0, "text_search_short_ms": 4.0, "text_search_long_ms": 8.0}
 
 # Timing is noisy on shared runners, so this runs only in the dedicated benchmarks
 # job (RUN_PERF=1), not across the whole test matrix.
@@ -39,7 +43,7 @@ def test_perf_within_threshold():
     base = _metrics(BASELINE.read_text())
     regressions = []
     for k, factor in TOLERANCE.items():
-        if base.get(k, 0) <= 0:
+        if base.get(k, 0) <= 0 or k not in fresh:
             continue
         ratio = fresh[k] / base[k]
         print(f"{k}: {fresh[k]:.1f} vs baseline {base[k]:.1f}  (x{ratio:.2f}, limit x{factor})")

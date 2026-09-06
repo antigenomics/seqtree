@@ -158,11 +158,20 @@ a query set spanning 45 lengths costs 45 multi-gigabyte builds, which is what ra
 finishing and filled 225 GB of cache in `mhcmatch`. Here **`k` belongs to the index**: one
 build answers every length and every `max_subs`.
 
-Exact, not heuristic. Two paths share one seed table, on `s = L / (max_subs + 1)`: `s >= k`
-splits into `max_subs + 1` disjoint blocks (pigeonhole — one block must survive untouched);
-`s < k` enumerates the `<= max_subs` ball of the query's **first `k`** residues, which yields
-the same candidates as balling the whole query at ~6x fewer probes and independently of `L`.
-Completeness is pinned by brute-force **set equality** over L 6–30 x `max_subs` 0–3 x k ∈ {3,4,5}.
+Exact, not heuristic, by **one search scheme** over the single seed table. Split the query into
+`b = min(max_subs + 1, L // k)` disjoint blocks of width `L // b`, and probe block `j`'s leading
+k-mer at radius `c_j`. It is **lossless exactly when `sum(c_j) >= max_subs - b + 1`** (the
+lightest error vector that could hide is `e_j = c_j + 1`, of weight `sum(c_j) + b`), and the
+cheapest legal choice spreads `r = max(0, max_subs - b + 1)` budget units evenly, onto the
+*last* blocks. `b = max_subs + 1` is plain pigeonhole; `b = 1` is a single ball over `q[0:k]`;
+the useful schemes are in between. Completeness is pinned by brute-force **set equality** over
+L 6–30 x `max_subs` 0–3 x k ∈ {3,4,5}, and by the answer being identical across `k`.
+
+**Choosing `k`: the crossover is `L = 2k`.** Below it only one block fits and the query pays a
+full radius-`max_subs` ball, which is one to two orders of magnitude dearer. So the default
+`k = 4` is right down to length 8, and `k = 5` is worth a second index when the query set starts
+at 10 (human proteome, `L = 12, max_subs = 3`: **1.46 ms/query at k=4, 0.32 at k=5**). Building
+is ~0.6 s either way, so a corpus spanning both lengths can hold both indexes.
 
 - **`matrix=` only scores** hits the Hamming predicate already accepted (similarity summed over
   the mismatched positions) — it never changes which hits return.
@@ -304,7 +313,9 @@ Count it in the control.
    **text** (36 `U` in the human proteome, 33 in mouse) becomes a hole — no hit crosses it —
    and is counted in `ix.num_unknown`; the same residue in a **query** raises. `B`/`Z`/`X`/`*`
    are real symbols, not wildcards: `X` matches only `X`. And every query must be at least `k`
-   long, or it raises rather than being answered incompletely.
+   long, or it raises rather than being answered incompletely — as does one over 65,535 long,
+   since mismatch positions are 16-bit. `ref_seq` renders a hole as `'X'`, so it reports what
+   the index holds, not what was handed to `build`.
 
 ## Layering
 

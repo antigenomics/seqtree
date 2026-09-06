@@ -8,11 +8,14 @@ string -- and again for every distinct query length. On a real corpus (445,466 p
 cache. `TextIndex` keys on a k-mer seed table instead, so `k` belongs to the index: one build
 serves every length.
 
-Three tables:
+Four tables:
 
-  A  build cost and index size vs text size and k
-  B  ms/query and hits/query across the query-length x max_subs grid, from ONE index
+  A  build cost and peak RSS vs text size and k
+  B  ms/query at k=4 and k=5 across the query-length x max_subs grid, from ONE
+     index per k -- with the hit counts asserted equal, since k must not change
+     the answer
   C  thread scaling
+  D  on-disk size, save seconds, and load seconds mapped and read
 
 and, on every configuration in A and B, **recall against a brute-force scan** -- the number
 that decides whether any of the rest is worth reading. A missed hit does not degrade the
@@ -32,9 +35,11 @@ from __future__ import annotations
 
 import gzip
 import os
+import pathlib
 import random
 import resource
 import sys
+import tempfile
 import time
 
 from seqtree import TextIndex
@@ -139,33 +144,50 @@ def table_a(texts: dict[str, list[str]]) -> None:
 
 
 def table_b(name: str, refs: list[str], check_recall: bool) -> None:
-    print(f"\n## B. One k=4 index, every query length -- {name}\n")
-    ix = TextIndex.build(refs, alphabet="aa", k=4)
-    print("| L | max_subs | ms/query | hits/query | recall vs brute force |")
-    print("|--:|--:|--:|--:|--:|")
+    """One index per k, the SAME queries through both.
+
+    k is an index parameter and must be invisible in the answer, so the hit counts are compared
+    cell by cell rather than trusted: a dispatch that got `b` or a per-block budget wrong would
+    show up here as a disagreement on real text, which no synthetic unit test can rule out at
+    this scale. What k is allowed to change is the work, which is the point of the two columns.
+    """
+    print(f"\n## B. One index, every query length -- {name}\n")
+    ks = (4, 5)
+    ix = {k: TextIndex.build(refs, alphabet="aa", k=k) for k in ks}
+    print("| L | max_subs | ms/query k=4 | ms/query k=5 | hits/query | recall vs brute force |")
+    print("|--:|--:|--:|--:|--:|--:|")
     for length in (8, 9, 10, 11, 12, 15, 20, 25, 31, 50):
         if not any(len(r) >= length for r in refs):
             continue
         for max_subs in (0, 1, 2, 3):
-            # The ball path is entered when L / (max_subs + 1) < k, and its cost is
-            # sum_i<=m C(k,i)(A-1)^i -- 3,267 probes at m = 2 but 51,935 at m = 3, which on a
-            # 69.6 M-residue text touches a sixth of every posting list. Fewer queries there
-            # keeps the cell bounded; ms/query does not depend on how many were timed.
-            heavy = length // (max_subs + 1) < 4 and len(refs) > 5_000
-            n_q = 25 if heavy else (200 if RUN_BENCHMARK else 50)
+            # Every cell gets the same query count now. The old dispatch needed a reduced
+            # count wherever it fell back to a one-block ball -- L/(m+1) < k, which was most of
+            # this grid -- because a single L=12, m=3 query took 0.4 s. Under the search scheme
+            # the worst cell here is L < 2k, which this grid does not reach at k=4.
+            n_q = 200 if RUN_BENCHMARK else 50
             queries = sample_queries(refs, length, n_q, seed=length)
-            t0 = time.perf_counter()
-            res = ix.search_batch(queries, max_subs=max_subs, threads=1)
-            ms = (time.perf_counter() - t0) * 1000 / len(queries)
-            hits = res.num_hits / len(queries)
-            rec = f"{recall(refs, ix, length, max_subs):.3f}" if check_recall else "--"
-            print(f"| {length} | {max_subs} | {ms:.3f} | {hits:.1f} | {rec} |")
+            ms, hits = {}, {}
+            for k in ks:
+                if length < k:
+                    ms[k], hits[k] = float("nan"), None
+                    continue
+                t0 = time.perf_counter()
+                res = ix[k].search_batch(queries, max_subs=max_subs, threads=1)
+                ms[k] = (time.perf_counter() - t0) * 1000 / len(queries)
+                hits[k] = res.num_hits
+            seen = {h for h in hits.values() if h is not None}
+            assert len(seen) == 1, f"k changed the answer at L={length}, max_subs={max_subs}: {hits}"
+            rec = f"{recall(refs, ix[4], length, max_subs):.3f}" if check_recall else "--"
+            print(f"| {length} | {max_subs} | {ms[4]:.3f} | {ms[5]:.3f} | "
+                  f"{seen.pop() / len(queries):.1f} | {rec} |")
 
 
 def table_c(name: str, refs: list[str]) -> None:
     print(f"\n## C. Thread scaling -- {name}, L=12, max_subs=2\n")
     ix = TextIndex.build(refs, alphabet="aa", k=4)
-    queries = sample_queries(refs, 12, 5000 if RUN_BENCHMARK else 500, seed=3)
+    # Big enough that the small texts clear the timer: at 0.02 ms/query a 500-query
+    # batch on the synthetic text finishes before the threads are all running.
+    queries = sample_queries(refs, 12, 50_000 if RUN_BENCHMARK else 2_000, seed=3)
     print("| threads | s | ms/query | speedup |")
     print("|--:|--:|--:|--:|")
     base = None
@@ -176,6 +198,37 @@ def table_c(name: str, refs: list[str]) -> None:
         base = base or dt
         label = "all" if threads == 0 else str(threads)
         print(f"| {label} | {dt:.2f} | {dt * 1000 / len(queries):.3f} | {base / dt:.1f}x |")
+
+
+def table_d(texts: dict[str, list[str]], tmp: str) -> None:
+    """Is the index small, and is it fast to save and load? Numbers, not an opinion.
+
+    `post_ids` is one uint32 per in-record k-mer start, so a positional seed table is inherently
+    a few times the text it indexes; `load(mmap=True)` maps rather than parses, which is why it
+    does not scale with that size and why several processes share one copy of the pages.
+    """
+    print("\n## D. Index on disk\n")
+    print("| text | k | file MB | x text | save s | load mmap s | load read s |")
+    print("|---|--:|--:|--:|--:|--:|--:|")
+    for name, refs in texts.items():
+        residues = sum(len(r) for r in refs)
+        for k in (4, 5):
+            ix = TextIndex.build(refs, alphabet="aa", k=k)
+            t0 = time.perf_counter()
+            ix.save(tmp)
+            save_s = time.perf_counter() - t0
+            size = pathlib.Path(tmp).stat().st_size
+            t0 = time.perf_counter()
+            mapped = TextIndex.load(tmp, mmap=True)
+            map_s = time.perf_counter() - t0
+            t0 = time.perf_counter()
+            read = TextIndex.load(tmp, mmap=False)
+            read_s = time.perf_counter() - t0
+            del mapped, read
+            print(f"| {name} | {k} | {size / 1e6:.1f} | {size / residues:.1f} | {save_s:.2f} "
+                  f"| {map_s:.4f} | {read_s:.2f} |")
+            del ix
+    pathlib.Path(tmp).unlink(missing_ok=True)
 
 
 def main() -> None:
@@ -198,6 +251,7 @@ def main() -> None:
         table_b(name, refs, check_recall=(name == "synthetic 120k"))
     for name, refs in texts.items():
         table_c(name, refs)
+    table_d(texts, os.path.join(tempfile.gettempdir(), "seqtree_bench_text.sti"))
 
 
 if __name__ == "__main__":

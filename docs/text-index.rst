@@ -37,53 +37,82 @@ the index, not of the query**, so one build answers every length and every ``max
 How it answers exactly
 ----------------------
 
-Two paths share the one seed table, chosen per query on ``s = L / (max_subs + 1)``:
+One rule, applied per query. Split the query into ``b`` disjoint blocks of width
+``bw = L / b >= k``, and probe block *j*'s leading k-mer at radius ``c_j`` — every k-mer within
+``c_j`` substitutions of it.
 
-``s >= k`` — **pigeonhole.** Split the query into ``max_subs + 1`` disjoint blocks. A match
-within ``max_subs`` substitutions must leave at least one block untouched, so at least one
-block's leading k-mer is exact. Probe all of them and verify the candidates.
+    **Lossless if and only if** ``sum(c_j) >= max_subs - b + 1``.
 
-``s < k`` — **ball.** Enumerate the ``<= max_subs`` neighbourhood of the query's *first* ``k``
-residues and probe every variant. Lossless for the same reason: a match carrying ``<= m``
-mismatches carries at most ``m`` of them in its first ``k`` residues. Under proper
-substitutions the enumeration is duplicate-free by construction, so it needs no sort and no
-hash set.
+    The scheme can only miss an occurrence whose errors satisfy ``e_j > c_j`` for *every* block.
+    The lightest such error vector is ``e_j = c_j + 1``, of total weight ``sum(c_j) + b``, so no
+    occurrence within ``max_subs`` can hide once ``sum(c_j) + b > max_subs``. Errors falling
+    outside the blocks only lower the total, so an uncovered tail is free.
 
-Neither path is a heuristic. Completeness is checked against a brute-force scan over a grid of
+Probing one block at radius ``c`` costs ``N(c) = sum(C(k,i)·(A-1)^i, i <= c)``, whose increments
+climb steeply in ``c`` and are the same for every block — so the cheapest legal scheme takes as
+many blocks as fit and spreads the budget as thinly as possible::
+
+    b = min(max_subs + 1, L // k)
+    r = max(0, max_subs - b + 1)          # budget units to place
+    c_j = r // b, plus one for the last (r % b) blocks
+
+At ``b = max_subs + 1`` every ``c_j`` is 0 and this is plain pigeonhole — one exact seed per
+error, at least one of which must survive. At ``b = 1`` it is a single substitution ball over
+``q[0:k]``. **The useful schemes are in between**, and they are where the short queries live: at
+``L = 8, max_subs = 2, k = 4`` two disjoint 4-mers fit, so ``c = (0, 1)`` probes **94** variants
+where a one-block ball probes **3,267**.
+
+Two details are not incidental. The spare units go on the **last** blocks, worth a further 1.4×:
+a candidate already matches its own block's k-mer, so left-to-right verification meets the
+*unconstrained* prefix first and rejects after a residue or two — and the high-budget block is
+the one contributing nearly all the candidates. And a start that two blocks both reach is
+returned **once**, emitted by the lowest-indexed block that could have produced it — a test read
+straight off the mismatch positions verification has already computed, so deduplication needs no
+sort and no hash set.
+
+None of this is a heuristic. Completeness is checked against a brute-force scan over a grid of
 query length, ``max_subs`` and ``k``, asserting **set equality** of ``(ref_id, offset,
-n_subs)`` and of the mismatch detail — not merely that hits were found.
+n_subs)`` and of the mismatch detail — not merely that hits were found — and separately that the
+answer is *identical* across ``k``, so a dispatch bug cannot pass by agreeing with itself.
 
 Choosing ``k``
 --------------
 
-``k`` sets how specific one seed probe is, so it trades the seed path against the ball path.
-Measured on the human proteome (UP000005640, 147,506 records / 69,578,135 residues), one
-thread, Apple M-series, ``bench/bench_text_index.py``:
+``k`` never changes the answer, only the work: a bigger ``k`` makes one probe more specific
+(each 4-mer bucket on the human proteome holds ~208 positions, each 5-mer bucket ~9) but needs
+``L >= b·k`` to fit the same number of blocks. Measured on the human proteome (UP000005640,
+147,506 records / 69,578,135 residues), one thread, Apple M-series,
+``bench/bench_text_index.py``:
 
 ======  ==========  ===================  ===================
 ``L``   ``m``       ms/query, ``k = 4``  ms/query, ``k = 5``
 ======  ==========  ===================  ===================
-8       2           29.5                 **4.24**
-9       2           34.5                 **4.86**
-10      2           32.8                 **4.49**
-11      2           27.3                 **3.26**
-12      2           **0.139**            3.92
+8       2           **1.468**            4.694
+9       2           **1.334**            4.526
+10      2           1.298                **0.129**
+11      2           1.138                **0.108**
+12      2           **0.097**            0.126
+15      2           0.086                **0.014**
+10      3           3.595                **0.347**
+12      3           1.567                **0.394**
+15      3           1.514                **0.138**
 ======  ==========  ===================  ===================
 
-Hit counts are identical in every cell — ``k`` never changes the answer, only the work. The
-step at ``L = 12`` is the dispatch: ``12 / (2 + 1) = 4``, so ``k = 4`` takes the seed path and
-``k = 5`` does not. Building is cheap either way (**0.59 s** at ``k = 4``, **0.67 s** at
-``k = 5``, ~750 MB peak), so a mixed corpus can afford one index per ``k`` — which is still one
-build per ``k``, not one per query length.
+Hit counts are identical in every cell — the benchmark asserts it rather than reporting it, so a
+dispatch that got ``b`` or a budget wrong would fail there on real text and not only in a unit
+test.
 
-Rule of thumb: **pick the largest ``k`` with ``k <= L / (max_subs + 1)``** for the bulk of the
-query set, and accept the ball path for the tail. At ``L >= 12, m <= 3`` a ``k = 4`` index
-answers in **0.12–0.20 ms/query** on the human proteome; the short-query ball path is one to
-two orders of magnitude more expensive because each probe of a 4-residue seed returns ~210
-positions on a text that size, and verifying a candidate is one cache miss.
+The crossover is ``L = 2k``: below it only one block fits, so the query pays a full radius-``m``
+ball over its leading k-mer and the bigger ``k`` is much worse. **Pick the largest ``k`` with
+``2k <= L``** for the bulk of the query set — ``k = 4`` down to length 8, ``k = 5`` from 10 up.
+At ``k = 5`` every ``L >= 10`` cell above is **at or under 0.4 ms/query**. Building is cheap
+either way (0.55 s at ``k = 4``, 0.59 s at ``k = 5``), so a corpus spanning both can simply hold
+both indexes — still one build per ``k``, never one per query length.
 
-Threads scale nearly linearly — human proteome, ``L = 12``, ``max_subs = 2``: 0.138 ms/query on
-one thread, 0.017 on eight (8.3x), 0.010 on all cores (13.9x).
+Threads scale well — human proteome, ``L = 12``, ``max_subs = 2``, 50,000 queries: 0.103
+ms/query on one thread, 0.013 on eight (7.8x), 0.008 on all cores (12.6x). The ratio is capped
+by the serial CSR flatten at the end of a batch rather than by the search, which is why it
+falls short of linear on a workload the search scheme made this fast.
 
 Results are flat arrays
 -----------------------
@@ -160,7 +189,27 @@ a parse::
     ix = TextIndex.load("human_k4.sti")            # mmap=True by default
 
 With ``mmap=True`` the pages are shared read-only across processes, so a fan-out of workers
-costs one copy of the index rather than one per worker.
+costs one copy of the index rather than one per worker — and, since there is nothing to parse,
+the load does not scale with the file.
+
+============  =====  ============  ===========  =========  ================  ===============
+text          ``k``  residues      file         × text     save              load
+============  =====  ============  ===========  =========  ================  ===============
+mouse         4      23,131,234    116.6 MB     5.0        0.14 s            0.10 ms (mmap)
+human         4      69,578,135    348.2 MB     5.0        0.46 s            0.10 ms (mmap)
+human         5      69,578,135    378.1 MB     5.4        0.54 s            0.10 ms (mmap)
+============  =====  ============  ===========  =========  ================  ===============
+
+Reading the file instead (``mmap=False``) costs 0.12 s on the human index. **Roughly 5× the
+text** is what a *positional* seed index costs: 79 % of the file is ``post_ids``, one ``uint32``
+per in-record k-mer start, and every one of those 69.1 M positions has to be addressable for
+the answer to be exact. Small texts pay a different bill — the bucket table is directly
+addressed, so it has a floor of ``A^k × 4`` bytes (1.3 MB at ``k = 4``, 31.8 MB at ``k = 5``)
+regardless of how little text there is.
+
+A ``.sti`` is treated as untrusted input: the header's record, bucket and posting counts are
+cross-checked against each other and against the file length before any of them is used to size
+an allocation or to index into the mapping.
 
 Limits
 ------
