@@ -1,7 +1,7 @@
 # `TextIndex` — exact k-mismatch search over a concatenated reference text
 
 **Status: implemented in `seqtree` 1.0.0, 2026-09-06.** Steps 1-6 of §8 shipped; §3.7 gapped
-q-grams and §9's `mhcmatch` adapter did not. Five things below were corrected during
+q-grams and §9's `mhcmatch` adapter did not. Six things below were corrected during
 implementation and the code, not this document, is authoritative on them:
 
 1. **The amino-acid codec is 24 symbols** (`ARNDCQEGHILKMFPSTWYVBZX*`), not 20. So `A^k` at
@@ -20,11 +20,48 @@ implementation and the code, not this document, is authoritative on them:
    proteome has 36 `U`; refusing the build over them would make the class unusable on its own
    reference data. A *query* containing one is still refused, as §7.2 requires.
 
+6. **§5.3's two-path dispatch is one rule, and that is where the speed was.** As written, a
+   query took `m + 1` exact seeds when `L / (m+1) >= k` and otherwise a single radius-`m` ball
+   over `q[0:k]` -- with nothing in between, so `L = 8, m = 2, k = 4`, where two disjoint 4-mers
+   plainly fit, still paid for a 3,267-variant one-block ball. The shipped rule generalises both:
+
+   > Split into `b` disjoint blocks of width `bw = L/b >= k`, probe block *j* at radius `c_j`.
+   > **Lossless iff `sum_j c_j >= m - b + 1`** -- the cheapest violating error vector is
+   > `e_j = c_j + 1`, of weight `sum(c_j) + b`, so none exists below that. Probe cost
+   > `N(c) = sum_{i<=c} C(k,i)(A-1)^i` has steeply rising, block-independent increments, so the
+   > cheapest legal scheme is `b = min(m+1, L/k)` with `r = max(0, m-b+1)` spread evenly.
+
+   `b = m+1` recovers the seed path and `b = 1` the ball path. Measured on the human proteome,
+   single-threaded, `k = 4` (`bench/bench_text_index.py`):
+
+   | `L` | `m` | before, ms/query | after, ms/query | |
+   |--:|--:|--:|--:|--:|
+   | 8 | 2 | 34.505 | 1.379 | 25x |
+   | 9 | 2 | 35.453 | 1.278 | 28x |
+   | 10 | 2 | 40.940 | 1.311 | 31x |
+   | 11 | 2 | 30.196 | 1.242 | 24x |
+   | 12 | 3 | 415.578 | 1.804 | 230x |
+   | 15 | 3 | 400.484 | 1.531 | 262x |
+
+   Two things fell out of it that the document did not anticipate. **Spare budget units belong on
+   the LAST blocks** -- worth a further 1.4x, because a candidate matches its own block's k-mer,
+   so verification scanning left-to-right meets the unconstrained prefix first and early-exits,
+   and it is the high-budget block that contributes nearly all the candidates. And **§5.4.5's
+   candidate sort is not needed at all**: a start two blocks both reach is emitted by the
+   lowest-indexed block that could have produced it, a test read off the mismatch positions
+   verification has already computed.
+
+   The framing is the "search scheme" of Kianfar, Pockrandt, Torkamandi, Luo & Reinert,
+   *Optimum Search Schemes for Approximate String Matching Using Bidirectional FM-Index*,
+   arXiv:1711.02035. Only the partition-and-budget half transfers: a direct-addressed table has
+   no bidirectional extension, so there is no search *order* to optimise over.
+
 §5.4's bit-packed verification was measured as the wrong lever and not built: the short path is
 bound by one cache miss per candidate, not by the comparison loop, and §5.4.5's locality sort
-made it **1.6x slower** when tried. §7.1's acceptance targets were met at `L >= 12` (0.12-0.20
-ms/query against <= 0.5) and missed at `L = 8-11` (3.3-4.9 ms at `k = 5` against <= 1.0);
-see `docs/text-index.rst` for the measured `k` trade-off.
+made it **1.6x slower** when tried. Against §7.1's acceptance targets, `L >= 12, m = 2` is met
+with room (0.127 ms/query against <= 0.5) and `L = 8-11, m = 2` lands at **1.24-1.38 ms against
+<= 1.0** -- 1.3x over, from 30x over. At `k = 5` every `L >= 10` is under 0.2 ms; see
+`docs/text-index.rst` for the measured `k` guidance.
 
 Driven by a measured failure in `mhcmatch`, but the primitive is generic and stays generic
 (`ROADMAP.md` §4, "seqtree is upstream and stays generic"). The reference implementation to beat is

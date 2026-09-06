@@ -38,9 +38,12 @@ Beyond search, seqtree ships:
   — a proteome, a genome — where `Index` would need one build per query length. The human proteome
   has **68,389,335** nine-mer windows, so a query set spanning **45 distinct lengths** costs 45
   multi-gigabyte builds; here `k` belongs to the index and **one build answers every length and
-  every `max_subs`**. Exact, not heuristic: pigeonhole blocks above `k`, a duplicate-free
-  substitution ball below it, with completeness pinned by brute-force **set equality** over
-  L 6–30 × `max_subs` 0–3 × k ∈ {3,4,5}. Results come back as flat CSR arrays with zero-copy
+  every `max_subs`**. Exact, not heuristic: one search scheme — `b = min(m+1, L/k)` disjoint
+  blocks, block `j` probed at radius `c_j`, lossless exactly when `Σc_j ≥ m − b + 1` — with
+  completeness pinned by brute-force **set equality** over L 6–30 × `max_subs` 0–3 ×
+  k ∈ {3,4,5}, and by the answer being identical across `k`. On the human proteome
+  (69,578,135 residues) one thread answers a 9-mer within 2 substitutions in **1.3 ms** and a
+  15-mer within 3 in **1.5 ms**. Results come back as flat CSR arrays with zero-copy
   `numpy` views, mismatches as `(pos, query_aa, text_aa)` pairs, an optional fold onto
   caller-supplied group ids that makes a tie explicit, and a cap that is always reported.
 - **E-values / significance** — calibrate hit counts against a background control repertoire
