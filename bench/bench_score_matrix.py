@@ -23,18 +23,14 @@ Run:
 import argparse
 import os
 import random
-import resource
 import time
+
+from _common import peak_rss_gb
 
 import seqtree
 from seqtree.gapblock import central_prior, gapblock_score, positions_prior, score_matrix, _pen_table
 
 AA = "ACDEFGHIKLMNPQRSTVWY"
-
-
-def peak_rss_gb() -> float:
-    rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-    return rss / 1e9 if os.uname().sysname == "Darwin" else rss / 1e6
 
 
 def main() -> None:

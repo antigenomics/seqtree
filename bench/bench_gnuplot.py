@@ -36,6 +36,8 @@ import tempfile
 import time
 from pathlib import Path
 
+from _common import mutate, peak_rss_mb
+
 import seqtree as st
 
 AA = "ACDEFGHIKLMNPQRSTVWY"
@@ -89,14 +91,6 @@ def vdjdb_cdr3():
         return []
 
 
-def mutate(s, n_subs, rng):
-    s = list(s)
-    for _ in range(n_subs):
-        j = rng.randrange(len(s))
-        s[j] = rng.choice(AA)
-    return "".join(s)
-
-
 def make_refs(kind, size, olga_pool, vdjdb_pool, rng):
     """OLGA refs are the generative pool; VDJdb refs are mutated VDJdb CDR3. Both are
     expanded to ``size`` by substitution-mutating random picks from the source pool."""
@@ -106,15 +100,6 @@ def make_refs(kind, size, olga_pool, vdjdb_pool, rng):
         refs.append(mutate(rng.choice(src), rng.randint(0, 3), rng))
     rng.shuffle(refs)
     return refs[:size]
-
-
-def peak_rss_mb():
-    try:
-        import psutil
-
-        return psutil.Process().memory_info().rss / (1024 * 1024)
-    except Exception:
-        return 0.0
 
 
 def qpms(idx, queries, params, threads):

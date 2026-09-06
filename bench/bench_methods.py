@@ -12,6 +12,8 @@ import os
 import random
 import time
 
+from _common import mutate
+
 import seqtree
 
 AA = "ACDEFGHIKLMNPQRSTVWY"
@@ -49,20 +51,6 @@ def expand(pool, target, rng):
     return refs[:target]
 
 
-def mutate(s, n_subs, n_indels, rng):
-    s = list(s)
-    for _ in range(n_subs):
-        j = rng.randrange(len(s))
-        s[j] = rng.choice(AA)
-    for _ in range(n_indels):
-        j = rng.randrange(len(s))
-        if rng.random() < 0.5 and len(s) > 1:
-            del s[j]
-        else:
-            s.insert(j, rng.choice(AA))
-    return "".join(s)
-
-
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--sizes", type=int, nargs="*")
@@ -87,7 +75,7 @@ def main():
 
         # ---- scope sweep: edit-count budget, both engines ----
         for scope in (1, 2, 3):
-            queries = [mutate(s, scope, 0, rng) for s in base]
+            queries = [mutate(s, scope, rng) for s in base]
             for eng in ("seqtm", "seqtrie"):
                 p = seqtree.SearchParams(max_subs=scope, max_total_edits=scope, engine=eng)
                 t0 = time.perf_counter()
@@ -98,7 +86,7 @@ def main():
                       f"{len(queries) / dt:,.0f}\t{hpq:.2f}", flush=True)
 
         # ---- indel scope (seqtm only; seqtrie via total budget) ----
-        queries = [mutate(s, 1, 1, rng) for s in base]
+        queries = [mutate(s, 1, rng, n_indels=1) for s in base]
         for eng, p in (("seqtm", seqtree.SearchParams(max_subs=1, max_ins=1, max_dels=1, engine="seqtm")),
                        ("seqtrie", seqtree.SearchParams(max_total_edits=2, engine="seqtrie"))):
             t0 = time.perf_counter()
@@ -108,7 +96,7 @@ def main():
                   f"{len(queries) / dt:,.0f}\t{sum(len(r) for r in res) / len(queries):.2f}", flush=True)
 
         # ---- BLOSUM62 score budget (seqtrie) ----
-        queries = [mutate(s, 2, 0, rng) for s in base]
+        queries = [mutate(s, 2, rng) for s in base]
         for budget in (6, 12, 20):
             p = seqtree.SearchParams(matrix="BLOSUM62", max_penalty=budget, engine="seqtrie", gap_open=8)
             t0 = time.perf_counter()
@@ -118,7 +106,7 @@ def main():
                   f"{len(queries) / dt:,.0f}\t{sum(len(r) for r in res) / len(queries):.2f}", flush=True)
 
         # ---- alignment fetch cost ----
-        queries = [mutate(s, 1, 0, rng) for s in base[: min(5000, len(base))]]
+        queries = [mutate(s, 1, rng) for s in base[: min(5000, len(base))]]
         p = seqtree.SearchParams(max_subs=1, engine="seqtm")
         res = idx.search_batch(queries, p, threads=args.threads)
         pairs = [(h.ref_id, q) for q, hits in zip(queries, res) for h in hits]

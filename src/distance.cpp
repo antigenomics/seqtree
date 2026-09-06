@@ -8,11 +8,10 @@
 // Codec does, because these are generic string distances, not sequence-search primitives.
 
 #include "seqtree/seqtree.hpp"
+#include "seqtree/parallel.hpp"
 
 #include <algorithm>
-#include <atomic>
 #include <cstdint>
-#include <mutex>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -33,33 +32,10 @@ std::vector<int32_t> matrix_impl(const std::vector<std::string>& a,
     std::vector<int32_t> out(N * K);
     if (N == 0 || K == 0) return out;
 
-    unsigned nt =
-        threads > 0 ? unsigned(threads) : std::max(1u, std::thread::hardware_concurrency());
-    nt = std::min<unsigned>(nt, std::max<size_t>(1, N));
-
-    std::atomic<size_t> next{0};
-    std::exception_ptr err;
-    std::mutex emu;
-
-    auto worker = [&] {
-        for (;;) {
-            const size_t i = next.fetch_add(1);
-            if (i >= N) break;
-            try {
-                int32_t* row = out.data() + i * K;
-                for (size_t k = 0; k < K; ++k) row[k] = pair(a[i], b[k]);
-            } catch (...) {
-                std::lock_guard<std::mutex> lk(emu);
-                if (!err) err = std::current_exception();
-                return;
-            }
-        }
-    };
-
-    std::vector<std::thread> pool;
-    for (unsigned t = 0; t < nt; ++t) pool.emplace_back(worker);
-    for (auto& th : pool) th.join();
-    if (err) std::rethrow_exception(err);
+    parallel_for(N, threads, [] { return 0; }, [&](size_t i, int&) {
+        int32_t* row = out.data() + i * K;
+        for (size_t k = 0; k < K; ++k) row[k] = pair(a[i], b[k]);
+    });
     return out;
 }
 

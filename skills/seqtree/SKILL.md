@@ -20,7 +20,9 @@ Repo: `/Users/mikesh/vcs/code/seqtree`. Venv: `.venv` (`bash setup.sh`). Docs bu
 | `seqtrie` | **no** | yes | the score budget is the entire specification |
 
 `engine="auto"` resolves to `seqtm`. It does **not** choose per query; `seqtrie` silently ignores
-edit caps, so `auto` can never select it. Passing a matrix to `seqtrie` without an explicit
+edit caps, so `auto` can never select it. The trap: `SearchParams(matrix=..., max_penalty=12)`
+without `engine="seqtrie"` still runs `seqtm`, where `max_subs` is 0 by default -- exact matches
+only, and nothing in the result says why. Passing a matrix to `seqtrie` without an explicit
 `max_penalty` raises rather than scanning the whole table.
 
 ## Core API
@@ -67,6 +69,8 @@ match evidence** — evidence lives in the control-counted E-value, never in a w
 evalues(target, control, queries, params, threads=0, exclude_exact=False) -> list[dict]
     # keys: n_target, n_control, E, p_any, p_enrichment, rule_of_three
     # E = (N/M) * n_control ; rule of three (3N/M) when the control ball is empty
+evalue_result(n_target, n_control, n_ref, m_control) -> dict   # that record, for counts you
+    # already have. What `evalues` and `pmhc_evalue.homolog_evalue` both call.
 
 threshold_for_evalue(target, control, queries, params, e_target, threads=0,
                      exclude_exact=False) -> list[int]     # per query; -1 == unreachable

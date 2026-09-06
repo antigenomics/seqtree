@@ -41,16 +41,14 @@
 // query with max_subs >= 2 straddle two records by "paying" for the sentinel.
 
 #include "seqtree/text_index.hpp"
+#include "seqtree/parallel.hpp"
 
 #include "atomic_write.hpp"
 
 #include <algorithm>
-#include <atomic>
 #include <cstring>
 #include <fstream>
-#include <mutex>
 #include <stdexcept>
-#include <thread>
 
 #ifdef _WIN32
 // NOMINMAX or windows.h defines min/max as macros and breaks every std::min / std::max /
@@ -529,43 +527,11 @@ TextResult TextIndex::search_batch(const std::vector<std::string>& queries,
 
     if (n == 0) return TextResult{};
 
-    unsigned nt = threads > 0 ? unsigned(threads)
-                              : std::max(1u, std::thread::hardware_concurrency());
-    nt = std::min<unsigned>(nt, unsigned(n));
-    {
-        std::atomic<size_t> next{0};
-        // Adaptive chunk, as everywhere else in the tree -- but with a floor of 8 rather than 1:
-        // QueryOut is ~80 bytes, so a chunk of 1 has neighbouring threads writing into the same
-        // cache line for the whole batch.
-        const size_t chunk = std::clamp<size_t>(n / (size_t(nt) * 8), size_t(8), size_t(1024));
-        // The queries were all encoded above, so nothing here throws on bad input -- but the
-        // workers still allocate (hits, mismatch positions, the probe buffer), and a bad_alloc
-        // escaping a std::thread entry function calls std::terminate, which killed the whole
-        // interpreter with an uncatchable SIGABRT (see src/pairwise.cpp).
-        std::exception_ptr err;
-        std::mutex emu;
-        auto worker = [&] {
-            Work w;  // probe buffer, allocated once per worker
-            for (;;) {
-                size_t start = next.fetch_add(chunk);
-                if (start >= n) break;
-                size_t end = std::min(n, start + chunk);
-                for (size_t i = start; i < end; ++i) {
-                    try {
-                        run_query(i, w);
-                    } catch (...) {
-                        std::lock_guard<std::mutex> lk(emu);
-                        if (!err) err = std::current_exception();
-                        return;
-                    }
-                }
-            }
-        };
-        std::vector<std::thread> pool;
-        for (unsigned t = 0; t < nt; ++t) pool.emplace_back(worker);
-        for (auto& th : pool) th.join();
-        if (err) std::rethrow_exception(err);
-    }
+    // Chunk floor 8 rather than parallel_for's default 1: QueryOut is ~80 bytes, so a chunk of
+    // 1 has neighbouring threads writing into the same cache line for the whole batch. `Work`
+    // is the per-worker probe buffer, allocated once per thread.
+    parallel_for(n, threads, [] { return Work{}; },
+                 [&](size_t i, Work& w) { run_query(i, w); }, size_t(8), size_t(1024));
 
     // The flatten is serial, and after the search scheme cut per-query time it is a real share
     // of the batch -- so size every array once from what the workers actually produced rather

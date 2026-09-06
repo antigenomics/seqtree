@@ -1,15 +1,13 @@
 #include "seqtree/seqtree.hpp"
+#include "seqtree/parallel.hpp"
 #include "atomic_write.hpp"
 #include "trie.hpp"
 
 #include <algorithm>
-#include <atomic>
 #include <cstring>
 #include <fstream>
 #include <limits>
-#include <mutex>
 #include <stdexcept>
-#include <thread>
 #include <vector>
 
 namespace seqtree {
@@ -184,39 +182,8 @@ std::vector<std::vector<Hit>> Index::search_batch(const std::vector<std::string>
     std::vector<std::vector<Hit>> results(n);
     if (n == 0) return results;
 
-    unsigned nt = threads > 0 ? unsigned(threads)
-                              : std::max(1u, std::thread::hardware_concurrency());
-    nt = std::min<unsigned>(nt, std::max<size_t>(1, n));
-
-    std::atomic<size_t> next{0};
-    // Adaptive chunk: large batches keep ~1024 for low atomic contention, but small
-    // batches must split fine enough that every worker gets work (~8 chunks/thread).
-    const size_t chunk = std::clamp<size_t>(n / (size_t(nt) * 8), size_t(1), size_t(1024));
-    std::exception_ptr err;
-    std::mutex emu;
-
-    auto worker = [&] {
-        Searcher s(*this);
-        for (;;) {
-            size_t start = next.fetch_add(chunk);
-            if (start >= n) break;
-            size_t end = std::min(n, start + chunk);
-            for (size_t i = start; i < end; ++i) {
-                try {
-                    s.search_into(queries[i], p, results[i]);
-                } catch (...) {
-                    std::lock_guard<std::mutex> lk(emu);
-                    if (!err) err = std::current_exception();
-                    return;
-                }
-            }
-        }
-    };
-
-    std::vector<std::thread> pool;
-    for (unsigned t = 0; t < nt; ++t) pool.emplace_back(worker);
-    for (auto& th : pool) th.join();
-    if (err) std::rethrow_exception(err);
+    parallel_for(n, threads, [&] { return Searcher(*this); },
+                 [&](size_t i, Searcher& s) { s.search_into(queries[i], p, results[i]); });
     return results;
 }
 
@@ -226,39 +193,12 @@ std::vector<uint64_t> Index::collisions_batch(const std::vector<std::string>& qu
     std::vector<uint64_t> out(n, 0);
     if (n == 0) return out;
 
-    unsigned nt = threads > 0 ? unsigned(threads)
-                              : std::max(1u, std::thread::hardware_concurrency());
-    nt = std::min<unsigned>(nt, std::max<size_t>(1, n));
-
-    std::atomic<size_t> next{0};
-    const size_t chunk = std::clamp<size_t>(n / (size_t(nt) * 8), size_t(1), size_t(1024));
-    std::exception_ptr err;
-    std::mutex emu;
-
-    auto worker = [&] {
-        Searcher s(*this);
-        std::vector<Hit> scratch;
-        for (;;) {
-            size_t start = next.fetch_add(chunk);
-            if (start >= n) break;
-            size_t end = std::min(n, start + chunk);
-            for (size_t i = start; i < end; ++i) {
-                try {
-                    s.search_into(queries[i], p, scratch);
-                    out[i] = s.last_collisions();
-                } catch (...) {
-                    std::lock_guard<std::mutex> lk(emu);
-                    if (!err) err = std::current_exception();
-                    return;
-                }
-            }
-        }
-    };
-
-    std::vector<std::thread> pool;
-    for (unsigned t = 0; t < nt; ++t) pool.emplace_back(worker);
-    for (auto& th : pool) th.join();
-    if (err) std::rethrow_exception(err);
+    struct Local { Searcher s; std::vector<Hit> scratch; };
+    parallel_for(n, threads, [&] { return Local{Searcher(*this), {}}; },
+                 [&](size_t i, Local& L) {
+                     L.s.search_into(queries[i], p, L.scratch);
+                     out[i] = L.s.last_collisions();
+                 });
     return out;
 }
 

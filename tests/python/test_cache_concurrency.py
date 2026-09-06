@@ -180,7 +180,7 @@ def test_the_lock_is_optional_and_correctness_does_not_depend_on_it(monkeypatch)
     from seqtree import control
 
     assert control._build_lock("/tmp/x").__class__.__name__ in {"FileLock", "UnixFileLock",
-                                                                "WindowsFileLock", "_NoLock"}
+                                                                "WindowsFileLock", "nullcontext"}
 
     real_import = builtins.__import__
 
@@ -191,6 +191,6 @@ def test_the_lock_is_optional_and_correctness_does_not_depend_on_it(monkeypatch)
 
     monkeypatch.setattr(builtins, "__import__", no_filelock)
     lock = control._build_lock("/tmp/x")
-    assert lock.__class__.__name__ == "_NoLock"
+    assert lock.__class__.__name__ == "nullcontext"
     with lock:  # must be a usable context manager, not a stub that explodes
         pass

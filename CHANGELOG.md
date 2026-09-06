@@ -154,6 +154,63 @@ versioning: breaking changes need a **major** bump.
   follows semantic versioning — breaking changes need a major bump. The `docs` extra no longer
   lists `nbsphinx`, which was in neither `docs/conf.py` nor `docs/requirements.txt`.
 
+### Audit pass before release
+
+A code and documentation audit run against the finished 1.0.0 tree. Nothing here changes an API:
+it removes duplication, documents what was already public, and corrects two doc claims that no
+longer matched the code.
+
+#### Documentation and API surface
+
+- **`engine="auto"` is documented correctly.** `docs/engines.rst` claimed `auto` "chooses per
+  query" and "routes matrix-weighted budgets to `seqtrie`". It has never done either since the
+  dispatch was removed: `auto` always resolves to `seqtm`, because `seqtrie` ignores the
+  per-type caps and would silently widen the ball. A reader following the old text and writing
+  `SearchParams(matrix="blosum62", max_penalty=12)` got **1 hit where naming `seqtrie` gives 3**,
+  with nothing in the result to say why. The page now says so and shows both.
+- **`gap_open` in the first example a reader meets.** `docs/getting-started.rst` and the README
+  Quickstart paired BLOSUM62 with `gap_open=8`, against the library's own rule of
+  `2 * matrix.scale()` = **28** for BLOSUM62. At 8 a gap is cheaper than a substitution, which is
+  the exact failure the rule exists to prevent.
+- **README leads with install and a runnable Quickstart**, then a "Which piece do I need?" routing
+  table, then the feature detail — which previously ran ~90 lines before the first `pip install`.
+  The Quickstart gained `TextIndex`, which the feature list advertised but no example used.
+- **`docs/api.rst` is grouped by task** rather than one flat section per class: searching a set,
+  searching a text, scoring, dense matrices, seed-and-extend, significance. `ScoreMatrix` was
+  public, exported and referenced from `docs/distance.rst` but had **no entry on the API page at
+  all**; it has one now. Page titles that described a comparison rather than a capability
+  ("Pairwise alignment without BioPython") or over-narrowed a payload-agnostic feature
+  ("E-values for TCR hits") were renamed, and the toctree order now runs
+  install → concepts → examples → reference → capabilities.
+
+#### Fixed in the same pass
+
+- **59 members of the C++ binding surface had no docstring** — every field of `SearchParams`,
+  `Hit`, `Alignment`, `TextHit` and `Candidate`, and most `SubstitutionMatrix` factories. `api.rst`
+  autodocs with `:undoc-members:`, so each rendered as a bare name rather than failing the build.
+  All 59 are documented, and `tests/python/test_doc_coverage.py` now gates the `_core` classes the
+  way it already gated the Python modules — plus a test that executes the README Quickstart
+  verbatim.
+- **`ArrayView.format` was a `static thread_local char[2]` scratch buffer** that each `getbuffer`
+  overwrote, so two live views of different dtypes on one thread both reported the last format.
+  It is a per-instance member now.
+
+#### Internal
+
+- **One `parallel_for` replaces seven hand-rolled copies** of the atomic cursor / adaptive chunk /
+  `exception_ptr` / rethrow-after-join scaffold (`include/seqtree/parallel.hpp`). The copies had
+  drifted: `gapblock.cpp` carried no exception plumbing at all, and the chunk cap was 1024 in four
+  places and 256 in a fifth. Per-worker scratch is still allocated once per thread, via a
+  `make_local` factory. No measured change: perf gate within 1.11x on every metric, gapblock
+  `score_matrix` 481–521 M pairs/s across three runs against the 532.7 M on record.
+- **`psutil` is out of the `[bench]` extra.** Two of the six copies of peak-RSS used it, and
+  reported *current* RSS rather than peak — a different quantity from the four stdlib `resource`
+  copies beside them. One `bench/_common.py` now holds `peak_rss_mb`, `peak_rss_gb` and `mutate`.
+- `seqtree.evalue.evalue_result` is public: the six-key E-value record, shared by `evalues` and
+  `pmhc_evalue.homolog_evalue`, which had rebuilt it from the identical formula.
+- `control._NoLock` is `contextlib.nullcontext`; `searcher.cpp`'s single-caller `pick_engine()` is
+  inlined to `p.engine != Engine::SeqTrie`.
+
 ## [0.7.0] — 2026-08-16
 
 ### Added

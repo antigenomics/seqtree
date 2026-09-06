@@ -8,7 +8,7 @@ synthesizes up to 1M refs/queries, and reports recall, throughput, and peak RSS.
 Fast tier (default):   python bench/bench.py
 1M tier:               env RUN_BENCHMARK=1 python bench/bench.py --sizes 1000000 --queries 1000000
 
-Needs: huggingface_hub, psutil (pip install -e ".[bench]").
+Needs: huggingface_hub (pip install -e ".[bench]").
 """
 import argparse
 import csv
@@ -16,6 +16,8 @@ import gzip
 import os
 import random
 import time
+
+from _common import mutate, peak_rss_mb
 
 import seqtree
 
@@ -50,16 +52,6 @@ def load_pools():
     return sorted(cdr3), sorted(epi)
 
 
-def mutate(seq, n_subs, rng):
-    if not seq:
-        return seq
-    s = list(seq)
-    for _ in range(n_subs):
-        i = rng.randrange(len(s))
-        s[i] = rng.choice(AA)
-    return "".join(s)
-
-
 def make_refs(pool, target, rng):
     refs = list(pool)
     while len(refs) < target:
@@ -75,15 +67,6 @@ def make_queries(refs, n, n_subs, rng):
         qs.append(mutate(refs[rid], n_subs, rng))
         gts.append(rid)
     return qs, gts
-
-
-def peak_rss_mb():
-    try:
-        import psutil
-
-        return psutil.Process().memory_info().rss / (1024 * 1024)
-    except Exception:
-        return 0.0
 
 
 def run(name, pool, n_refs, n_queries, n_subs, threads, rng):
