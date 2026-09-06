@@ -40,7 +40,7 @@ jobs:
       - name: Build wheels
         uses: pypa/cibuildwheel@v2.23.3
         env:
-          # seqtree ships a pybind11/scikit-build-core C++ ext (src/_core); scikit-build-core
+          # seqtree ships a nanobind/scikit-build-core C++ ext (src/_core); scikit-build-core
           # pulls cmake + ninja into the build env automatically — no extra container setup.
           CIBW_BUILD: "cp310-* cp311-* cp312-* cp313-*"
           CIBW_SKIP: "*-musllinux_* *-manylinux_i686 *-win32"
