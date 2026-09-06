@@ -36,6 +36,10 @@
 #include <thread>
 
 #ifdef _WIN32
+// NOMINMAX or windows.h defines min/max as macros and breaks every std::min / std::max /
+// std::clamp below; WIN32_LEAN_AND_MEAN keeps the rest of the header out.
+#define NOMINMAX
+#define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #else
 #include <fcntl.h>
