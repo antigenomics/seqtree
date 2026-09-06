@@ -310,7 +310,7 @@ ArrayView view_of(const nb::object& owner, const std::vector<T>& v, char fmt) {
 // batch -- the flat arrays are what a 445k-query run should read.
 struct PyTextHit {
     uint32_t ref_id = 0, offset = 0;
-    uint16_t n_subs = 0;
+    uint16_t n_subs = 0, n_ins = 0, n_dels = 0, length = 0;
     int32_t  score = 0;
     std::vector<std::tuple<uint16_t, std::string, std::string>> mismatches;
 };
@@ -322,6 +322,9 @@ nb::dict text_result_arrays(const nb::object& self) {
     d["ref_id"] = view_of(self, r.ref_id, 'I');
     d["offset"] = view_of(self, r.offset, 'I');
     d["n_subs"] = view_of(self, r.n_subs, 'H');
+    d["n_ins"] = view_of(self, r.n_ins, 'H');
+    d["n_dels"] = view_of(self, r.n_dels, 'H');
+    d["length"] = view_of(self, r.length, 'H');
     d["score"] = view_of(self, r.score, 'i');
     d["mm_begin"] = view_of(self, r.mm_begin, 'I');
     d["mm_pos"] = view_of(self, r.mm_pos, 'H');
@@ -917,8 +920,18 @@ NB_MODULE(_core, m) {
                 "Start of the occurrence within that record, 0-based. The matched substring is "
                 "``ix.ref_seq(ref_id)[offset:offset + len(query)]``.")
         .def_ro("n_subs", &PyTextHit::n_subs,
-                "Mismatched positions, always <= the ``max_subs`` that was searched. 0 is an "
-                "exact occurrence.")
+                "Substituted positions, always <= the ``max_subs`` that was searched. 0 with "
+                "``n_ins`` and ``n_dels`` also 0 is an exact occurrence.")
+        .def_ro("n_ins", &PyTextHit::n_ins,
+                "Insertions: query residues with nothing opposite them in the text. Always 0 "
+                "unless the search passed ``max_indels > 0``.")
+        .def_ro("n_dels", &PyTextHit::n_dels,
+                "Deletions: text residues with nothing opposite them in the query. Always 0 "
+                "unless the search passed ``max_indels > 0``.")
+        .def_ro("length", &PyTextHit::length,
+                "Residues the match spans in the text, i.e. "
+                "``ref_seq(ref_id)[offset : offset + length]``. Equal to the query length "
+                "whenever there are no indels; ``len(query) + n_dels - n_ins`` in general.")
         .def_ro("score", &PyTextHit::score,
                 "Summed similarity over the mismatched positions under the ``matrix=`` passed "
                 "to the search, or 0 when none was. Scoring never changes which hits return.")
@@ -954,7 +967,8 @@ NB_MODULE(_core, m) {
                 if (i < 0 || i >= n) throw nb::index_error("query index out of range");
                 std::vector<PyTextHit> out;
                 for (uint32_t h = r.query_begin[size_t(i)]; h < r.query_begin[size_t(i) + 1]; ++h) {
-                    PyTextHit hit{r.ref_id[h], r.offset[h], r.n_subs[h], r.score[h], {}};
+                    PyTextHit hit{r.ref_id[h], r.offset[h],  r.n_subs[h], r.n_ins[h],
+                                  r.n_dels[h], r.length[h], r.score[h],  {}};
                     for (uint32_t j = r.mm_begin[h]; j < r.mm_begin[h + 1]; ++j)
                         hit.mismatches.emplace_back(r.mm_pos[j], std::string(1, r.mm_query_aa[j]),
                                                     std::string(1, r.mm_text_aa[j]));
@@ -1044,10 +1058,11 @@ NB_MODULE(_core, m) {
         .def(
             "search_batch",
             [](const TextIndex& ix, const std::vector<std::string>& queries, uint16_t max_subs,
-               bool exclude_exact, bool best_only, bool group_by, uint32_t max_hits,
-               const std::optional<SubstitutionMatrix>& matrix, int threads) {
+               uint16_t max_indels, bool exclude_exact, bool best_only, bool group_by,
+               uint32_t max_hits, const std::optional<SubstitutionMatrix>& matrix, int threads) {
                 TextQueryOpts o;
                 o.max_subs = max_subs;
+                o.max_indels = max_indels;
                 o.exclude_exact = exclude_exact;
                 o.best_only = best_only;
                 o.group_by = group_by;
@@ -1060,17 +1075,26 @@ NB_MODULE(_core, m) {
                 }
                 return res;
             },
-            nb::arg("queries"), nb::arg("max_subs") = 0, nb::arg("exclude_exact") = false,
-            nb::arg("best_only") = false, nb::arg("group_by") = false, nb::arg("max_hits") = 0,
+            nb::arg("queries"), nb::arg("max_subs") = 0, nb::arg("max_indels") = 0,
+            nb::arg("exclude_exact") = false, nb::arg("best_only") = false,
+            nb::arg("group_by") = false, nb::arg("max_hits") = 0,
             nb::arg("matrix") = std::nullopt, nb::arg("threads") = 0,
-            "Find every position matching each query within ``max_subs`` substitutions "
-            "(releases the GIL; ``threads=0`` uses all cores). ``best_only`` walks the distance "
-            "upward and stops at the first shell with any hit, returning ALL of it. "
-            "``exclude_exact`` drops 0-mismatch hits. ``max_hits`` caps a query after sorting, "
-            "so the best hits survive, and sets ``truncated``. ``matrix`` only SCORES hits the "
-            "Hamming predicate already accepted -- it never changes which are returned. Every "
-            "query must be at least ``k`` long; a shorter one raises rather than being answered "
-            "incompletely.")
+            "Find every position matching each query within ``max_subs`` substitutions and "
+            "``max_indels`` insertions/deletions (releases the GIL; ``threads=0`` uses all "
+            "cores). The two caps are independent: ``max_subs=2, max_indels=1`` accepts two "
+            "substitutions AND one gap, not three edits of any kind.\n\n"
+            "``max_indels=0`` is the pure Hamming predicate: every hit is exactly "
+            "``len(query)`` residues wide and carries per-column ``mismatches``. Above 0 the "
+            "match length varies, so read :attr:`TextHit.length` rather than assuming the query "
+            "length, and ``mismatches`` is empty -- the counts are reported, the individual "
+            "substituted columns are not. Indel search also needs every seed block to be exact, "
+            "so a query must be at least ``(max_subs + max_indels + 1) * k`` long; a shorter one "
+            "raises rather than being answered incompletely.\n\n"
+            "``best_only`` walks the distance upward and stops at the first shell with any hit, "
+            "returning ALL of it. ``exclude_exact`` drops 0-mismatch hits. ``max_hits`` caps a "
+            "query after sorting, so the best hits survive, and sets ``truncated``. ``matrix`` "
+            "only SCORES hits the predicate already accepted -- it never changes which are "
+            "returned, and it is ignored when ``max_indels > 0``.")
         .def("save", &TextIndex::save, nb::arg("path"),
              "Write a flat, mmap-able index file.")
         .def_static("load", &TextIndex::load, nb::arg("path"), nb::arg("mmap") = true,

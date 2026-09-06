@@ -298,3 +298,127 @@ def test_an_index_file_from_an_older_format_is_refused(ix, tmp_path):
     path.write_bytes(bytes(raw))
     with pytest.raises(Exception, match="text index"):
         TextIndex.load(str(path))
+
+
+#: The 20 standard residues, for the generated indel cases below.
+AA = "ACDEFGHIKLMNPQRSTVWY"
+
+
+# --- indel search -------------------------------------------------------------------------
+#
+# The proof obligation: set equality against an independent brute force, the same standard the
+# substitution path is held to. An occurrence is a text interval the WHOLE query aligns to
+# within the two caps, with the alignment beginning and ending on an aligned pair.
+
+_INF = 10**6
+
+
+def _feasible(q, t, ms, mi):
+    """True if q aligns to the whole of t within ms substitutions and mi indels."""
+    L, T = len(q), len(t)
+    if L == 0 or T == 0:
+        return False
+    for g in range(mi + 1):
+        for dels in range(g + 1):
+            ins = g - dels
+            if T - L != dels - ins:
+                continue
+            dp = [[[_INF] * (dels + 1) for _ in range(ins + 1)] for _ in range(L + 1)]
+            dp[1][0][0] = q[0] != t[0]          # must open on an aligned pair
+            for i in range(1, L + 1):
+                for a in range(ins + 1):
+                    for d in range(dels + 1):
+                        v = dp[i][a][d]
+                        if v >= _INF:
+                            continue
+                        j = i - a + d
+                        if i < L and j < T:
+                            dp[i + 1][a][d] = min(dp[i + 1][a][d], v + (q[i] != t[j]))
+                        if 0 < i < L - 1 and a < ins:            # no insertion at either edge
+                            dp[i + 1][a + 1][d] = min(dp[i + 1][a + 1][d], v)
+                        if i < L and j < T and d < dels:         # no deletion at either edge
+                            dp[i][a][d + 1] = min(dp[i][a][d + 1], v)
+            if dp[L][ins][dels] <= ms:
+                return True
+    return False
+
+
+def _brute_indel(records, q, ms, mi):
+    out = set()
+    for r, rec in enumerate(records):
+        for start in range(len(rec)):
+            for ln in range(max(1, len(q) - mi), min(len(q) + mi, len(rec) - start) + 1):
+                if _feasible(q, rec[start:start + ln], ms, mi):
+                    out.add((r, start, ln))
+    return out
+
+
+@pytest.mark.parametrize("k", [3, 4])
+@pytest.mark.parametrize("ms,mi", [(0, 1), (1, 1), (2, 1), (0, 2), (1, 2)])
+def test_indel_search_equals_brute_force(k, ms, mi):
+    """Set equality, not a spot check: every interval the oracle finds and no others."""
+    rng = random.Random(1000 + k * 17 + ms * 5 + mi)
+    records = ["".join(rng.choice(AA) for _ in range(40)) for _ in range(4)]
+    ix = TextIndex.build(records, alphabet="aa", k=k)
+    length = (ms + mi + 1) * k
+    checked = 0
+    for _ in range(12):
+        rec = rng.choice(records)
+        start = rng.randrange(len(rec) - length + 1)
+        q = _mutate_with_indels(rec[start:start + length], rng.randint(0, ms + mi), rng)
+        if len(q) != length:                       # keep the query legal for this (ms, mi, k)
+            continue
+        got = {(h.ref_id, h.offset, h.length)
+               for h in ix.search_batch([q], max_subs=ms, max_indels=mi)[0]}
+        assert got == _brute_indel(records, q, ms, mi), f"q={q} k={k} ms={ms} mi={mi}"
+        checked += 1
+    assert checked, "generated no legal query for this cell"
+
+
+def _mutate_with_indels(s, n, rng):
+    s = list(s)
+    for _ in range(n):
+        op = rng.choice(("sub", "ins", "del"))
+        i = rng.randrange(len(s))
+        if op == "sub":
+            s[i] = rng.choice(AA)
+        elif op == "ins":
+            s.insert(i, rng.choice(AA))
+        elif len(s) > 1:
+            del s[i]
+    return "".join(s)
+
+
+def test_max_indels_zero_is_the_substitution_path_unchanged():
+    """Adding the parameter must not perturb the predicate anyone is already calling."""
+    rng = random.Random(4)
+    records = ["".join(rng.choice(AA) for _ in range(300)) for _ in range(20)]
+    ix = TextIndex.build(records, alphabet="aa", k=4)
+    queries = [records[rng.randrange(20)][rng.randrange(280):][:12] for _ in range(200)]
+    a = ix.search_batch(queries, max_subs=2)
+    b = ix.search_batch(queries, max_subs=2, max_indels=0)
+    assert a.num_hits == b.num_hits and a.num_hits > 0
+    for i in range(len(queries)):
+        assert [(h.ref_id, h.offset, h.n_subs, h.mismatches) for h in a[i]] == \
+               [(h.ref_id, h.offset, h.n_subs, h.mismatches) for h in b[i]]
+    # ...and every hit still describes an ungapped, query-length match.
+    assert all(h.n_ins == 0 and h.n_dels == 0 and h.length == 12 for h in a[0])
+
+
+def test_indel_hit_reports_a_usable_interval():
+    """offset/length must bound the matched text, since it is no longer len(query) wide."""
+    ix = TextIndex.build(["MKTAYIAKQRQISFVKSHFSRQ"], alphabet="aa", k=3)
+    #                             ^ AYIAKQR is at offset 4; drop the I to force one deletion
+    hits = ix.search_batch(["AYAKQRQISF"], max_subs=0, max_indels=1)[0]
+    assert hits, "a single deletion should still be found"
+    h = hits[0]
+    assert (h.n_subs, h.n_ins, h.n_dels) == (0, 0, 1)
+    assert h.length == 11 and len(ix.ref_seq(h.ref_id)[h.offset:h.offset + h.length]) == 11
+    assert ix.ref_seq(h.ref_id)[h.offset:h.offset + h.length] == "AYIAKQRQISF"
+
+
+def test_indel_search_refuses_a_query_too_short_to_seed():
+    ix = TextIndex.build(["MKTAYIAKQRQISFVKSHFSRQ"], alphabet="aa", k=4)
+    with pytest.raises(ValueError, match="seed blocks to be exact"):
+        ix.search_batch(["AYIAKQRQ"], max_subs=2, max_indels=1)   # needs 4*4 = 16, has 8
+    ix.search_batch(["AYIAKQRQISFVKSHF"], max_subs=2, max_indels=1)  # 16 is fine

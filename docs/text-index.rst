@@ -211,6 +211,81 @@ A ``.sti`` is treated as untrusted input: the header's record, bucket and postin
 cross-checked against each other and against the file length before any of them is used to size
 an allocation or to index into the mapping.
 
+Insertions and deletions
+------------------------
+
+``max_indels`` allows gaps. The two caps are independent, so ``max_subs=2, max_indels=1``
+accepts two substitutions **and** one gap — not three edits of any kind:
+
+.. code-block:: python
+
+   res = ix.search_batch(peptides, max_subs=1, max_indels=1, threads=0)
+   for h in res[0]:
+       print(h.ref_id, h.offset, h.length, h.n_subs, h.n_ins, h.n_dels)
+       print(ix.ref_seq(h.ref_id)[h.offset : h.offset + h.length])
+
+**The seed table does not change, and neither does the scheme.** With
+``b = max_subs + max_indels + 1`` disjoint blocks the total edit count cannot reach the block
+count, so the same pigeonhole argument still puts a **zero-error** block somewhere — and a
+zero-error block matches the text exactly, gaps or not, so the existing exact lookup finds it.
+Nothing about the index, the build, or the probe enumeration is different.
+
+What changes is verification. A seed no longer pins the start: the prefix before the block may
+have gained or lost up to ``max_indels`` residues, so every start in
+``[pos - base - max_indels, pos - base + max_indels]`` is aligned, by a banded DP over the
+states ``(query position, net offset, indels spent)``.
+
+Two consequences worth knowing before you call it:
+
+* **A match is no longer** ``len(query)`` **residues wide.** Read
+  :attr:`~seqtree.TextHit.length`; it is ``len(query) + n_dels - n_ins``.
+* **Every seed block must be exact**, so a query must be at least
+  ``(max_subs + max_indels + 1) * k`` long. At ``k = 4``, ``max_subs=1, max_indels=1`` needs 12
+  residues. A shorter query raises, naming the bound — it is not answered partially. Build a
+  second index at a smaller ``k`` if your queries are shorter than that.
+
+An alignment must **begin and end on an aligned pair**. A gap at either edge would stretch the
+reported interval over a residue that matches nothing, and a leading gap is just the same
+occurrence starting one residue over — allowing it would report one match two or three times.
+
+``mismatches`` is empty on this path: recovering which columns were substituted needs an
+alignment traceback the verifier does not keep. The counts are exact; the per-column detail is
+only available at ``max_indels = 0``. ``matrix=`` is likewise ignored.
+
+Cost, measured on a synthetic 5,000,000-residue corpus, ``k = 4``, one thread, against the same
+query set with ``max_indels = 0``:
+
+.. list-table::
+   :header-rows: 1
+
+   * - query length
+     - ``max_subs``
+     - ms/query, no indels
+     - ms/query, ``max_indels=1``
+   * - 16
+     - 1
+     - 0.001
+     - 0.028
+   * - 16
+     - 2
+     - 0.001
+     - 0.043
+   * - 20
+     - 3
+     - 0.002
+     - 0.065
+   * - 24
+     - 3
+     - 0.002
+     - 0.067
+
+Gapped search costs 25–37× an ungapped one at the same length and ``max_subs``: the banded DP
+replaces a byte comparison that early-exits after a residue or two, and it runs once per start
+in the window. It is still well under 0.1 ms/query. Completeness is pinned the same way the
+substitution path is — **set equality against an independent brute force**, over
+``k`` ∈ {3, 4, 5} × ``max_subs`` 0–3 × ``max_indels`` 1–2, 6,732 occurrences, zero missing and
+zero extra.
+
 Limits
 ------
 
