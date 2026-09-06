@@ -6,6 +6,7 @@
 
 #include "doctest.h"
 #include "seqtree/text_index.hpp"
+#include "tmp_path.hpp"
 
 #include <cstdio>
 #include <random>
@@ -257,7 +258,7 @@ TEST_CASE("text index: hit order is deterministic across thread counts") {
 TEST_CASE("text index: save/load round-trips, both mapped and read") {
     auto refs = random_text(5, 10, 30, 50);
     auto ix = TextIndex::build(refs, Alphabet::AminoAcid, 4, {1, 1, 2, 2, 3, 3, 4, 4, 5, 5});
-    const std::string path = "/tmp/seqtree_text_index_test.sti";
+    const std::string path = tmp_path("seqtree_text_index_test.sti");
     ix->save(path);
 
     TextQueryOpts opts;
