@@ -64,8 +64,9 @@ Top hits, matrices, alignment
    # k best hits
    top = idx.search_top("CASSLAPGATNEKLFF", p, k=5)
 
-   # BLOSUM62-weighted budget (seqtrie)
-   pm = seqtree.SearchParams(matrix="BLOSUM62", max_penalty=12, engine="seqtrie", gap_open=8)
+   # BLOSUM62-weighted budget. seqtrie must be named -- engine="auto" always means seqtm.
+   # gap_open follows the matrix: 2 * blosum62.scale() == 28, not the default 1.
+   pm = seqtree.SearchParams(matrix="blosum62", max_penalty=12, engine="seqtrie", gap_open=28)
    hits = idx.search("CASSLAPGATNEKLFF", pm)
 
    # alignment on demand (never computed during search)

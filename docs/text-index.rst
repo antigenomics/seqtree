@@ -1,5 +1,5 @@
-Text search
-===========
+Text search: proteomes and genomes
+==================================
 
 .. currentmodule:: seqtree
 

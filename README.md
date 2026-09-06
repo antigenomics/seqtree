@@ -10,6 +10,68 @@ Fast fuzzy search over biological sequences (amino-acid or nucleotide), as a C++
 core with a minimal Python binding. Build an immutable index once, then search
 single queries or massive batches in parallel.
 
+## Install
+
+```fish
+pip install seqtree       # prebuilt wheels for CPython 3.10–3.13
+```
+
+Prebuilt wheels cover **Linux x86-64**, **macOS arm64 (Apple Silicon)**, and **Windows x86-64**.
+There are **no Intel/x86-64 macOS wheels** — Intel Macs build from source (see below), which just
+needs a C++20 compiler and CMake (pulled in automatically by the build).
+
+## Quickstart
+
+```python
+import seqtree
+
+idx = seqtree.Index.build(["CASSLAPGATNEKLFF", "CASSLELGATNEKLFF"], alphabet="aa")
+
+p = seqtree.SearchParams(max_subs=2, engine="seqtm")
+for hit in idx.search("CASSLAPGATNEKLFF", p):
+    print(hit.ref_id, hit.score, hit.n_subs)
+
+# parallel batch (releases the GIL)
+results = idx.search_batch(queries, p, threads=0)   # 0 = all cores
+
+# matrix-weighted budget. Name seqtrie -- engine="auto" always means seqtm.
+# gap_open must follow the matrix: 2 * blosum62.scale() == 28, not the default 1.
+pm = seqtree.SearchParams(matrix="blosum62", max_penalty=12, engine="seqtrie", gap_open=28)
+top = idx.search_top("CASSLAPGATNEKLFF", pm, k=5)
+
+# alignment on demand
+aln = idx.align(0, "CASSLELGATNEKLFF", p)
+print(aln.aligned_query, aln.aligned_ref, aln.ops)
+
+# batch-vs-batch (auto-indexes the larger set)
+pairs = seqtree.pairwise_batch(query_set, db_set, p, alphabet="aa")
+
+# a short query against a long TEXT (a proteome), one index for every query length
+tix = seqtree.TextIndex.build(proteome_records, alphabet="aa", k=4)
+res = tix.search_batch(peptides, max_subs=2, threads=0)
+for hit in res[0]:
+    print(hit.ref_id, hit.offset, hit.n_subs, hit.mismatches)
+```
+
+That is the whole core loop. Significance, gap blocks, alignment and distances are in
+[More examples](#more-examples) below, and the
+[docs](https://antigenomics.github.io/seqtree/) explain the why.
+
+## Which piece do I need?
+
+| You have | You want | Use |
+|---|---|---|
+| a set of sequences | the ones within *k* edits of a query | `Index` + `SearchParams` |
+| a long text (proteome, genome) | where a short query occurs within *k* mismatches | `TextIndex` |
+| two sequences | an alignment, or a similarity score | `seqtree.pairwise` |
+| two whole sets | every pairwise distance, densely | `hamming_matrix` / `dist_matrix` / `gapblock.score_matrix` |
+| hits and a background repertoire | whether a hit is more than chance | `load_control` + `evalues` |
+| a V(D)J junction pair | an alignment with one contiguous indel | `seqtree.gapblock` |
+| one sequence | every substitution within radius *r* | `distance.neighbourhood` |
+
+Results are payload-agnostic — `(ref_id, score, n_subs, n_ins, n_dels)`. Downstream libraries map
+`ref_id` back to their own payloads (V gene, MHC, counts) and filter there.
+
 Two search engines over one trie:
 
 - **`seqtm`** — branch-and-bound enumeration. Exact per-type edit caps
@@ -19,10 +81,8 @@ Two search engines over one trie:
   `max_penalty` score budget only; it **ignores the per-type edit caps**. Use it
   when the budget is the whole specification.
 
-`engine="auto"` always picks `seqtm`, because it is the only engine that enforces
-the caps you asked for. Results are payload-agnostic:
-`(ref_id, score, n_subs, n_ins, n_dels)`. Downstream libraries map `ref_id` back
-to their own payloads (V gene, MHC, counts) and filter.
+`engine="auto"` always picks `seqtm`, because it is the only engine that enforces the caps you
+asked for — `seqtrie` runs only when you name it.
 
 Beyond search, seqtree ships:
 
@@ -84,51 +144,14 @@ Beyond search, seqtree ships:
   min-over-members; at a loose cutoff the two are indistinguishable, so it earns its keep only
   where the cutoff is strict.
 
-## Install
-
-```fish
-pip install seqtree       # prebuilt wheels for CPython 3.10–3.13
-```
-
-Prebuilt wheels cover **Linux x86-64**, **macOS arm64 (Apple Silicon)**, and **Windows x86-64**.
-There are **no Intel/x86-64 macOS wheels** — Intel Macs build from source (see below), which just
-needs a C++20 compiler and CMake (pulled in automatically by the build).
-
-## Build from source
-
-Needs [uv](https://docs.astral.sh/uv/) (`brew install uv`); `setup.sh` uses it for the venv and
-the editable install.
-
-```fish
-bash setup.sh            # uv-managed .venv + editable install
-bash setup.sh --tests    # + pytest
-bash setup.sh --bench     # + benchmark deps (huggingface_hub, psutil)
-```
-
-## Quickstart
+## More examples
 
 ```python
+import numpy as np
 import seqtree
+from seqtree.pairwise import align, score, dist_matrix
 
-idx = seqtree.Index.build(["CASSLAPGATNEKLFF", "CASSLELGATNEKLFF"], alphabet="aa")
-
-p = seqtree.SearchParams(max_subs=2, engine="seqtm")
-for hit in idx.search("CASSLAPGATNEKLFF", p):
-    print(hit.ref_id, hit.score, hit.n_subs)
-
-# parallel batch (releases the GIL)
-results = idx.search_batch(queries, p, threads=0)   # 0 = all cores
-
-# matrix-weighted budget
-pm = seqtree.SearchParams(matrix="BLOSUM62", max_penalty=12, engine="seqtrie")
-top = idx.search_top("CASSLAPGATNEKLFF", pm, k=5)
-
-# alignment on demand
-aln = idx.align(0, "CASSLELGATNEKLFF", p)
-print(aln.aligned_query, aln.aligned_ref, aln.ops)
-
-# batch-vs-batch (auto-indexes the larger set)
-pairs = seqtree.pairwise_batch(query_set, db_set, p, alphabet="aa")
+mat = seqtree.SubstitutionMatrix.blosum62()
 
 # E-values against a background control repertoire (TCRNET-style significance)
 control = seqtree.load_control("human_trb_aa", size=1_000_000)
@@ -145,7 +168,6 @@ thetas = seqtree.threshold_for_evalue(target, control, queries, ceiling, e_targe
 from seqtree.gapblock import GapBlockIndex, central_prior, embed_in_frame
 
 gbi = GapBlockIndex(cdr3s, "aa", d_max=2)
-mat = seqtree.SubstitutionMatrix.blosum62()
 for ref_id, score, block_len, block_pos in gbi.search(
         "CASSLGQAYEQYF", 40, mat, gap_open=2 * mat.scale(),
         gap_prior=central_prior(int(1.5 * mat.scale()))):
@@ -157,15 +179,13 @@ embed_in_frame("CASSGQAYEQYF", width=14, c=4)      # 'CASS--GQAYEQYF'
 # a whole query set vs a whole reference set, in one GIL-released C++ call
 from seqtree.gapblock import score_matrix, IslandProfile
 sm = score_matrix(clonotypes, prototypes, mat, gap_open=2 * mat.scale(), threads=0)
-import numpy as np
-distances = np.asarray(sm)                          # (len(clonotypes), len(prototypes)) int32, zero-copy
+distances = np.asarray(sm)                          # (n_clonotypes, n_prototypes) int32, zero-copy
 
 # a position weight matrix over an island, still a non-negative penalty (feeds threshold_for_evalue)
 profile = IslandProfile.fit(island_members)
 profile.score("CASSLGQAYEQYF")                      # 0 on the consensus, > 0 for deviations
 
 # ordinary pairwise alignment -- Needleman-Wunsch / Smith-Waterman, no BioPython
-from seqtree.pairwise import align, score, dist_matrix
 score("CASSLGQAYEQYF", "CASSPGQAYEQF", mat)                    # global, BLAST defaults (11/1)
 score("WWWAAAWWW", "KKKAAAKKK", mat, mode="local")             # Smith-Waterman
 score("AAA", "AAAAA", mat, gap_open=5, gap_extend=5)           # linear gaps: open == extend
@@ -185,6 +205,17 @@ neighbourhood("CASSLGQYF")                                   # 172 = 19*9 + 1
 union_size(junctions)                                        # size the job before running it
 for variant in neighbourhood_union(junctions, r=1):          # each distinct sequence once
     ...
+```
+
+## Build from source
+
+Needs [uv](https://docs.astral.sh/uv/) (`brew install uv`); `setup.sh` uses it for the venv and
+the editable install.
+
+```fish
+bash setup.sh            # uv-managed .venv + editable install
+bash setup.sh --tests    # + pytest
+bash setup.sh --bench    # + benchmark deps (huggingface_hub)
 ```
 
 ## Tests

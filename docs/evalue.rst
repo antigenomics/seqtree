@@ -1,5 +1,5 @@
-E-values for TCR hits
-=====================
+E-values: is this hit real?
+===========================
 
 Fuzzy search tells you *which* references are near a query; an **E-value** tells you whether that
 proximity is *surprising*. For TCR repertoires the hard part is biological redundancy: convergent
