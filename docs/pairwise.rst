@@ -52,7 +52,7 @@ Four conventions, each one a place a reimplementation goes quietly wrong:
 
 * a gap run of length ``L`` costs ``gap_open + (L-1)·gap_extend`` — ``gap_open`` is the cost of the
   *first* gap column, not a surcharge on top of it;
-* **``gap_open == gap_extend`` gives linear gaps.** There is no separate mode, and none is needed;
+* ``gap_open == gap_extend`` **gives linear gaps.** There is no separate mode, and none is needed;
 * ``mode="global"`` charges end gaps like any other — true Needleman–Wunsch, not semi-global;
 * ``mode="local"`` never lets the score fall below zero and takes the best cell anywhere —
   Smith–Waterman.

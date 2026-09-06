@@ -48,7 +48,7 @@ ignores the per-type caps, so routing a capped search there would silently widen
 matrix without an explicit ``max_penalty`` would leave the budget unbounded and scan the whole
 index. Neither failure is visible in the results, so ``auto`` never selects it.
 
-The practical consequence: **``seqtrie`` runs only when you name it.** If you set a matrix and a
+The practical consequence: ``seqtrie`` **runs only when you name it.** If you set a matrix and a
 ``max_penalty`` and leave ``engine`` alone, you get ``seqtm`` — which still enforces ``max_subs``,
 and that defaults to ``0``:
 
@@ -75,7 +75,7 @@ cost and the budget prune stays valid.
 
 The transform roughly doubles the scale, so gap costs have to move with it.
 ``matrix.scale()`` reports the median mismatch penalty — 14 for BLOSUM62 — and the rule is
-**``gap_open = 2 * matrix.scale()``**, i.e. 28 for BLOSUM62. The default of ``1`` is only right
+``gap_open = 2 * matrix.scale()``, i.e. **28 for BLOSUM62**. The default of ``1`` is only right
 for unit cost; leaving it there under a matrix makes a gap ~14x cheaper than a substitution, and
 every alignment degenerates into gaps.
 
