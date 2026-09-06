@@ -1,6 +1,6 @@
 ---
 name: seqtree
-description: Fast fuzzy search over biological sequences — C++20 arena trie + pybind11, with control-calibrated E-values, single-gap-block alignment, and seed significance.
+description: Fast fuzzy search over biological sequences — C++20 arena trie + nanobind, with control-calibrated E-values, single-gap-block alignment, and seed significance.
 ---
 
 # seqtree
@@ -136,6 +136,43 @@ of a common centre, `r = 1`: at `d = 1` the per-sequence balls double-count **41
 Python and does not need the C++ core. `r = 2` over the same 300 is 9.9 M sequences, 6.8 s,
 ~1.8 GB — there the dedup is what keeps it to one copy.
 
+## Text search — `seqtree.TextIndex`
+
+```python
+ix  = TextIndex.build(records, alphabet="aa", k=4, group_ids=None)   # WHOLE records, not windows
+res = ix.search_batch(queries, max_subs=2, exclude_exact=False, best_only=False,
+                      group_by=False, max_hits=0, matrix=None, threads=0)   # GIL released
+
+len(res); res.num_hits; res[i]          # TextHit list for query i, built on demand
+res[i][0].mismatches                    # [(pos, query_aa, text_aa), ...] -- the PAIR
+res.groups(i)                           # [(group_id, min_subs, n_hits), ...] with group_by
+res.truncated                           # per query, 1 if max_hits capped it
+res.arrays(); res.to_numpy()            # zero-copy views over the flat CSR
+ix.save(path); TextIndex.load(path, mmap=True)
+```
+
+**Use this, not `Index`, when the reference is a text.** `Index` is a trie over reference
+*strings*, so a text question means enumerating every length-`L` window as its own string — and
+again for every distinct query length. The human proteome has 68,389,335 nine-mer windows;
+a query set spanning 45 lengths costs 45 multi-gigabyte builds, which is what ran > 2 h without
+finishing and filled 225 GB of cache in `mhcmatch`. Here **`k` belongs to the index**: one
+build answers every length and every `max_subs`.
+
+Exact, not heuristic. Two paths share one seed table, on `s = L / (max_subs + 1)`: `s >= k`
+splits into `max_subs + 1` disjoint blocks (pigeonhole — one block must survive untouched);
+`s < k` enumerates the `<= max_subs` ball of the query's **first `k`** residues, which yields
+the same candidates as balling the whole query at ~6x fewer probes and independently of `L`.
+Completeness is pinned by brute-force **set equality** over L 6–30 x `max_subs` 0–3 x k ∈ {3,4,5}.
+
+- **`matrix=` only scores** hits the Hamming predicate already accepted (similarity summed over
+  the mismatched positions) — it never changes which hits return.
+- **`best_only=True`** walks the distance upward and stops at the first non-empty shell,
+  returning **all** of it. No second index, unlike PEPMatch's log2(L) databases.
+- **`group_ids` are arbitrary** — gene ids, species, clusters. `group_by=True` folds hits onto
+  them and a second row is a **tie**, which is what a caller refusing ambiguous parents needs.
+- **`max_hits` caps after the sort**, so the best hits survive, and always sets `truncated`.
+- Order is `(n_subs, ref_id, offset)`, stable across runs and thread counts.
+
 ## Gap-block alignment — `seqtree.gapblock`
 
 A V(D)J junction's length variation is **one** contiguous indel event, so restrict alignment to
@@ -263,6 +300,11 @@ Count it in the control.
    an OLGA sample as the null for an operational cutoff.
 5. Rebuild after pulling: a stale `_core.so` has silently shadowed new Python-visible C++ methods
    more than once (`bash setup.sh`, or `uv pip install -e .`).
+6. `TextIndex` treats the two sides differently on purpose. A residue outside the alphabet in the
+   **text** (36 `U` in the human proteome, 33 in mouse) becomes a hole — no hit crosses it —
+   and is counted in `ix.num_unknown`; the same residue in a **query** raises. `B`/`Z`/`X`/`*`
+   are real symbols, not wildcards: `X` matches only `X`. And every query must be at least `k`
+   long, or it raises rather than being answered incompletely.
 
 ## Layering
 

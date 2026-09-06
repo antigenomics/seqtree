@@ -1,7 +1,107 @@
 # Changelog
 
-All notable changes to `seqtree`. Dates are release dates; the project is pre-1.0, so a **minor**
-bump may carry breaking changes.
+All notable changes to `seqtree`. Dates are release dates. From 1.0.0 the project follows semantic
+versioning: breaking changes need a **major** bump.
+
+## [1.0.0] — 2026-09-06
+
+### Added
+
+- **`TextIndex` — exact k-mismatch search over a concatenated reference text, with one index
+  for every query length.** `Index` builds a trie over reference *strings*, so asking a text
+  question with it means enumerating every length-`L` window of the text as its own string —
+  and again for every distinct query length. The human proteome has **68,389,335** nine-mer
+  windows, so one such index costs several gigabytes; a query set spanning **45 distinct
+  lengths** costs 45 of them. That is what ran **> 2 h 10 m without finishing** and filled
+  **225 GB** of index cache downstream. `TextIndex` keys on a k-mer seed table over the flat
+  text, so **`k` belongs to the index, not to the query**: one build answers every length and
+  every `max_subs`.
+
+  ```python
+  ix  = TextIndex.build(records, alphabet="aa", k=4, group_ids=gene_id_per_record)
+  res = ix.search_batch(peptides, max_subs=2, best_only=True, group_by=True, threads=0)
+  ```
+
+  Two paths share the one table, chosen per query on `s = L / (max_subs + 1)`. At `s >= k` the
+  query splits into `max_subs + 1` disjoint blocks and pigeonhole guarantees one block's
+  leading k-mer is exact. At `s < k` the `<= max_subs` ball of the query's **first `k`**
+  residues is enumerated and every variant probed — lossless because a match carrying `<= m`
+  mismatches carries at most `m` of them in its first `k` residues. Under proper substitutions
+  that ball is duplicate-free by construction, so it is a direct write into a preallocated
+  buffer with no sort and no hash set: **3,267 probes** at `k = 4, m = 2` over the 24-symbol
+  amino-acid codec, and the cost does not depend on `L`.
+
+  **Neither path is a heuristic**, and that is checked rather than asserted: `tests/cpp/
+  test_text_index.cpp` compares against an independent brute-force scan over query length 6–30
+  × `max_subs` 0–3 × `k` ∈ {3, 4, 5}, requiring **set equality** of `(ref_id, offset, n_subs)`
+  *and* of the mismatch detail — not merely that hits were found. A missed hit does not degrade
+  the caller's answer, it changes it, from ambiguous to confidently wrong.
+
+  Measured on the human proteome (UP000005640, 147,506 records / **69,578,135 residues**), one
+  thread, Apple M-series, `bench/bench_text_index.py`:
+
+  | | |
+  |---|--:|
+  | build, `k = 4` | **0.59 s** |
+  | peak RSS | ~750 MB |
+  | ms/query, `L >= 12`, `max_subs <= 3` | **0.12 – 0.20** |
+  | ms/query, `L = 8–11`, `max_subs = 2`, `k = 4` | 27 – 35 |
+  | ms/query, `L = 8–11`, `max_subs = 2`, `k = 5` | **3.3 – 4.9** |
+  | 8 threads, `L = 12`, `max_subs = 2` | 0.017 ms/query (**8.3x**) |
+  | all cores | 0.010 ms/query (**13.9x**) |
+
+  Hit counts are identical at `k = 4` and `k = 5` in every cell — `k` changes the work, never
+  the answer. The short-query ball path is where the cost is: a 4-residue seed returns ~210
+  positions on a text that size, and verifying a candidate is one cache miss. Raising `k` to 5
+  is a **7x** improvement there for 0.08 s more build time, at the price of pushing `L = 12,
+  m = 2` off the seed path; `docs/text-index.rst` has the trade-off table.
+
+  Results come back as flat CSR arrays rather than one object per hit — a 445 k-query run
+  returns a handful of arrays. `res[i]` materialises `TextHit` objects for one query on demand,
+  `res.arrays()` gives zero-copy buffer views, and `res.to_numpy()` gives numpy views, with
+  numpy imported **on the call** so seqtree keeps its empty dependency list. Order is
+  `(n_subs, ref_id, offset)`, stable across runs and across thread counts.
+
+  Beyond a position: each mismatch is the **pair** `(pos, query_aa, text_aa)`, so a caller
+  ranking by chemistry can tell `L→I` from `L→D` without re-fetching the window. `matrix=`
+  attaches a substitution score to a hit the Hamming predicate has already accepted and never
+  changes which hits return. `best_only=True` walks the distance upward, stops at the first
+  non-empty shell and returns **all** of it, from one index. `group_ids` labels records with
+  arbitrary integers — gene ids, species, clusters — and `group_by=True` folds hits onto them,
+  which makes **a tie between nearest parents a first-class output** rather than something each
+  caller re-derives. `max_hits` caps a query *after* sorting, so the best hits survive, and
+  always sets `res.truncated[i]`: a cap that is invisible is a recall bug wearing a performance
+  costume.
+
+  Saved files are flat with their arrays at known aligned offsets, so `TextIndex.load(path)`
+  **maps** rather than parses and several processes share one copy of the pages.
+
+- **The alphabet is handled asymmetrically, on purpose.** A residue outside the codec in the
+  **text** — 36 `U` in the human proteome, 33 in mouse — becomes a hole that no seed spans and
+  no hit crosses, and is counted in `ix.num_unknown`; refusing the build over them would make
+  the class unusable on the very reference data it exists for. The same residue in a **query**
+  raises, naming the query: `queries[42] ('CASSUGQYF'): symbol 'U' is not in the alphabet`.
+  `B`/`Z`/`X`/`*` are real symbols, not wildcards — `X` matches only `X`. The hole marker is
+  also what separates records, so a hit spanning a record boundary is structurally impossible
+  rather than prevented by a check that could be forgotten.
+
+- **`_core.pyi`.** The package has shipped `py.typed` since the beginning while providing no
+  stubs at all, so every C++ symbol resolved to `Any`. nanobind generates them at build time.
+
+### Changed
+
+- **The bindings moved from pybind11 to nanobind.** Smaller module, lower per-call overhead,
+  and stub generation. Externally visible behaviour is unchanged, including the two things that
+  needed work to keep: `ScoreMatrix`'s buffer protocol, which nanobind has no equivalent for
+  (`Py_bf_getbuffer` is now wired by hand via `nb::type_slots`, so `numpy.asarray(sm)` and
+  `memoryview(sm)` still both wrap it without copying), and the exception mapping that
+  `test_pairwise.py` pins by message text. nanobind's implicit-conversion pass was checked
+  rather than assumed: `threads=1.0` still raises `TypeError` rather than truncating, so none
+  of the ~60 scalar arguments needed `noconvert`.
+
+- **`Development Status` is now `5 - Production/Stable`**, and from this release the project
+  follows semantic versioning — breaking changes need a major bump. The `docs` extra no longer
+  lists `nbsphinx`, which was in neither `docs/conf.py` nor `docs/requirements.txt`.
 
 ## [0.7.0] — 2026-08-16
 
