@@ -1,6 +1,9 @@
 #include "doctest.h"
 #include "seqtree/seqtree.hpp"
 
+// MSVC needs a complete <ostream> before doctest can stringify the std::string_view that
+// ref_seq() returns; libstdc++ and libc++ pull it in transitively and Windows does not.
+#include <ostream>
 #include <stdexcept>
 
 using namespace seqtree;
