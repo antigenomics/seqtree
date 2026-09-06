@@ -41,6 +41,8 @@ cmake.build-type = "Release"
 # Keep the sdist lean: ship only what builds the package. Anchor with a leading "/".
 sdist.exclude = [
     "/bench", "/tests", "/docs", "/.github", "/setup.sh", "/build",
+    # Local agent config: machine-specific absolute paths and unrelated repo names.
+    "/.claude", "/CLAUDE.md",
 ]
 editable.rebuild = false
 
