@@ -223,39 +223,53 @@ struct ScoreMatrix {
     size_t rows = 0, cols = 0;
 };
 
-// nanobind dropped pybind11's def_buffer, so the two buffer slots are wired by hand and
-// handed to nb::class_ as type_slots. Keeping the protocol (rather than moving to
-// nb::ndarray) is deliberate: seqtree declares no runtime dependencies, and both
-// `numpy.asarray(sm)` and `memoryview(sm)` are documented, tested guarantees.
-int score_matrix_getbuffer(PyObject* obj, Py_buffer* view, int flags) {
-    const ScoreMatrix* s = nb::inst_ptr<ScoreMatrix>(obj);
-    // shape and strides must outlive this call, so they travel in `internal` and are freed
-    // by the release slot. [0..1] is shape, [2..3] strides.
-    auto* dims = new Py_ssize_t[4]{Py_ssize_t(s->rows), Py_ssize_t(s->cols),
-                                   Py_ssize_t(sizeof(int32_t) * s->cols),
-                                   Py_ssize_t(sizeof(int32_t))};
-    view->buf = const_cast<int32_t*>(s->data.data());
-    view->len = Py_ssize_t(s->data.size() * sizeof(int32_t));
+// nanobind dropped pybind11's def_buffer, so the buffer slots are wired by hand and handed to
+// nb::class_ as type_slots. Keeping the protocol (rather than moving to nb::ndarray) is
+// deliberate: seqtree declares no runtime dependencies, and both `numpy.asarray(x)` and
+// `memoryview(x)` are documented, tested guarantees.
+//
+// `shape` and `strides` must outlive the getbuffer call, so both live in one heap array that
+// travels in `internal` and is freed by the release slot: [0, ndim) is shape, [ndim, 2*ndim)
+// is strides. `fmt` must outlive it too, so it points at storage the exporting object owns.
+void fill_view(PyObject* obj, Py_buffer* view, int flags, void* buf, int ndim,
+               const Py_ssize_t* shape, const Py_ssize_t* strides, Py_ssize_t itemsize,
+               const char* fmt) {
+    auto* dims = new Py_ssize_t[2 * size_t(ndim)];
+    std::copy(shape, shape + ndim, dims);
+    std::copy(strides, strides + ndim, dims + ndim);
+    Py_ssize_t len = itemsize;
+    for (int d = 0; d < ndim; ++d) len *= shape[d];
+    view->buf = buf;
+    view->len = len;
     view->readonly = 1;
-    view->itemsize = Py_ssize_t(sizeof(int32_t));
-    view->format = (flags & PyBUF_FORMAT) == PyBUF_FORMAT ? const_cast<char*>("i") : nullptr;
-    view->ndim = 2;
+    view->itemsize = itemsize;
+    view->format = (flags & PyBUF_FORMAT) == PyBUF_FORMAT ? const_cast<char*>(fmt) : nullptr;
+    view->ndim = ndim;
     view->shape = dims;
-    view->strides = dims + 2;
+    view->strides = dims + ndim;
     view->suboffsets = nullptr;
     view->internal = dims;
-    view->obj = Py_NewRef(obj);  // keeps the ScoreMatrix (and its data) alive for the view
-    return 0;
+    view->obj = Py_NewRef(obj);  // keeps the exporter (and its data) alive for the view
 }
 
-void score_matrix_releasebuffer(PyObject*, Py_buffer* view) {
+void release_view(PyObject*, Py_buffer* view) {
     delete[] static_cast<Py_ssize_t*>(view->internal);
     view->internal = nullptr;
 }
 
+int score_matrix_getbuffer(PyObject* obj, Py_buffer* view, int flags) {
+    const ScoreMatrix* s = nb::inst_ptr<ScoreMatrix>(obj);
+    const Py_ssize_t shape[2] = {Py_ssize_t(s->rows), Py_ssize_t(s->cols)};
+    const Py_ssize_t strides[2] = {Py_ssize_t(sizeof(int32_t) * s->cols),
+                                   Py_ssize_t(sizeof(int32_t))};
+    fill_view(obj, view, flags, const_cast<int32_t*>(s->data.data()), 2, shape, strides,
+              Py_ssize_t(sizeof(int32_t)), "i");
+    return 0;
+}
+
 PyType_Slot kScoreMatrixSlots[] = {
     { Py_bf_getbuffer, (void*)score_matrix_getbuffer },
-    { Py_bf_releasebuffer, (void*)score_matrix_releasebuffer },
+    { Py_bf_releasebuffer, (void*)release_view },
     { 0, nullptr }
 };
 
@@ -267,42 +281,29 @@ struct ArrayView {
     const void* data = nullptr;
     size_t      n = 0;
     size_t      itemsize = 0;
-    char        fmt = 'i';
+    // NUL-terminated struct format code. Per instance, not a shared scratch buffer: two live
+    // views of different dtypes must each keep reporting their own format.
+    char        fmt[2] = {'i', 0};
 };
 
 int array_view_getbuffer(PyObject* obj, Py_buffer* view, int flags) {
     const ArrayView* a = nb::inst_ptr<ArrayView>(obj);
-    auto* dims = new Py_ssize_t[2]{Py_ssize_t(a->n), Py_ssize_t(a->itemsize)};
-    view->buf = const_cast<void*>(a->data);
-    view->len = Py_ssize_t(a->n * a->itemsize);
-    view->readonly = 1;
-    view->itemsize = Py_ssize_t(a->itemsize);
-    static thread_local char fmt_buf[2] = {0, 0};
-    fmt_buf[0] = a->fmt;
-    view->format = (flags & PyBUF_FORMAT) == PyBUF_FORMAT ? fmt_buf : nullptr;
-    view->ndim = 1;
-    view->shape = dims;
-    view->strides = dims + 1;
-    view->suboffsets = nullptr;
-    view->internal = dims;
-    view->obj = Py_NewRef(obj);
+    const Py_ssize_t shape[1] = {Py_ssize_t(a->n)};
+    const Py_ssize_t strides[1] = {Py_ssize_t(a->itemsize)};
+    fill_view(obj, view, flags, const_cast<void*>(a->data), 1, shape, strides,
+              Py_ssize_t(a->itemsize), a->fmt);
     return 0;
-}
-
-void array_view_releasebuffer(PyObject*, Py_buffer* view) {
-    delete[] static_cast<Py_ssize_t*>(view->internal);
-    view->internal = nullptr;
 }
 
 PyType_Slot kArrayViewSlots[] = {
     { Py_bf_getbuffer, (void*)array_view_getbuffer },
-    { Py_bf_releasebuffer, (void*)array_view_releasebuffer },
+    { Py_bf_releasebuffer, (void*)release_view },
     { 0, nullptr }
 };
 
 template <class T>
 ArrayView view_of(const nb::object& owner, const std::vector<T>& v, char fmt) {
-    return ArrayView{owner, v.data(), v.size(), sizeof(T), fmt};
+    return ArrayView{owner, v.data(), v.size(), sizeof(T), {fmt, 0}};
 }
 
 // One hit as a Python object. Built only for the query actually asked for, never for the whole
@@ -369,13 +370,29 @@ NB_MODULE(_core, m) {
                                    "or ``unit`` for identity) or a custom one from a similarity grid "
                                    "whose row/column order matches ``amino_acids()`` (or "
                                    "``alphabet_symbols(alphabet)``).")
-        .def_static("blosum62", &SubstitutionMatrix::blosum62)
-        .def_static("blosum45", &SubstitutionMatrix::blosum45)
-        .def_static("blosum80", &SubstitutionMatrix::blosum80)
-        .def_static("pam250", &SubstitutionMatrix::pam250)
-        .def_static("pam100", &SubstitutionMatrix::pam100)
-        .def_static("structural", &SubstitutionMatrix::structural)
-        .def_static("unit", &SubstitutionMatrix::unit, nb::arg("size"))
+        .def_static("blosum62", &SubstitutionMatrix::blosum62,
+                    "BLOSUM62, the general-purpose default. Amino acids only; "
+                    "``scale()`` is 14.")
+        .def_static("blosum45", &SubstitutionMatrix::blosum45,
+                    "BLOSUM45. More permissive than BLOSUM62 -- built from more divergent "
+                    "alignments, so distant substitutions cost less. Amino acids only.")
+        .def_static("blosum80", &SubstitutionMatrix::blosum80,
+                    "BLOSUM80. Stricter than BLOSUM62 -- built from closer alignments, so it "
+                    "separates near-identical sequences more sharply. Amino acids only.")
+        .def_static("pam250", &SubstitutionMatrix::pam250,
+                    "PAM250, an evolutionary model tuned for distant homology. "
+                    "Amino acids only.")
+        .def_static("pam100", &SubstitutionMatrix::pam100,
+                    "PAM100, the same model at a shorter evolutionary distance -- stricter "
+                    "than PAM250. Amino acids only.")
+        .def_static("structural", &SubstitutionMatrix::structural,
+                    "A structure-derived matrix, grouping residues by side-chain shape and "
+                    "charge rather than by observed substitution frequency. Amino acids only.")
+        .def_static("unit", &SubstitutionMatrix::unit, nb::arg("size"),
+                    "Identity: every mismatch costs 1, every match 0, so a score is a plain "
+                    "edit count. ``size`` is the alphabet size (24 for ``aa``, 4 for ``nt``); "
+                    "use ``len(alphabet_symbols(alphabet))``. The only matrix valid for "
+                    "nucleotides.")
         .def_static(
             "from_similarity",
             [](const std::vector<std::vector<int32_t>>& grid) {
@@ -394,7 +411,8 @@ NB_MODULE(_core, m) {
             "non-negative penalties via the Gram / squared-distance transform "
             "s[a,a] + s[b,b] - 2*s[a,b] (clamped at 0). Row/column order must match the "
             "target alphabet's symbol order (see ``amino_acids()``).")
-        .def("size", &SubstitutionMatrix::size)
+        .def("size", &SubstitutionMatrix::size,
+             "Alphabet size this matrix scores over -- 24 for amino acids, 4 for nucleotides. A matrix must match the alphabet of the index it is used with.")
         .def(
             "similarity",
             [](const SubstitutionMatrix& self, const std::string& a, const std::string& b) {
@@ -460,10 +478,17 @@ NB_MODULE(_core, m) {
                     "``masked`` is an optional length-``width`` flag array (non-zero == free "
                     "position). Use this to give different regions different matrices, e.g. a "
                     "germline-flank matrix and an N-region core matrix in one frame.")
-        .def("size", &PositionalMatrix::size)
-        .def("width", &PositionalMatrix::width)
-        .def("masked", &PositionalMatrix::masked, nb::arg("pos"))
-        .def("penalty", &PositionalMatrix::penalty, nb::arg("pos"), nb::arg("a"), nb::arg("b"))
+        .def("size", &PositionalMatrix::size, "Alphabet size this matrix scores over.")
+        .def("width", &PositionalMatrix::width,
+             "Frame width in positions. A query must be exactly this long for the positional "
+             "path to apply.")
+        .def("masked", &PositionalMatrix::masked, nb::arg("pos"),
+             "True if ``pos`` is free: mismatches there cost nothing and are not counted as "
+             "substitutions. This is how an anchor position is excluded from the ball.")
+        .def("penalty", &PositionalMatrix::penalty, nb::arg("pos"), nb::arg("a"), nb::arg("b"),
+             "Penalty for substituting symbol ``a`` with ``b`` at position ``pos``. Symbols are "
+             "single-character strings. Always >= 0, and 0 when ``a == b`` or ``pos`` is "
+             "masked.")
         .def("__repr__", [](const PositionalMatrix& p) {
             return "PositionalMatrix(size=" + std::to_string(p.size()) +
                    ", width=" + std::to_string(p.width()) + ")";
@@ -496,18 +521,35 @@ NB_MODULE(_core, m) {
              nb::arg("max_total_edits") = 0, nb::arg("max_penalty") = 0,
              nb::arg("matrix") = "", nb::arg("gap_open") = 1, nb::arg("gap_extend") = 1,
              nb::arg("engine") = "auto", nb::arg("mode") = "all")
-        .def_rw("max_subs", &PyParams::max_subs)
-        .def_rw("max_ins", &PyParams::max_ins)
-        .def_rw("max_dels", &PyParams::max_dels)
-        .def_rw("max_total_edits", &PyParams::max_total_edits)
-        .def_rw("max_penalty", &PyParams::max_penalty)
+        .def_rw("max_subs", &PyParams::max_subs,
+                "Maximum substitutions. Enforced exactly by ``seqtm``; ``seqtrie`` ignores it.")
+        .def_rw("max_ins", &PyParams::max_ins,
+                "Maximum insertions (residues in the query absent from the reference). "
+                "Enforced exactly by ``seqtm``; ``seqtrie`` ignores it. Indels widen the "
+                "search frontier far more than substitutions do.")
+        .def_rw("max_dels", &PyParams::max_dels,
+                "Maximum deletions (reference residues absent from the query). Enforced "
+                "exactly by ``seqtm``; ``seqtrie`` ignores it.")
+        .def_rw("max_total_edits", &PyParams::max_total_edits,
+                "Cap on the total edit count, independent of the per-type caps rather than "
+                "clamped by them. 0 means no separate total cap -- the sum of the three "
+                "per-type caps applies. This is the only edit limit ``seqtrie`` honours.")
+        .def_rw("max_penalty", &PyParams::max_penalty,
+                "Cap on the accumulated substitution/gap penalty. 0 means unset. Required "
+                "when ``engine='seqtrie'`` is paired with a matrix: seqtrie prunes on penalty "
+                "alone, so without a finite budget it walks the entire index.")
         .def_prop_rw(
             "matrix",
             [](const PyParams& p) -> nb::object {
                 if (p.matrix_obj) return nb::cast(*p.matrix_obj);
                 return nb::cast(p.matrix);
             },
-            [](PyParams& p, const nb::object& m) { set_matrix(p, m); })
+            [](PyParams& p, const nb::object& m) { set_matrix(p, m); },
+            "Substitution matrix: a :class:`SubstitutionMatrix`, or the name of a builtin "
+            "(``'blosum62'``, ``'blosum45'``, ``'blosum80'``, ``'pam250'``, ``'pam100'``, "
+            "``'structural'``, ``'identity'``). ``''`` (the default) means unit cost, where a "
+            "score is a plain edit count. Setting a matrix makes ``gap_open`` matter: pass "
+            "``2 * matrix.scale()``, or gaps come out ~14x cheaper than substitutions.")
         .def_prop_rw(
             "pos_matrix",
             [](const PyParams& p) -> nb::object {
@@ -518,24 +560,48 @@ NB_MODULE(_core, m) {
                 if (m.is_none()) p.pos_matrix_obj.reset();
                 else if (nb::isinstance<PositionalMatrix>(m)) p.pos_matrix_obj = nb::cast<PositionalMatrix>(m);
                 else throw nb::type_error("pos_matrix must be a PositionalMatrix or None");
-            })
-        .def_rw("gap_open", &PyParams::gap_open)
-        .def_rw("gap_extend", &PyParams::gap_extend)
+            },
+            ":class:`PositionalMatrix` giving per-position penalties, or None. Applies only on "
+            "the ``seqtm`` Hamming path and only when its width equals the query length. "
+            "Setting it forces ``seqtm`` regardless of ``engine``.")
+        .def_rw("gap_open", &PyParams::gap_open,
+                "Cost of opening a gap. A run of length L costs "
+                "``gap_open + (L - 1) * gap_extend``. The default of 1 is only right for unit "
+                "cost -- with any real matrix use ``2 * matrix.scale()``.")
+        .def_rw("gap_extend", &PyParams::gap_extend,
+                "Cost of each additional residue in a gap run. Equal to ``gap_open`` means "
+                "linear gaps; there is no separate mode flag.")
         .def_prop_rw("engine", [](const PyParams& p) { return p.engine; },
-                      [](PyParams& p, std::string v) { parse_engine(v); p.engine = std::move(v); })
+                      [](PyParams& p, std::string v) { parse_engine(v); p.engine = std::move(v); },
+                      "``'seqtm'``, ``'seqtrie'``, or ``'auto'`` (the default). ``'auto'`` "
+                      "always resolves to ``seqtm``: it is the only engine that enforces the "
+                      "per-type caps and reports an edit breakdown. Ask for ``'seqtrie'`` by "
+                      "name when a score budget is the entire specification.")
         .def_prop_rw("mode", [](const PyParams& p) { return p.mode; },
-                      [](PyParams& p, std::string v) { parse_mode(v); p.mode = std::move(v); });
+                      [](PyParams& p, std::string v) { parse_mode(v); p.mode = std::move(v); },
+                      "``'all'`` (the default) returns every hit inside the scope; ``'top'`` "
+                      "sorts by ``(score, ref_id)`` and keeps the best ``max_hits``.");
 
     nb::class_<Hit>(m, "Hit",
                     "A search result. Payload-agnostic: map ``ref_id`` back to your own "
                     "payload downstream. ``score`` is a non-negative penalty (0 == exact). "
                     "``n_subs``/``n_ins``/``n_dels`` are exact for the seqtm engine and 0 for "
                     "seqtrie. Iterable as ``(ref_id, score, n_subs, n_ins, n_dels)``.")
-        .def_ro("ref_id", &Hit::ref_id)
-        .def_ro("score", &Hit::score)
-        .def_ro("n_subs", &Hit::n_subs)
-        .def_ro("n_ins", &Hit::n_ins)
-        .def_ro("n_dels", &Hit::n_dels)
+        .def_ro("ref_id", &Hit::ref_id,
+                "Index of the matched reference in the list passed to :meth:`Index.build`.")
+        .def_ro("score", &Hit::score,
+                "Accumulated penalty, always >= 0, with 0 an exact match. Under unit cost this "
+                "is the edit distance; with a matrix it is the summed substitution and gap "
+                "penalty. Lower is better.")
+        .def_ro("n_subs", &Hit::n_subs,
+                "Substitutions in the best path to this reference. Exact under ``seqtm``, "
+                "always 0 under ``seqtrie``, which cannot see edit types.")
+        .def_ro("n_ins", &Hit::n_ins,
+                "Insertions in the best path. Exact under ``seqtm``, always 0 under "
+                "``seqtrie``.")
+        .def_ro("n_dels", &Hit::n_dels,
+                "Deletions in the best path. Exact under ``seqtm``, always 0 under "
+                "``seqtrie``.")
         .def("__iter__", [](const Hit& h) {
             return nb::iter(nb::make_tuple(h.ref_id, h.score, h.n_subs, h.n_ins, h.n_dels));
         })
@@ -548,10 +614,18 @@ NB_MODULE(_core, m) {
     nb::class_<Alignment>(m, "Alignment",
                           "Global alignment of a query to a reference. ``ops`` has one char per "
                           "column: 'M' match, 'S' substitution, 'I' insertion, 'D' deletion.")
-        .def_ro("aligned_query", &Alignment::aligned_query)
-        .def_ro("aligned_ref", &Alignment::aligned_ref)
-        .def_ro("ops", &Alignment::ops)
-        .def_ro("score", &Alignment::score)
+        .def_ro("aligned_query", &Alignment::aligned_query,
+                "The query with ``-`` inserted at deletion columns. Same length as "
+                "``aligned_ref`` and ``ops``.")
+        .def_ro("aligned_ref", &Alignment::aligned_ref,
+                "The reference with ``-`` inserted at insertion columns.")
+        .def_ro("ops", &Alignment::ops,
+                "One character per alignment column: ``M`` match, ``S`` substitution, ``I`` "
+                "insertion, ``D`` deletion.")
+        .def_ro("score", &Alignment::score,
+                "Alignment penalty, >= 0 and 0 for an exact match -- the same convention as "
+                ":attr:`Hit.score`, and the opposite of :func:`seqtree.pairwise.score`, which "
+                "returns a signed similarity.")
         .def("__repr__", [](const Alignment& a) {
             return "Alignment(score=" + std::to_string(a.score) + ", ops='" + a.ops + "')";
         });
@@ -600,8 +674,11 @@ NB_MODULE(_core, m) {
                             "``memoryview(sm)`` both wrap it without copying. Index it with "
                             "``sm[i, k]`` or pull one row with ``sm.row(i)``.")
         .def_prop_ro("shape",
-                               [](const ScoreMatrix& s) { return nb::make_tuple(s.rows, s.cols); })
-        .def("__len__", [](const ScoreMatrix& s) { return s.rows; })
+                     [](const ScoreMatrix& s) { return nb::make_tuple(s.rows, s.cols); },
+                     "``(n_rows, n_cols)`` -- queries by references, the same shape "
+                     "``numpy.asarray(sm).shape`` reports.")
+        .def("__len__", [](const ScoreMatrix& s) { return s.rows; },
+             "Number of rows, i.e. queries.")
         .def(
             "row",
             [](const ScoreMatrix& s, size_t i) {
@@ -739,9 +816,14 @@ NB_MODULE(_core, m) {
     nb::class_<Candidate>(m, "Candidate",
                           "A seed-and-gather hit: peptide_id, shared_kmers (distinct query k-mers "
                           "that hit it), best_score. Iterable as (peptide_id, shared_kmers, best_score).")
-        .def_ro("peptide_id", &Candidate::peptide_id)
-        .def_ro("shared_kmers", &Candidate::shared_kmers)
-        .def_ro("best_score", &Candidate::best_score)
+        .def_ro("peptide_id", &Candidate::peptide_id,
+                "Index of the candidate peptide in the list the index was built from.")
+        .def_ro("shared_kmers", &Candidate::shared_kmers,
+                "How many distinct query k-mers reached this peptide. The seed evidence: "
+                "candidates are ranked on it first.")
+        .def_ro("best_score", &Candidate::best_score,
+                "Lowest penalty over the k-mer matches that reached this peptide. A tiebreak "
+                "within a ``shared_kmers`` group, not a full-length alignment score.")
         .def("__iter__", [](const Candidate& c) {
             return nb::iter(nb::make_tuple(c.peptide_id, c.shared_kmers, c.best_score));
         })
@@ -763,9 +845,18 @@ NB_MODULE(_core, m) {
                 return KmerIndex::build(kmers, parse_alphabet(alphabet), allele_ids);
             },
             nb::arg("kmers_per_peptide"), nb::arg("alphabet") = "aa",
-            nb::arg("allele_ids") = std::vector<uint32_t>{})
-        .def("num_peptides", &KmerIndex::num_peptides)
-        .def("num_kmers", &KmerIndex::num_kmers)
+            nb::arg("allele_ids") = std::vector<uint32_t>{},
+            "Build the index. ``kmers_per_peptide[i]`` is the k-mer list for peptide ``i`` -- "
+            "produce it upstream (``seqtree.layout.kmers`` masks anchors first), since which "
+            "k-mers represent a peptide is a domain decision. ``allele_ids`` is an optional "
+            "parallel tag per peptide, used by ``seed_and_gather``'s ``allele_filter``; pass "
+            "``[]`` for none. The k-mers need not all be the same width.")
+        .def("num_peptides", &KmerIndex::num_peptides,
+             "Number of peptides indexed -- the length of ``kmers_per_peptide``. Also "
+             "``len(index)``.")
+        .def("num_kmers", &KmerIndex::num_kmers,
+             "Number of distinct k-mers across all peptides. The postings lists total more "
+             "than this whenever a k-mer occurs in several peptides.")
         .def("__len__", &KmerIndex::num_peptides)
         .def(
             "seed_and_gather",
@@ -790,17 +881,24 @@ NB_MODULE(_core, m) {
             nb::arg("allele_filter") = -1, nb::arg("threads") = 0,
             "For each query (its k-mer list) return ranked Candidates with >= min_shared shared "
             "k-mers; allele_filter >= 0 restricts to that allele tag.")
-        .def("save", &KmerIndex::save, nb::arg("path"))
-        .def_static("load", &KmerIndex::load, nb::arg("path"));
+        .def("save", &KmerIndex::save, nb::arg("path"),
+             "Write the index to ``path``. Writes a temporary and renames it into place, so a "
+             "concurrent reader never sees a partial file.")
+        .def_static("load", &KmerIndex::load, nb::arg("path"),
+                    "Read an index written by :meth:`save`. Raises on a truncated file or a "
+                    "format version this build does not know.");
 
     nb::class_<ArrayView>(m, "ArrayView", nb::type_slots(kArrayViewSlots),
                           "A read-only 1-D view over one of a TextResult's arrays. Exposes the "
                           "buffer protocol, so ``numpy.asarray(v)`` and ``memoryview(v)`` wrap "
                           "it without copying, and it keeps its TextResult alive.")
         .def("__len__", [](const ArrayView& a) { return a.n; })
-        .def_prop_ro("format", [](const ArrayView& a) { return std::string(1, a.fmt); })
+        .def_prop_ro("format", [](const ArrayView& a) { return std::string(a.fmt); },
+                     "The :mod:`struct` format code of the elements -- ``'i'`` for int32, "
+                     "``'I'`` for uint32, ``'H'`` for uint16, ``'b'`` for int8. The same code "
+                     "``memoryview(v).format`` reports.")
         .def("__repr__", [](const ArrayView& a) {
-            return "ArrayView(len=" + std::to_string(a.n) + ", format='" + std::string(1, a.fmt) +
+            return "ArrayView(len=" + std::to_string(a.n) + ", format='" + std::string(a.fmt) +
                    "')";
         });
 
@@ -812,11 +910,21 @@ NB_MODULE(_core, m) {
                           "caller ranking by chemistry can tell L->I from L->D without "
                           "re-fetching the window. Iterable as "
                           "``(ref_id, offset, n_subs, score)``.")
-        .def_ro("ref_id", &PyTextHit::ref_id)
-        .def_ro("offset", &PyTextHit::offset)
-        .def_ro("n_subs", &PyTextHit::n_subs)
-        .def_ro("score", &PyTextHit::score)
-        .def_ro("mismatches", &PyTextHit::mismatches)
+        .def_ro("ref_id", &PyTextHit::ref_id,
+                "Index of the record this occurrence falls in, in the list passed to "
+                ":meth:`TextIndex.build`.")
+        .def_ro("offset", &PyTextHit::offset,
+                "Start of the occurrence within that record, 0-based. The matched substring is "
+                "``ix.ref_seq(ref_id)[offset:offset + len(query)]``.")
+        .def_ro("n_subs", &PyTextHit::n_subs,
+                "Mismatched positions, always <= the ``max_subs`` that was searched. 0 is an "
+                "exact occurrence.")
+        .def_ro("score", &PyTextHit::score,
+                "Summed similarity over the mismatched positions under the ``matrix=`` passed "
+                "to the search, or 0 when none was. Scoring never changes which hits return.")
+        .def_ro("mismatches", &PyTextHit::mismatches,
+                "``[(pos, query_symbol, text_symbol), ...]``, one per mismatch, ``pos`` "
+                "0-based within the query. Empty for an exact hit.")
         .def("__iter__", [](const PyTextHit& h) {
             return nb::iter(nb::make_tuple(h.ref_id, h.offset, h.n_subs, h.score));
         })

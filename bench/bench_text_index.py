@@ -37,20 +37,15 @@ import gzip
 import os
 import pathlib
 import random
-import resource
 import sys
 import tempfile
 import time
 
 from seqtree import TextIndex
+from _common import peak_rss_mb
 
 RUN_BENCHMARK = bool(os.getenv("RUN_BENCHMARK"))
 AA = "ACDEFGHIKLMNPQRSTVWY"
-
-
-def peak_rss_mb() -> float:
-    rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-    return rss / (1024 * 1024) if sys.platform == "darwin" else rss / 1024
 
 
 def synthetic(n_records: int, mean_len: int, seed: int = 20260906) -> list[str]:

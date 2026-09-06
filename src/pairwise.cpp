@@ -14,12 +14,11 @@
 // states are NOT floored -- a local alignment never ends in a gap, you would just trim it.
 
 #include "seqtree/seqtree.hpp"
+#include "seqtree/parallel.hpp"
 
 #include <algorithm>
-#include <atomic>
 #include <cstdint>
 #include <limits>
-#include <mutex>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -295,41 +294,18 @@ std::vector<int32_t> matrix_impl(const std::vector<std::string>& queries,
                                       mode, go, ge);
     }
 
-    unsigned nt =
-        threads > 0 ? unsigned(threads) : std::max(1u, std::thread::hardware_concurrency());
-    nt = std::min<unsigned>(nt, std::max<size_t>(1, N));
-
-    // narrow() can throw, and an exception that escapes a std::thread entry function calls
-    // std::terminate -- which killed the whole interpreter with SIGABRT, uncatchable from Python,
-    // where the scalar path raised a clean OverflowError. Catch in the worker, rethrow after the
-    // join. (Same plumbing as Index::search_batch.)
-    std::atomic<size_t> next{0};
-    std::exception_ptr err;
-    std::mutex emu;
-
-    auto worker = [&] {
-        for (;;) {
-            const size_t i = next.fetch_add(1);
-            if (i >= N) break;
-            try {
-                int32_t* row = out.data() + i * K;
-                for (size_t k = 0; k < K; ++k) {
-                    const Score s = score_encoded(qc[i].data(), qc[i].size(), rc[k].data(),
-                                                  rc[k].size(), mat, mode, go, ge);
-                    row[k] = narrow(dist ? (q_self[i] + r_self[k] - 2 * s) : s, dist);
-                }
-            } catch (...) {
-                std::lock_guard<std::mutex> lk(emu);
-                if (!err) err = std::current_exception();
-                return;
-            }
+    // narrow() throws on overflow, and parallel_for rethrows it after the join -- an exception
+    // escaping a std::thread entry function calls std::terminate, which killed the whole
+    // interpreter with SIGABRT, uncatchable from Python, where the scalar path raised a clean
+    // OverflowError.
+    parallel_for(N, threads, [] { return 0; }, [&](size_t i, int&) {
+        int32_t* row = out.data() + i * K;
+        for (size_t k = 0; k < K; ++k) {
+            const Score s = score_encoded(qc[i].data(), qc[i].size(), rc[k].data(), rc[k].size(),
+                                          mat, mode, go, ge);
+            row[k] = narrow(dist ? (q_self[i] + r_self[k] - 2 * s) : s, dist);
         }
-    };
-
-    std::vector<std::thread> pool;
-    for (unsigned t = 0; t < nt; ++t) pool.emplace_back(worker);
-    for (auto& th : pool) th.join();
-    if (err) std::rethrow_exception(err);
+    });
     return out;
 }
 

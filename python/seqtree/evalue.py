@@ -35,6 +35,39 @@ def _poisson_sf(k, lam):
     return min(1.0, max(0.0, 1.0 - cdf))
 
 
+def evalue_result(n_target, n_control, n_ref, m_control):
+    """The E-value record for one query, shared by every caller that computes one.
+
+    ``E = (N / M) * n_control``, or the rule-of-three upper bound ``3N / M`` when the control
+    ball came back empty -- an observed zero does not mean the background rate is zero, it
+    means it is below roughly ``3 / M``.
+
+    Args:
+        n_target: hits in the target set for this query.
+        n_control: hits in the background control for this query.
+        n_ref: size of the target set, ``N``.
+        m_control: size of the control, ``M``. Zero yields an infinite E-value.
+
+    Returns:
+        dict with ``n_target``, ``n_control``, ``E``, ``p_any``, ``p_enrichment``,
+        ``rule_of_three``.
+    """
+    if m_control <= 0:
+        return {"n_target": n_target, "n_control": n_control, "E": float("inf"),
+                "p_any": 1.0, "p_enrichment": 1.0, "rule_of_three": False}
+    rule3 = n_control == 0
+    E = (3.0 if rule3 else float(n_control)) * n_ref / m_control
+    return {
+        "n_target": n_target,
+        "n_control": n_control,
+        "E": E,
+        # exp(-E) underflows to 0.0 well before E = 700, but guard the call anyway.
+        "p_any": 1.0 - math.exp(-E) if E < 700 else 1.0,
+        "p_enrichment": _poisson_sf(n_target, E),
+        "rule_of_three": rule3,
+    }
+
+
 def _counts(hitlists, exclude_exact):
     """Per-query hit counts, optionally dropping exact (distance-0) self/identity hits."""
     if exclude_exact:
@@ -68,20 +101,7 @@ def evalues(target, control, queries, params, threads=0, exclude_exact=False):
     n_t = _counts(target.search_batch(queries, params, threads), exclude_exact)
     n_c = _counts(control.search_batch(queries, params, threads), exclude_exact)
 
-    out = []
-    for nt, nc in zip(n_t, n_c):
-        rule3 = nc == 0
-        # rule-of-three upper bound on the background rate when the control ball is empty
-        E = (3.0 if rule3 else float(nc)) * N / M
-        out.append({
-            "n_target": nt,
-            "n_control": nc,
-            "E": E,
-            "p_any": 1.0 - math.exp(-E),
-            "p_enrichment": _poisson_sf(nt, E),
-            "rule_of_three": rule3,
-        })
-    return out
+    return [evalue_result(nt, nc, N, M) for nt, nc in zip(n_t, n_c)]
 
 
 def _theta(scores, k, c_max, theta_max):

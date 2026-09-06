@@ -78,13 +78,13 @@ map ``ref_id`` back to their own payloads (V gene, MHC, read counts) and filter 
 
    getting-started
    engines
+   examples
    api
-   evalue
+   text-index
    pairwise
    distance
    gapblock
-   text-index
-   examples
+   evalue
    pmhc
    benchmarks
    roadmap

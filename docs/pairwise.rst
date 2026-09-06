@@ -1,5 +1,5 @@
-Pairwise alignment without BioPython
-=====================================
+Pairwise alignment
+==================
 
 :mod:`seqtree.pairwise` is Needleman–Wunsch and Smith–Waterman on the raw log-odds scale — an
 ordinary protein aligner, so that reaching for BioPython is no longer necessary just to score two

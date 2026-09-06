@@ -11,9 +11,13 @@ against ``perf_baseline.tsv`` within a tolerance, not byte-for-byte.
 import argparse
 import sys
 import time
+from pathlib import Path
 
 import seqtree as st
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # bench/, for _common
+
+from _common import peak_rss_mb
 from gen_retrieval_table import lcg_pool  # shared deterministic pool
 
 N_REFS, N_QUERIES, LENGTH, SEED = 50_000, 5_000, 14, 1
@@ -23,17 +27,6 @@ N_REFS, N_QUERIES, LENGTH, SEED = 50_000, 5_000, 14, 1
 # carrying a per-block error budget. Only the second moves if the dispatch regresses, which is
 # the whole reason it is gated -- restoring the pre-1.0 two-path dispatch made it 23x slower.
 TEXT_K, TEXT_SHORT, TEXT_LONG, TEXT_SUBS = 4, 9, 14, 2
-
-
-def peak_rss_mb():
-    try:
-        import resource
-
-        peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-        # ru_maxrss is bytes on macOS, kibibytes on Linux.
-        return peak / (1024 * 1024) if sys.platform == "darwin" else peak / 1024
-    except Exception:
-        return 0.0
 
 
 def main():

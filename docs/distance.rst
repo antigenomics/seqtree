@@ -1,5 +1,5 @@
-Plain edit distances: Hamming and Levenshtein
-==============================================
+Edit distances and Hamming balls
+================================
 
 :mod:`seqtree.distance` is the *unweighted* corner of the library: Hamming and Levenshtein
 distances on raw characters, unit costs, no substitution matrix and no alphabet. When all you
