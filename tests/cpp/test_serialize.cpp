@@ -1,4 +1,5 @@
 #include "doctest.h"
+#include "tmp_path.hpp"
 #include "seqtree/seqtree.hpp"
 
 #include <cstdio>
@@ -15,7 +16,7 @@ TEST_CASE("serialize round-trip preserves search results") {
     std::vector<std::string> refs = {"CASSLAPGATNEKLFF", "CASSLELGATNEKLFF",
                                      "CASSPQGATNEKLFF", "CAT", "CAT"};  // includes a duplicate
     auto idx = Index::build(refs, Alphabet::AminoAcid);
-    const char* path = "/tmp/seqtree_serialize_roundtrip.sqtree";
+    const std::string path = tmp_path("seqtree_serialize_roundtrip.sqtree");
     idx->save(path);
     auto idx2 = Index::load(path);
 
@@ -34,21 +35,21 @@ TEST_CASE("serialize round-trip preserves search results") {
         for (const auto& h : s2.search(q, p)) b[h.ref_id] = h.score;
         CHECK(a == b);
     }
-    std::remove(path);
+    std::remove(path.c_str());
 }
 
 TEST_CASE("load rejects a non-index file") {
-    const char* path = "/tmp/seqtree_serialize_bad.bin";
+    const std::string path = tmp_path("seqtree_serialize_bad.bin");
     {
         std::ofstream os(path, std::ios::binary);
         os << "this is definitely not a seqtree index";
     }
     CHECK_THROWS_AS(Index::load(path), std::runtime_error);
-    std::remove(path);
+    std::remove(path.c_str());
 }
 
 TEST_CASE("load of a missing file throws") {
-    CHECK_THROWS_AS(Index::load("/tmp/seqtree_does_not_exist_12345.sqtree"), std::runtime_error);
+    CHECK_THROWS_AS(Index::load(tmp_path("seqtree_does_not_exist_12345.sqtree")), std::runtime_error);
 }
 
 // Concurrency: save writes through a temporary and renames it into place, so a reader never sees

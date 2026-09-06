@@ -1,5 +1,6 @@
 #include "doctest.h"
 #include "seqtree/kmer_index.hpp"
+#include "tmp_path.hpp"
 
 #include <cstdio>
 #include <map>
@@ -62,7 +63,7 @@ TEST_CASE("kmer index: fuzzy seeding with one substitution") {
 
 TEST_CASE("kmer index: save/load round-trip") {
     auto ki = KmerIndex::build(kmers(), Alphabet::AminoAcid, {10, 20, 10});
-    const char* path = "/tmp/seqtree_kmer_roundtrip.sqkm";
+    const std::string path = tmp_path("seqtree_kmer_roundtrip.sqkm");
     ki->save(path);
     auto ki2 = KmerIndex::load(path);
     CHECK(ki2->num_peptides() == ki->num_peptides());
@@ -73,5 +74,5 @@ TEST_CASE("kmer index: save/load round-trip") {
     auto a = ki->seed_and_gather({{"CASS"}}, p, 1, -1, 1);
     auto b = ki2->seed_and_gather({{"CASS"}}, p, 1, -1, 1);
     CHECK(a[0].size() == b[0].size());
-    std::remove(path);
+    std::remove(path.c_str());
 }
