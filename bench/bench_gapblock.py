@@ -33,22 +33,17 @@ import argparse
 import gzip
 import os
 import random
-import resource
 import statistics as stt
-import sys
 import time
 from importlib import resources
+
+from _common import peak_rss_gb
 
 import seqtree
 from seqtree.gapblock import GapBlockIndex, central_prior, gapblock_score, profile_prior
 
 AA = "ACDEFGHIKLMNPQRSTVWY"
 HUGE = 10 ** 6
-
-
-def peak_rss_gb() -> float:
-    r = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-    return r / (1024 ** 3) if sys.platform == "darwin" else r / (1024 ** 2)
 
 
 def u_shaped(j: int, m: int) -> float:

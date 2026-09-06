@@ -29,15 +29,6 @@ Limits resolve_limits(const SearchParams& p) {
 }
 
 namespace {
-Engine pick_engine(const SearchParams& p) {
-    if (p.engine != Engine::Auto) return p.engine;
-    // Auto always selects seqtm: it enforces the per-type caps exactly and reports edit
-    // counts. seqtrie is a budget-only DP that cannot see edit types, so routing a capped
-    // search there silently widened the ball -- and with a matrix but no explicit
-    // max_score_penalty the budget degenerated to +inf and it scanned the whole index.
-    return Engine::SeqTm;
-}
-
 bool by_score(const Hit& a, const Hit& b) {
     if (a.score != b.score) return a.score < b.score;
     return a.ref_id < b.ref_id;
@@ -60,8 +51,13 @@ void Searcher::search_into(std::string_view query, const SearchParams& p, std::v
     Limits L = resolve_limits(p);
     out.clear();
     scratch_->collisions = 0;  // seqtrie leaves it 0; seqtm accumulates per re-reached ref
-    // Positional scoring is a seqtm-only path (query position is unambiguous there).
-    if (p.pos_matrix != nullptr || pick_engine(p) == Engine::SeqTm) {
+    // seqtrie is selected only when it is asked for by name: Auto always means seqtm, which
+    // enforces the per-type caps exactly and reports edit counts. seqtrie is a budget-only DP
+    // that cannot see edit types, so routing a capped search there silently widened the ball --
+    // and with a matrix but no explicit max_score_penalty the budget degenerated to +inf and it
+    // scanned the whole index. Positional scoring is seqtm-only too (query position is
+    // unambiguous there), so it overrides an explicit seqtrie.
+    if (p.pos_matrix != nullptr || p.engine != Engine::SeqTrie) {
         search_seqtm(idx_.trie(), qcodes_.data(), int(query.size()), L, *scratch_, out);
     } else {
         // seqtrie cuts only on the accumulated penalty. Without a finite budget it would

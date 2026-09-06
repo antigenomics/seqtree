@@ -1,14 +1,12 @@
 #include "seqtree/kmer_index.hpp"
+#include "seqtree/parallel.hpp"
 
 #include "atomic_write.hpp"
 
 #include <algorithm>
-#include <atomic>
 #include <cstring>
 #include <fstream>
-#include <mutex>
 #include <stdexcept>
-#include <thread>
 #include <unordered_map>
 
 namespace seqtree {
@@ -79,69 +77,46 @@ std::vector<std::vector<Candidate>> KmerIndex::seed_and_gather(
     std::vector<std::vector<Candidate>> results(nq);
     if (nq == 0) return results;
 
-    unsigned nt = threads > 0 ? unsigned(threads)
-                              : std::max(1u, std::thread::hardware_concurrency());
-    nt = std::min<unsigned>(nt, std::max<size_t>(1, nq));
-
-    std::atomic<size_t> next{0};
-    const size_t chunk = std::clamp<size_t>(nq / (size_t(nt) * 8), size_t(1), size_t(256));
-    std::exception_ptr err;
-    std::mutex emu;
-
-    auto worker = [&] {
-        Searcher s(*kmers_);
+    struct Local {
+        Searcher s;
         std::unordered_map<uint32_t, Acc> acc;
         std::vector<Hit> hits;
-        for (;;) {
-            size_t start = next.fetch_add(chunk);
-            if (start >= nq) break;
-            size_t end = std::min(nq, start + chunk);
-            for (size_t qi = start; qi < end; ++qi) {
-                try {
-                    acc.clear();
-                    int qk = 0;
-                    for (const auto& km : query_kmers[qi]) {
-                        s.search_into(km, params, hits);
-                        for (const Hit& h : hits) {  // h.ref_id == matched kmer_id
-                            uint32_t kid = h.ref_id;
-                            for (uint32_t pi = post_begin_[kid]; pi < post_begin_[kid + 1]; ++pi) {
-                                uint32_t pid = post_ids_[pi];
-                                if (allele_filter >= 0 && allele_[pid] != uint32_t(allele_filter))
-                                    continue;
-                                Acc& a = acc[pid];
-                                if (a.last_q != qk) {  // first hit of THIS query k-mer for this peptide
-                                    a.shared += 1;
-                                    a.last_q = qk;
-                                    if (a.shared == 1 || h.score < a.best) a.best = h.score;
-                                } else if (h.score < a.best) {
-                                    a.best = h.score;
-                                }
-                            }
-                        }
-                        ++qk;
-                    }
-                    auto& out = results[qi];
-                    for (const auto& [pid, a] : acc)
-                        if (a.shared >= min_shared)
-                            out.push_back(Candidate{pid, a.shared, a.best});
-                    std::sort(out.begin(), out.end(), [](const Candidate& x, const Candidate& y) {
-                        if (x.shared_kmers != y.shared_kmers) return x.shared_kmers > y.shared_kmers;
-                        if (x.best_score != y.best_score) return x.best_score < y.best_score;
-                        return x.peptide_id < y.peptide_id;
-                    });
-                } catch (...) {
-                    std::lock_guard<std::mutex> lk(emu);
-                    if (!err) err = std::current_exception();
-                    return;
-                }
-            }
-        }
     };
-
-    std::vector<std::thread> pool;
-    for (unsigned t = 0; t < nt; ++t) pool.emplace_back(worker);
-    for (auto& th : pool) th.join();
-    if (err) std::rethrow_exception(err);
+    parallel_for(
+        nq, threads, [&] { return Local{Searcher(*kmers_), {}, {}}; },
+        [&](size_t qi, Local& L) {
+            auto& acc = L.acc;
+            acc.clear();
+            int qk = 0;
+            for (const auto& km : query_kmers[qi]) {
+                L.s.search_into(km, params, L.hits);
+                for (const Hit& h : L.hits) {  // h.ref_id == matched kmer_id
+                    uint32_t kid = h.ref_id;
+                    for (uint32_t pi = post_begin_[kid]; pi < post_begin_[kid + 1]; ++pi) {
+                        uint32_t pid = post_ids_[pi];
+                        if (allele_filter >= 0 && allele_[pid] != uint32_t(allele_filter)) continue;
+                        Acc& a = acc[pid];
+                        if (a.last_q != qk) {  // first hit of THIS query k-mer for this peptide
+                            a.shared += 1;
+                            a.last_q = qk;
+                            if (a.shared == 1 || h.score < a.best) a.best = h.score;
+                        } else if (h.score < a.best) {
+                            a.best = h.score;
+                        }
+                    }
+                }
+                ++qk;
+            }
+            auto& out = results[qi];
+            for (const auto& [pid, a] : acc)
+                if (a.shared >= min_shared) out.push_back(Candidate{pid, a.shared, a.best});
+            std::sort(out.begin(), out.end(), [](const Candidate& x, const Candidate& y) {
+                if (x.shared_kmers != y.shared_kmers) return x.shared_kmers > y.shared_kmers;
+                if (x.best_score != y.best_score) return x.best_score < y.best_score;
+                return x.peptide_id < y.peptide_id;
+            });
+        },
+        size_t(1), size_t(256));
     return results;
 }
 

@@ -1,10 +1,9 @@
 #include "seqtree/seqtree.hpp"
+#include "seqtree/parallel.hpp"
 
 #include <algorithm>
-#include <atomic>
 #include <limits>
 #include <stdexcept>
-#include <thread>
 
 namespace seqtree {
 namespace {
@@ -102,33 +101,22 @@ std::vector<int32_t> gapblock_matrix(const std::vector<std::string>& queries,
     }
     const int32_t* P = prior.empty() ? nullptr : prior.data();
 
-    unsigned nt = threads > 0 ? unsigned(threads) : std::max(1u, std::thread::hardware_concurrency());
-    nt = std::min<unsigned>(nt, std::max<size_t>(1, N));
-
-    // Every symbol was validated above and the kernel is arithmetic, so no worker throws
-    // and rows are disjoint -- no exception plumbing, no locking.
-    std::atomic<size_t> next{0};
-    auto worker = [&] {
-        std::vector<int32_t> suf(size_t(longest) + 1);
-        for (;;) {
-            const size_t i = next.fetch_add(1);
-            if (i >= N) break;
-            const uint8_t* q = qc[i].data();
-            const uint32_t m = uint32_t(qc[i].size());
-            int32_t* row = out.data() + i * K;
-            for (size_t k = 0; k < K; ++k) {
-                const uint32_t n = uint32_t(rc[k].size());
-                const uint32_t M = std::max(m, n), d = (m > n ? m - n : n - m);
-                const int32_t* prow = P ? P + (size_t(M) * W1 + d) * W1 : nullptr;
-                row[k] = cell(q, m, rc[k].data(), n, pen.data(), A, gap_open, gap_extend, prow,
-                              suf.data());
-            }
-        }
-    };
-
-    std::vector<std::thread> pool;
-    for (unsigned t = 0; t < nt; ++t) pool.emplace_back(worker);
-    for (auto& th : pool) th.join();
+    // Every symbol was validated above and the kernel is arithmetic, so no worker throws --
+    // parallel_for's exception plumbing simply never fires here. `suf` is the per-worker
+    // suffix-score scratch, allocated once per thread rather than once per row.
+    parallel_for(N, threads, [&] { return std::vector<int32_t>(size_t(longest) + 1); },
+                 [&](size_t i, std::vector<int32_t>& suf) {
+                     const uint8_t* q = qc[i].data();
+                     const uint32_t m = uint32_t(qc[i].size());
+                     int32_t* row = out.data() + i * K;
+                     for (size_t k = 0; k < K; ++k) {
+                         const uint32_t n = uint32_t(rc[k].size());
+                         const uint32_t M = std::max(m, n), d = (m > n ? m - n : n - m);
+                         const int32_t* prow = P ? P + (size_t(M) * W1 + d) * W1 : nullptr;
+                         row[k] = cell(q, m, rc[k].data(), n, pen.data(), A, gap_open, gap_extend,
+                                       prow, suf.data());
+                     }
+                 });
     return out;
 }
 

@@ -25,6 +25,7 @@ is shuffled so that ``bundled[:size]`` is itself a valid sub-sample.
    empty. Recovering them needs the ``*.ntvj`` tables (the ``.aa`` table's ``_`` has already
    destroyed the residue count). Nothing calls for it yet; build it when something does.
 """
+import contextlib
 import gzip
 import hashlib
 import os
@@ -121,16 +122,6 @@ def _prune_superseded(cache_dir, name, size, keep):
                 pass
 
 
-class _NoLock:
-    """Stand-in when ``filelock`` is absent. Correctness does not depend on the lock."""
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *exc):
-        return False
-
-
 def _build_lock(cache):
     """An inter-process lock around build-and-save, if ``filelock`` happens to be installed.
 
@@ -147,7 +138,7 @@ def _build_lock(cache):
     try:
         from filelock import FileLock
     except ImportError:
-        return _NoLock()
+        return contextlib.nullcontext()
     return FileLock(cache + ".lock", timeout=600)
 
 

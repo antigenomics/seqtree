@@ -223,39 +223,53 @@ struct ScoreMatrix {
     size_t rows = 0, cols = 0;
 };
 
-// nanobind dropped pybind11's def_buffer, so the two buffer slots are wired by hand and
-// handed to nb::class_ as type_slots. Keeping the protocol (rather than moving to
-// nb::ndarray) is deliberate: seqtree declares no runtime dependencies, and both
-// `numpy.asarray(sm)` and `memoryview(sm)` are documented, tested guarantees.
-int score_matrix_getbuffer(PyObject* obj, Py_buffer* view, int flags) {
-    const ScoreMatrix* s = nb::inst_ptr<ScoreMatrix>(obj);
-    // shape and strides must outlive this call, so they travel in `internal` and are freed
-    // by the release slot. [0..1] is shape, [2..3] strides.
-    auto* dims = new Py_ssize_t[4]{Py_ssize_t(s->rows), Py_ssize_t(s->cols),
-                                   Py_ssize_t(sizeof(int32_t) * s->cols),
-                                   Py_ssize_t(sizeof(int32_t))};
-    view->buf = const_cast<int32_t*>(s->data.data());
-    view->len = Py_ssize_t(s->data.size() * sizeof(int32_t));
+// nanobind dropped pybind11's def_buffer, so the buffer slots are wired by hand and handed to
+// nb::class_ as type_slots. Keeping the protocol (rather than moving to nb::ndarray) is
+// deliberate: seqtree declares no runtime dependencies, and both `numpy.asarray(x)` and
+// `memoryview(x)` are documented, tested guarantees.
+//
+// `shape` and `strides` must outlive the getbuffer call, so both live in one heap array that
+// travels in `internal` and is freed by the release slot: [0, ndim) is shape, [ndim, 2*ndim)
+// is strides. `fmt` must outlive it too, so it points at storage the exporting object owns.
+void fill_view(PyObject* obj, Py_buffer* view, int flags, void* buf, int ndim,
+               const Py_ssize_t* shape, const Py_ssize_t* strides, Py_ssize_t itemsize,
+               const char* fmt) {
+    auto* dims = new Py_ssize_t[2 * size_t(ndim)];
+    std::copy(shape, shape + ndim, dims);
+    std::copy(strides, strides + ndim, dims + ndim);
+    Py_ssize_t len = itemsize;
+    for (int d = 0; d < ndim; ++d) len *= shape[d];
+    view->buf = buf;
+    view->len = len;
     view->readonly = 1;
-    view->itemsize = Py_ssize_t(sizeof(int32_t));
-    view->format = (flags & PyBUF_FORMAT) == PyBUF_FORMAT ? const_cast<char*>("i") : nullptr;
-    view->ndim = 2;
+    view->itemsize = itemsize;
+    view->format = (flags & PyBUF_FORMAT) == PyBUF_FORMAT ? const_cast<char*>(fmt) : nullptr;
+    view->ndim = ndim;
     view->shape = dims;
-    view->strides = dims + 2;
+    view->strides = dims + ndim;
     view->suboffsets = nullptr;
     view->internal = dims;
-    view->obj = Py_NewRef(obj);  // keeps the ScoreMatrix (and its data) alive for the view
-    return 0;
+    view->obj = Py_NewRef(obj);  // keeps the exporter (and its data) alive for the view
 }
 
-void score_matrix_releasebuffer(PyObject*, Py_buffer* view) {
+void release_view(PyObject*, Py_buffer* view) {
     delete[] static_cast<Py_ssize_t*>(view->internal);
     view->internal = nullptr;
 }
 
+int score_matrix_getbuffer(PyObject* obj, Py_buffer* view, int flags) {
+    const ScoreMatrix* s = nb::inst_ptr<ScoreMatrix>(obj);
+    const Py_ssize_t shape[2] = {Py_ssize_t(s->rows), Py_ssize_t(s->cols)};
+    const Py_ssize_t strides[2] = {Py_ssize_t(sizeof(int32_t) * s->cols),
+                                   Py_ssize_t(sizeof(int32_t))};
+    fill_view(obj, view, flags, const_cast<int32_t*>(s->data.data()), 2, shape, strides,
+              Py_ssize_t(sizeof(int32_t)), "i");
+    return 0;
+}
+
 PyType_Slot kScoreMatrixSlots[] = {
     { Py_bf_getbuffer, (void*)score_matrix_getbuffer },
-    { Py_bf_releasebuffer, (void*)score_matrix_releasebuffer },
+    { Py_bf_releasebuffer, (void*)release_view },
     { 0, nullptr }
 };
 
@@ -267,42 +281,29 @@ struct ArrayView {
     const void* data = nullptr;
     size_t      n = 0;
     size_t      itemsize = 0;
-    char        fmt = 'i';
+    // NUL-terminated struct format code. Per instance, not a shared scratch buffer: two live
+    // views of different dtypes must each keep reporting their own format.
+    char        fmt[2] = {'i', 0};
 };
 
 int array_view_getbuffer(PyObject* obj, Py_buffer* view, int flags) {
     const ArrayView* a = nb::inst_ptr<ArrayView>(obj);
-    auto* dims = new Py_ssize_t[2]{Py_ssize_t(a->n), Py_ssize_t(a->itemsize)};
-    view->buf = const_cast<void*>(a->data);
-    view->len = Py_ssize_t(a->n * a->itemsize);
-    view->readonly = 1;
-    view->itemsize = Py_ssize_t(a->itemsize);
-    static thread_local char fmt_buf[2] = {0, 0};
-    fmt_buf[0] = a->fmt;
-    view->format = (flags & PyBUF_FORMAT) == PyBUF_FORMAT ? fmt_buf : nullptr;
-    view->ndim = 1;
-    view->shape = dims;
-    view->strides = dims + 1;
-    view->suboffsets = nullptr;
-    view->internal = dims;
-    view->obj = Py_NewRef(obj);
+    const Py_ssize_t shape[1] = {Py_ssize_t(a->n)};
+    const Py_ssize_t strides[1] = {Py_ssize_t(a->itemsize)};
+    fill_view(obj, view, flags, const_cast<void*>(a->data), 1, shape, strides,
+              Py_ssize_t(a->itemsize), a->fmt);
     return 0;
-}
-
-void array_view_releasebuffer(PyObject*, Py_buffer* view) {
-    delete[] static_cast<Py_ssize_t*>(view->internal);
-    view->internal = nullptr;
 }
 
 PyType_Slot kArrayViewSlots[] = {
     { Py_bf_getbuffer, (void*)array_view_getbuffer },
-    { Py_bf_releasebuffer, (void*)array_view_releasebuffer },
+    { Py_bf_releasebuffer, (void*)release_view },
     { 0, nullptr }
 };
 
 template <class T>
 ArrayView view_of(const nb::object& owner, const std::vector<T>& v, char fmt) {
-    return ArrayView{owner, v.data(), v.size(), sizeof(T), fmt};
+    return ArrayView{owner, v.data(), v.size(), sizeof(T), {fmt, 0}};
 }
 
 // One hit as a Python object. Built only for the query actually asked for, never for the whole
@@ -798,9 +799,9 @@ NB_MODULE(_core, m) {
                           "buffer protocol, so ``numpy.asarray(v)`` and ``memoryview(v)`` wrap "
                           "it without copying, and it keeps its TextResult alive.")
         .def("__len__", [](const ArrayView& a) { return a.n; })
-        .def_prop_ro("format", [](const ArrayView& a) { return std::string(1, a.fmt); })
+        .def_prop_ro("format", [](const ArrayView& a) { return std::string(a.fmt); })
         .def("__repr__", [](const ArrayView& a) {
-            return "ArrayView(len=" + std::to_string(a.n) + ", format='" + std::string(1, a.fmt) +
+            return "ArrayView(len=" + std::to_string(a.n) + ", format='" + std::string(a.fmt) +
                    "')";
         });
 

@@ -25,7 +25,7 @@ dependencies = []
 # biopython is the ORACLE for seqtree.pairwise (NW/SW) -- a test-only dependency.
 # seqtree itself has no runtime dependencies and must never import it.
 test = ["pytest>=7.4", "pytest-cov>=4.1", "biopython>=1.81"]
-bench = ["huggingface_hub", "psutil"]
+bench = ["huggingface_hub"]
 docs = ["sphinx", "pydata-sphinx-theme"]
 control = ["huggingface_hub"]  # only needed to download controls larger than the bundled subset
 pmhc = ["huggingface_hub"]     # only needed to fetch the isalgo/pmhc_data epitope tables
