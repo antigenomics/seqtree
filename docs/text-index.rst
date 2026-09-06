@@ -1,5 +1,5 @@
-Text search: proteomes and genomes
-==================================
+Text search
+===========
 
 .. currentmodule:: seqtree
 
@@ -22,7 +22,7 @@ the text as a separate reference string — and do it again for every distinct q
 human proteome has 68,389,335 nine-mer windows, so one such index costs several gigabytes, and
 a query set spanning 45 distinct lengths costs 45 of them.
 
-``TextIndex`` keys on a k-mer seed table over the flat text instead. **``k`` is a property of
+``TextIndex`` keys on a k-mer seed table over the flat text instead. ``k`` **is a property of
 the index, not of the query**, so one build answers every length and every ``max_subs``::
 
     from seqtree import TextIndex
@@ -103,8 +103,8 @@ dispatch that got ``b`` or a budget wrong would fail there on real text and not 
 test.
 
 The crossover is ``L = 2k``: below it only one block fits, so the query pays a full radius-``m``
-ball over its leading k-mer and the bigger ``k`` is much worse. **Pick the largest ``k`` with
-``2k <= L``** for the bulk of the query set — ``k = 4`` down to length 8, ``k = 5`` from 10 up.
+ball over its leading k-mer and the bigger ``k`` is much worse. **Pick the largest** ``k``
+**with** ``2k <= L`` for the bulk of the query set — ``k = 4`` down to length 8, ``k = 5`` from 10 up.
 At ``k = 5`` every ``L >= 10`` cell above is **at or under 0.4 ms/query**. Building is cheap
 either way (0.55 s at ``k = 4``, 0.59 s at ``k = 5``), so a corpus spanning both can simply hold
 both indexes — still one build per ``k``, never one per query length.
