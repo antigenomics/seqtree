@@ -22,17 +22,31 @@ import warnings
 
 
 def _poisson_sf(k, lam):
-    """P(Poisson(lam) >= k) via the complementary CDF (stable for small k)."""
+    """P(Poisson(lam) >= k), summing the smaller tail from a log-PMF seed."""
     if k <= 0:
         return 1.0
     if lam <= 0.0:
         return 0.0
-    term = math.exp(-lam)
-    cdf = term
-    for i in range(1, k):
-        term *= lam / i
-        cdf += term
-    return min(1.0, max(0.0, 1.0 - cdf))
+    if lam == math.inf:
+        return 1.0
+    # Sum the upper tail directly when small: 1-CDF loses significant digits.
+    upper = k > lam
+    i = k if upper else k - 1
+    log_pmf = i * math.log(lam) - lam - math.lgamma(i + 1)
+    # Normalize before summation so a subnormal seed cannot erase a representable tail.
+    term = total = 1.0
+    while term > total * 1e-15:
+        if upper:
+            i += 1
+            term *= lam / i
+        else:
+            if i == 0:
+                break
+            term *= i / lam
+            i -= 1
+        total += term
+    probability = math.exp(log_pmf + math.log(total))
+    return min(1.0, max(0.0, probability if upper else 1.0 - probability))
 
 
 def evalue_result(n_target, n_control, n_ref, m_control):
@@ -61,8 +75,7 @@ def evalue_result(n_target, n_control, n_ref, m_control):
         "n_target": n_target,
         "n_control": n_control,
         "E": E,
-        # exp(-E) underflows to 0.0 well before E = 700, but guard the call anyway.
-        "p_any": 1.0 - math.exp(-E) if E < 700 else 1.0,
+        "p_any": -math.expm1(-E),
         "p_enrichment": _poisson_sf(n_target, E),
         "rule_of_three": rule3,
     }
