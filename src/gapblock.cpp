@@ -112,8 +112,9 @@ GapInput prepare(const std::vector<std::string>& queries, const std::vector<std:
     const auto largest_pen = *std::max_element(in.pen.begin(), in.pen.end());
     if (*std::min_element(in.pen.begin(), in.pen.end()) < 0)
         throw std::invalid_argument("matrix penalties must be nonnegative");
-    const int64_t bound = int64_t(in.longest) * largest_pen + largest_prior + go +
-                         int64_t(in.longest ? in.longest - 1 : 0) * ge;
+    const uint64_t bound = uint64_t(in.longest) * uint32_t(largest_pen) +
+                           uint32_t(largest_prior) + uint32_t(go) +
+                           uint64_t(in.longest ? in.longest - 1 : 0) * uint32_t(ge);
     if (bound > std::numeric_limits<int32_t>::max())
         throw std::invalid_argument("gapblock score can overflow int32");
     return in;

@@ -316,7 +316,7 @@ See also
 * ``bench/bench_gapblock.py`` — reproduces the gap-freedom ladder table above.
 
 Bounded exhaustive ranking and counts
-------------------------------------
+-------------------------------------
 
 ``topk_batch`` evaluates every reference with the same single-gap-block scorer as
 ``score_matrix`` and returns at most k ``Hit`` rows per query, ordered by
