@@ -3,6 +3,14 @@
 All notable changes to `seqtree`. Dates are release dates. From 1.0.0 the project follows semantic
 versioning: breaking changes need a **major** bump.
 
+## [1.0.1] — 2026-10-09
+
+### Fixed
+
+- A one-thread batch executes on the calling thread instead of launching a worker.
+- Worker scratch-allocation exceptions propagate to the caller rather than terminating the process.
+- A partially started worker pool joins its running workers if thread creation fails.
+
 ## [1.0.0] — 2026-09-06
 
 ### Added
