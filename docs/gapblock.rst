@@ -314,3 +314,44 @@ See also
 * :doc:`api` — full signatures for :mod:`seqtree.gapblock`, :mod:`seqtree.seeds` and
   :mod:`seqtree.layout`.
 * ``bench/bench_gapblock.py`` — reproduces the gap-freedom ladder table above.
+
+Bounded exhaustive ranking and counts
+------------------------------------
+
+``topk_batch`` evaluates every reference with the same single-gap-block scorer as
+``score_matrix`` and returns at most k ``Hit`` rows per query, ordered by
+``(score, ref_id)``. Reference IDs retain input row order; repeated sequences remain
+separate rows. Hit edit fields are unset, rather than an alignment decomposition.
+``exclude_exact=True`` excludes identical encoded sequences before selection;
+nonidentical sequences with a zero substitution penalty remain eligible.
+
+``count_batch`` takes one list of integer thresholds per query and returns the
+number of reference scores at or below each threshold, including all ties.
+Threshold rows may be empty, unsorted or contain duplicates; output follows the
+original threshold order. Negative thresholds count zero.
+
+The paired variants score linked two-view query/reference rows and compare the
+maximum of their two lane penalties. ``paired_topk_batch`` returns
+``(ref_id, score_a, score_b)`` tuples; ``paired_count_batch`` counts all linked rows
+at each requested maximum-score threshold. Paired exact exclusion removes only
+rows identical in both views. No cross-row combinations are created.
+
+.. code-block:: python
+
+   from seqtree.gapblock import topk_batch, count_batch
+
+   queries, refs = ["ACDE", "ACD"], ["ACDE", "ACD", "ACDF"]
+   hits = topk_batch(queries, refs, k=2, threads=1)
+   thresholds = [[h.score for h in row] for row in hits]
+   counts = count_batch(queries, refs, thresholds, threads=1)
+
+Each operation runs as one native batch with the GIL released. Top-k results use
+O(Q*k) storage and each worker uses O(k + maximum sequence length) scratch.
+Count output uses O(total requested thresholds), with worker scratch proportional
+to maximum sequence length and the largest threshold row. Encoded inputs and the
+existing optional prior cube are shared. Neither path allocates a dense Q*N
+score matrix; both remain exhaustive scoring operations. They introduce no
+statistical model or calibration.
+
+``Index.ref_seqs()`` retrieves all stored strings in reference-ID order through
+one native call, preserving duplicate rows.
