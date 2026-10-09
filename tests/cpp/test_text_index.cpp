@@ -539,3 +539,93 @@ TEST_CASE("a header that disagrees with itself is refused before anything is der
     }
     std::remove(bad.c_str());
 }
+
+// --- indel search -----------------------------------------------------------------------
+//
+// Seeding does not change: with b = max_subs + max_indels + 1 disjoint blocks the total edit
+// count is below the block count, so pigeonhole still puts a zero-error block somewhere and the
+// existing exact lookup finds it. These pin the verification and the interval it reports.
+
+TEST_CASE("TextIndex finds a single deletion") {
+    auto ix = TextIndex::build({"MKTAYIAKQRQISFVKSHFSRQ"}, Alphabet::AminoAcid, 3);
+    TextQueryOpts o;
+    o.max_subs = 0;
+    o.max_indels = 1;
+    // AYIAKQRQISF sits at offset 3; the query drops the I, so the text carries one extra residue.
+    auto r = ix->search_batch({"AYAKQRQISF"}, o, 1);
+    REQUIRE(r.num_hits() >= 1);
+    CHECK(r.n_subs[0] == 0);
+    CHECK(r.n_ins[0] == 0);
+    CHECK(r.n_dels[0] == 1);
+    CHECK(r.offset[0] == 3);
+    CHECK(r.length[0] == 11);  // len(query) + n_dels - n_ins
+}
+
+TEST_CASE("TextIndex finds a single insertion") {
+    auto ix = TextIndex::build({"MKTAYIAKQRQISFVKSHFSRQ"}, Alphabet::AminoAcid, 3);
+    TextQueryOpts o;
+    o.max_subs = 0;
+    o.max_indels = 1;
+    // An extra W inside the query: the text is one residue shorter than the query.
+    auto r = ix->search_batch({"AYIAKWQRQISF"}, o, 1);
+    REQUIRE(r.num_hits() >= 1);
+    CHECK(r.n_ins[0] == 1);
+    CHECK(r.n_dels[0] == 0);
+    CHECK(r.length[0] == 11);
+}
+
+TEST_CASE("TextIndex indel hits never open or close on a gap") {
+    // The exact occurrence must be reported once, at its own bounds -- not also as the same
+    // match padded by an unaligned residue at either end.
+    auto ix = TextIndex::build({"MKTAYIAKQRQISFVKSHFSRQ"}, Alphabet::AminoAcid, 3);
+    TextQueryOpts o;
+    o.max_subs = 0;
+    o.max_indels = 1;
+    auto r = ix->search_batch({"AYIAKQRQI"}, o, 1);
+    REQUIRE(r.num_hits() == 1);
+    CHECK(r.offset[0] == 3);
+    CHECK(r.length[0] == 9);
+    CHECK(r.n_ins[0] == 0);
+    CHECK(r.n_dels[0] == 0);
+}
+
+TEST_CASE("TextIndex max_indels = 0 leaves the substitution path alone") {
+    auto ix = TextIndex::build({"MKTAYIAKQRQISFVKSHFSRQ"}, Alphabet::AminoAcid, 3);
+    TextQueryOpts a, b;
+    a.max_subs = 1;
+    b.max_subs = 1;
+    b.max_indels = 0;
+    auto ra = ix->search_batch({"AYIAKQRQI"}, a, 1);
+    auto rb = ix->search_batch({"AYIAKQRQI"}, b, 1);
+    REQUIRE(ra.num_hits() == rb.num_hits());
+    for (size_t i = 0; i < ra.num_hits(); ++i) {
+        CHECK(ra.ref_id[i] == rb.ref_id[i]);
+        CHECK(ra.offset[i] == rb.offset[i]);
+        CHECK(ra.n_subs[i] == rb.n_subs[i]);
+        CHECK(rb.n_ins[i] == 0);
+        CHECK(rb.n_dels[i] == 0);
+        CHECK(rb.length[i] == 9);
+    }
+}
+
+TEST_CASE("TextIndex refuses an indel query too short to seed every block") {
+    auto ix = TextIndex::build({"MKTAYIAKQRQISFVKSHFSRQ"}, Alphabet::AminoAcid, 4);
+    TextQueryOpts o;
+    o.max_subs = 2;
+    o.max_indels = 1;
+    // Needs (2 + 1 + 1) * 4 = 16; every block must be exact, so a shorter query cannot be
+    // answered completely and is refused rather than answered partially.
+    CHECK_THROWS_AS(ix->search_batch({"AYIAKQRQ"}, o, 1), std::invalid_argument);
+    CHECK_NOTHROW(ix->search_batch({"AYIAKQRQISFVKSHF"}, o, 1));
+}
+
+TEST_CASE("TextIndex indel search does not cross a record boundary") {
+    // Two records whose junction spells a match only if the sentinel between them is crossed.
+    auto ix = TextIndex::build({"MKTAYIAKQR", "QISFVKSHFS"}, Alphabet::AminoAcid, 3);
+    TextQueryOpts o;
+    o.max_subs = 1;
+    o.max_indels = 1;
+    auto r = ix->search_batch({"AYIAKQRQISFV"}, o, 1);
+    for (size_t i = 0; i < r.num_hits(); ++i)
+        CHECK(size_t(r.offset[i]) + r.length[i] <= ix->ref_seq(r.ref_id[i]).size());
+}

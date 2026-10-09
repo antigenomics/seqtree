@@ -46,6 +46,7 @@
 #include "atomic_write.hpp"
 
 #include <algorithm>
+#include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <stdexcept>
@@ -253,8 +254,14 @@ uint32_t kmer_code(const uint8_t* p, uint8_t k, uint8_t A) {
 struct RawHit {
     uint32_t ref_id, offset;
     uint16_t n_subs;
+    uint16_t n_ins, n_dels, length;
     int32_t  score;
     uint32_t mm_off;
+    // How many mismatch entries this hit owns at mm_off. Equal to n_subs on the substitution
+    // path; 0 on the indel path, which reports counts without per-column detail because
+    // recovering the substituted columns would need an alignment traceback. Reading n_subs
+    // entries instead would walk off the end of a buffer the indel path never wrote to.
+    uint16_t mm_len;
     uint32_t abs;
 };
 
@@ -263,6 +270,9 @@ struct RawHit {
 // is read, which is also what removes the sort the old two-path dispatch needed to deduplicate.
 struct Work {
     std::vector<uint32_t> probes;  // k-mer codes to look up
+    // Banded-DP scratch for the indel path, allocated once per worker. Indexed
+    // [d + max_indels][g]; see verify_banded.
+    std::vector<uint16_t> dp_cur, dp_next;
 };
 
 // Per-query results. Mismatch positions are appended in discovery order and referenced by
@@ -274,8 +284,154 @@ struct QueryOut {
     uint8_t                truncated = 0;
 };
 
+// Banded alignment of the whole query against the text starting at `s`, under two independent
+// caps: at most `ms` substitutions and at most `mi` insertions+deletions.
+//
+// State is (i, d, g): i query residues consumed, d = (text consumed) - (query consumed), and g
+// indels spent. d is confined to [-mi, mi] and g to [0, mi], and every move changes them
+// together -- an insertion (a query residue with no text opposite it) is d-1, g+1; a deletion
+// (a text residue with none opposite) is d+1, g+1 -- so g >= |d| and g == |d| (mod 2). The cell
+// holds the fewest substitutions reaching that state, or kInf.
+//
+// The alignment must BEGIN and END on an aligned pair -- no leading or trailing gap of either
+// kind. Two reasons, and they agree. A gap at either edge extends the reported interval over a
+// residue that matches nothing, so `offset` and `length` would no longer bound the part of the
+// text the query actually explains. And a leading gap is just the same alignment starting one
+// residue over, which the caller already reaches by sweeping every start in the seed's window,
+// so allowing it would report one occurrence two or three times over.
+//
+// Every hit that survives is appended via `emit(end_offset_from_s, n_subs, n_ins, n_dels)`. One
+// start can yield several ends -- they are genuinely different intervals -- and the caller
+// deduplicates on (ref, offset, length).
+template <class Emit>
+void verify_banded(const uint8_t* q, size_t L, const uint8_t* text, uint64_t text_len, uint64_t s,
+                   uint16_t ms, uint16_t mi, std::vector<uint16_t>& cur,
+                   std::vector<uint16_t>& next, Emit emit) {
+    constexpr uint16_t kInf = 0xFFFF;
+    const size_t W = size_t(2) * mi + 1, G = size_t(mi) + 1, N = W * G;
+    const auto at = [mi, G](int d, size_t g) { return size_t(d + int(mi)) * G + g; };
+
+    cur.assign(N, kInf);
+    next.assign(N, kInf);
+    cur[at(0, 0)] = 0;  // no leading gap: the alignment starts flush at s
+
+    for (size_t i = 0; i < L; ++i) {
+        // Deletions consume text without consuming a query residue, so they move within this
+        // same i. Relax in increasing d: a run of them chains, each costing one unit of g.
+        // Not at i == 0: that would be a leading gap.
+        for (int d = -int(mi); i > 0 && d < int(mi); ++d) {
+            for (size_t g = 0; g + 1 < G; ++g) {
+                const uint16_t v = cur[at(d, g)];
+                if (v == kInf) continue;
+                const int64_t tpos = int64_t(s) + int64_t(i) + d;
+                if (tpos < 0 || uint64_t(tpos) >= text_len) continue;
+                if (text[tpos] == Codec::kInvalid) continue;  // never match through a hole
+                uint16_t& dst = cur[at(d + 1, g + 1)];
+                if (v < dst) dst = v;
+            }
+        }
+
+        std::fill(next.begin(), next.end(), kInf);
+        bool any = false;
+        for (int d = -int(mi); d <= int(mi); ++d) {
+            for (size_t g = 0; g < G; ++g) {
+                const uint16_t v = cur[at(d, g)];
+                if (v == kInf) continue;
+                // match / substitution: consume q[i] against text[s + i + d]
+                const int64_t tpos = int64_t(s) + int64_t(i) + d;
+                if (tpos >= 0 && uint64_t(tpos) < text_len && text[tpos] != Codec::kInvalid) {
+                    const uint16_t nv = uint16_t(v + (q[i] != text[tpos] ? 1 : 0));
+                    if (nv <= ms) {
+                        uint16_t& dst = next[at(d, g)];
+                        if (nv < dst) dst = nv;
+                        any = true;
+                    }
+                }
+                // Insertion: consume q[i] with no text opposite it. Never at the first or last
+                // query residue -- that is a leading or trailing gap.
+                if (i > 0 && i + 1 < L && d > -int(mi) && g + 1 < G) {
+                    uint16_t& dst = next[at(d - 1, g + 1)];
+                    if (v < dst) dst = v;
+                    any = true;
+                }
+            }
+        }
+        // Every surviving state already exceeds one of the caps, so no suffix can rescue this
+        // start. Without this the DP walked all L rows on a candidate the Hamming path would
+        // have rejected after two residues, and most candidates are rejected: on a 5 M-residue
+        // corpus it is the difference between 0.107 and 0.019 ms/query at L=16.
+        if (!any) return;
+        cur.swap(next);
+    }
+
+    // The query is fully consumed. Every finite state is a complete alignment; d fixes the
+    // matched length and g splits into insertions and deletions, since d = dels - ins and
+    // g = dels + ins.
+    for (int d = -int(mi); d <= int(mi); ++d) {
+        for (size_t g = 0; g < G; ++g) {
+            const uint16_t v = cur[at(d, g)];
+            if (v == kInf || v > ms) continue;
+            if (size_t(std::abs(d)) > g || ((g - size_t(std::abs(d))) & 1)) continue;
+            const size_t dels = (g + size_t(d)) / 2, ins = (g - size_t(d)) / 2;
+            if (int64_t(L) + d < 0) continue;
+            emit(size_t(int64_t(L) + d), v, uint16_t(ins), uint16_t(dels));
+        }
+    }
+}
+
 // One query against the text at a fixed max_subs. Appends to out.hits / out.mm_pos.
 // The scheme and why it is lossless are at the top of this file.
+// The indel path. Seeding is unchanged and every block is exact -- with b = m + mi + 1 blocks
+// the total edit count cannot reach the block count, so pigeonhole still puts a 0-error block
+// somewhere and the existing exact lookup finds it. Only verification differs: the seed pins a
+// text position, not a start, because the prefix before the block may have gained or lost up to
+// mi residues, so every start in [pos - base - mi, pos - base + mi] is aligned.
+//
+// Hits are appended unsorted and with duplicates; the caller sorts by (n_subs, ref_id, offset,
+// length) and drops adjacent equals, which is the same sort the substitution path already needs
+// for its stable output order.
+void search_indels(const TextStore& st, const uint8_t* q, size_t L, uint16_t m, uint16_t mi,
+                   const SubstitutionMatrix* matrix, Work& s, QueryOut& out) {
+    const uint8_t k = st.k;
+    const size_t b = size_t(m) + size_t(mi) + 1;  // search_batch enforces L >= b * k
+    const size_t bw = L / b;
+
+    for (size_t j = 0; j < b; ++j) {
+        const size_t base = j * bw;
+        uint32_t code = 0;
+        for (uint8_t x = 0; x < k; ++x) code = uint32_t(code * st.A + q[base + x]);
+        const uint32_t lo = st.post_begin[code], hi = st.post_begin[code + 1];
+        for (uint32_t i = lo; i < hi; ++i) {
+            const uint32_t pos = st.post_ids[i];
+            const int64_t anchor = int64_t(pos) - int64_t(base);
+            for (int64_t start = anchor - mi; start <= anchor + mi; ++start) {
+                if (start < 0 || uint64_t(start) >= st.text_len) continue;
+                verify_banded(
+                    q, L, st.text, st.text_len, uint64_t(start), m, mi, s.dp_cur, s.dp_next,
+                    [&](size_t len, uint16_t n_subs, uint16_t n_ins, uint16_t n_dels) {
+                        if (uint64_t(start) + len > st.text_len) return;
+                        const uint32_t c = uint32_t(start);
+                        const uint32_t ref = st.ref_of(c);
+                        // A hit must lie wholly inside one record. The sentinels already stop
+                        // the alignment, but a zero-length tail would slip through.
+                        if (uint64_t(c) + len > st.starts[ref + 1]) return;
+                        int32_t score = 0;
+                        if (matrix) {
+                            // No mismatch positions on this path (see the comment on mm_pos in
+                            // search_batch), so the matrix scores what it can: the substituted
+                            // columns of the best ungapped prefix are not recoverable without a
+                            // traceback, and a partial score would be worse than none.
+                            score = 0;
+                        }
+                        out.hits.push_back(RawHit{ref, c - st.starts[ref], n_subs, n_ins, n_dels,
+                                                  uint16_t(len), score,
+                                                  uint32_t(out.mm_pos.size()), 0, c});
+                    });
+            }
+        }
+    }
+}
+
 void search_one(const TextStore& st, const uint8_t* q, size_t L, uint16_t m,
                 const SubstitutionMatrix* matrix, const uint64_t* pw, Work& s, QueryOut& out) {
     const uint8_t k = st.k, A = st.A;
@@ -331,7 +487,8 @@ void search_one(const TextStore& st, const uint8_t* q, size_t L, uint16_t m,
                 if (matrix)
                     for (uint32_t x = mm_off; x < mm_off + n; ++x)
                         score += matrix->similarity(q[out.mm_pos[x]], t[out.mm_pos[x]]);
-                out.hits.push_back(RawHit{ref, c - st.starts[ref], n, score, mm_off, c});
+                out.hits.push_back(RawHit{ref, c - st.starts[ref], n, 0, 0, uint16_t(L), score,
+                                          mm_off, n, c});
             }
         }
     }
@@ -463,6 +620,19 @@ TextResult TextIndex::search_batch(const std::vector<std::string>& queries,
                 "queries[" + std::to_string(i) + "] ('" + queries[i] + "') is " +
                 std::to_string(queries[i].size()) + " long; TextIndex indexes seeds of k=" +
                 std::to_string(st.k) + " and cannot answer a shorter query completely");
+        if (opts.max_indels > 0) {
+            const size_t need = (size_t(opts.max_subs) + opts.max_indels + 1) * st.k;
+            if (queries[i].size() < need)
+                throw std::invalid_argument(
+                    "queries[" + std::to_string(i) + "] ('" + queries[i] + "') is " +
+                    std::to_string(queries[i].size()) + " long; searching with max_indels=" +
+                    std::to_string(opts.max_indels) + " and max_subs=" +
+                    std::to_string(opts.max_subs) + " needs every one of the " +
+                    std::to_string(size_t(opts.max_subs) + opts.max_indels + 1) +
+                    " seed blocks to be exact, so a query must be at least " +
+                    std::to_string(need) + " long at k=" + std::to_string(st.k) +
+                    ". Rebuild the index with a smaller k, or lower max_subs/max_indels");
+        }
         if (queries[i].size() > kMaxQueryLen)
             throw std::invalid_argument(
                 "queries[" + std::to_string(i) + "] is " + std::to_string(queries[i].size()) +
@@ -488,19 +658,47 @@ TextResult TextIndex::search_batch(const std::vector<std::string>& queries,
         for (uint16_t m = opts.best_only ? 0 : top; m <= top; ++m) {
             s.hits.clear();
             s.mm_pos.clear();
-            search_one(st, q, L, m, opts.matrix, pw.data(), w, s);
+            if (opts.max_indels > 0)
+                search_indels(st, q, L, m, opts.max_indels, opts.matrix, w, s);
+            else
+                search_one(st, q, L, m, opts.matrix, pw.data(), w, s);
             if (opts.exclude_exact)
                 s.hits.erase(std::remove_if(s.hits.begin(), s.hits.end(),
                                             [](const RawHit& h) { return h.n_subs == 0; }),
                              s.hits.end());
             if (!opts.best_only || !s.hits.empty()) break;
         }
-        // Deterministic and independent of the order candidates were discovered in.
+        // Deterministic and independent of the order candidates were discovered in. The indel
+        // path adds length to the key and then deduplicates: one text interval is reachable
+        // from several blocks and several starts, and the cheapest alignment of that interval
+        // is the one to keep, so sorting by (n_subs, n_ins + n_dels) first puts it in front.
         std::sort(s.hits.begin(), s.hits.end(), [](const RawHit& a, const RawHit& b) {
             if (a.n_subs != b.n_subs) return a.n_subs < b.n_subs;
+            if (a.n_ins + a.n_dels != b.n_ins + b.n_dels)
+                return a.n_ins + a.n_dels < b.n_ins + b.n_dels;
             if (a.ref_id != b.ref_id) return a.ref_id < b.ref_id;
-            return a.offset < b.offset;
+            if (a.offset != b.offset) return a.offset < b.offset;
+            return a.length < b.length;
         });
+        if (opts.max_indels > 0) {
+            std::vector<RawHit> keep;
+            keep.reserve(s.hits.size());
+            for (const RawHit& h : s.hits) {
+                const bool seen = std::any_of(keep.begin(), keep.end(), [&](const RawHit& x) {
+                    return x.ref_id == h.ref_id && x.offset == h.offset && x.length == h.length;
+                });
+                if (!seen) keep.push_back(h);
+            }
+            s.hits.swap(keep);
+            // The dedup pass above is a linear scan per hit, which is fine while the kept set
+            // is the handful a real query returns; max_hits bounds it in the pathological case.
+            std::sort(s.hits.begin(), s.hits.end(), [](const RawHit& a, const RawHit& b) {
+                if (a.n_subs != b.n_subs) return a.n_subs < b.n_subs;
+                if (a.ref_id != b.ref_id) return a.ref_id < b.ref_id;
+                if (a.offset != b.offset) return a.offset < b.offset;
+                return a.length < b.length;
+            });
+        }
         // A cap keeps the BEST hits, because it is applied after the sort -- and it is always
         // reported. A cap that is invisible is a recall bug wearing a performance costume.
         bool capped = opts.max_hits && s.hits.size() > opts.max_hits;
@@ -540,7 +738,7 @@ TextResult TextIndex::search_batch(const std::vector<std::string>& queries,
     for (const QueryOut& s : per_query) {
         n_hits += s.hits.size();
         n_groups += s.groups.size();
-        for (const RawHit& h : s.hits) n_mm += h.n_subs;
+        for (const RawHit& h : s.hits) n_mm += h.mm_len;
     }
     TextResult out;
     out.query_begin.reserve(n + 1);
@@ -548,6 +746,9 @@ TextResult TextIndex::search_batch(const std::vector<std::string>& queries,
     out.ref_id.reserve(n_hits);
     out.offset.reserve(n_hits);
     out.n_subs.reserve(n_hits);
+    out.n_ins.reserve(n_hits);
+    out.n_dels.reserve(n_hits);
+    out.length.reserve(n_hits);
     out.score.reserve(n_hits);
     out.mm_begin.reserve(n_hits + 1);
     out.mm_pos.reserve(n_mm);
@@ -568,9 +769,12 @@ TextResult TextIndex::search_batch(const std::vector<std::string>& queries,
             out.ref_id.push_back(h.ref_id);
             out.offset.push_back(h.offset);
             out.n_subs.push_back(h.n_subs);
+            out.n_ins.push_back(h.n_ins);
+            out.n_dels.push_back(h.n_dels);
+            out.length.push_back(h.length);
             out.score.push_back(h.score);
             const uint8_t* t = st.text + h.abs;
-            for (uint16_t j = 0; j < h.n_subs; ++j) {
+            for (uint16_t j = 0; j < h.mm_len; ++j) {
                 const uint16_t p = s.mm_pos[h.mm_off + j];
                 out.mm_pos.push_back(p);
                 out.mm_query_aa.push_back(codec.decode(qbuf[qoff[i] + p]));

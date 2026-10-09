@@ -103,7 +103,10 @@ Beyond search, seqtree ships:
   completeness pinned by brute-force **set equality** over L 6–30 × `max_subs` 0–3 ×
   k ∈ {3,4,5}, and by the answer being identical across `k`. On the human proteome
   (69,578,135 residues) one thread answers a 9-mer within 2 substitutions in **1.3 ms** and a
-  15-mer within 3 in **1.5 ms**. Results come back as flat CSR arrays with zero-copy
+  15-mer within 3 in **1.5 ms**. `max_indels` adds insertions and deletions on the same index
+  and the same scheme — with `max_subs + max_indels + 1` blocks the edit count is still below
+  the block count, so pigeonhole leaves a zero-error block and the *unchanged* exact seed lookup
+  finds gapped occurrences too; only verification becomes a banded DP. Results come back as flat CSR arrays with zero-copy
   `numpy` views, mismatches as `(pos, query_aa, text_aa)` pairs, an optional fold onto
   caller-supplied group ids that makes a tie explicit, and a cap that is always reported.
 - **E-values / significance** — calibrate hit counts against a background control repertoire

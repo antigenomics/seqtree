@@ -29,6 +29,7 @@ only, and nothing in the result says why. Passing a matrix to `seqtrie` without 
 
 ```python
 Index.build(refs: list[str], alphabet: str = "aa") -> Index      # 'aa' | 'nt' | 'iupac'
+Index.ref_seqs() -> list[str]                                  # one native call, ref_id order
 Index.search(query, params) -> list[Hit]                          # Hit(ref_id, score, n_subs, n_ins, n_dels)
 Index.search_top(query, params, k=1) -> list[Hit]
 Index.search_batch(queries, params, threads=0) -> list[list[Hit]] # releases the GIL
@@ -144,11 +145,12 @@ Python and does not need the C++ core. `r = 2` over the same 300 is 9.9 M sequen
 
 ```python
 ix  = TextIndex.build(records, alphabet="aa", k=4, group_ids=None)   # WHOLE records, not windows
-res = ix.search_batch(queries, max_subs=2, exclude_exact=False, best_only=False,
+res = ix.search_batch(queries, max_subs=2, max_indels=0, exclude_exact=False, best_only=False,
                       group_by=False, max_hits=0, matrix=None, threads=0)   # GIL released
 
 len(res); res.num_hits; res[i]          # TextHit list for query i, built on demand
 res[i][0].mismatches                    # [(pos, query_aa, text_aa), ...] -- the PAIR
+res[i][0].n_ins / .n_dels / .length     # indels, and the width of the match in the text
 res.groups(i)                           # [(group_id, min_subs, n_hits), ...] with group_by
 res.truncated                           # per query, 1 if max_hits capped it
 res.arrays(); res.to_numpy()            # zero-copy views over the flat CSR
@@ -176,6 +178,19 @@ full radius-`max_subs` ball, which is one to two orders of magnitude dearer. So 
 `k = 4` is right down to length 8, and `k = 5` is worth a second index when the query set starts
 at 10 (human proteome, `L = 12, max_subs = 3`: **1.46 ms/query at k=4, 0.32 at k=5**). Building
 is ~0.6 s either way, so a corpus spanning both lengths can hold both indexes.
+
+**`max_indels` allows gaps, and costs nothing in the index.** The two caps are independent:
+`max_subs=2, max_indels=1` is two substitutions AND one gap, not three edits. Seeding is
+unchanged -- with `b = max_subs + max_indels + 1` blocks the edit count is below the block
+count, so pigeonhole still leaves a **zero-error** block, which matches exactly whether or not
+the occurrence has gaps. Only verification changes, to a banded DP over the
+`2*max_indels + 1` possible starts. Three things to know: a match is **no longer `len(query)`
+wide** (read `.length`, which is `len(query) + n_dels - n_ins`); every block must be exact, so a
+query must be at least **`(max_subs + max_indels + 1) * k`** long or it raises; and
+`.mismatches` is empty and `matrix=` ignored, because the per-column detail would need a
+traceback the verifier does not keep. Costs 25-37x an ungapped search at the same length, still
+under 0.1 ms/query on 5 M residues. Pinned by set equality against brute force over
+k in {3,4,5} x max_subs 0-3 x max_indels 1-2, 6,732 occurrences, zero missing and zero extra.
 
 - **`matrix=` only scores** hits the Hamming predicate already accepted (similarity summed over
   the mismatched positions) — it never changes which hits return.
@@ -273,6 +288,27 @@ is flattened once into an `[m][d][i]` cube. Reproduce with `bench/bench_score_ma
 The result *is* the distance: the Gram transform is applied per residue when the matrix is built,
 so there is no `d = s(a,a) + s(b,b) - 2·s(a,b)` step, and non-negativity, symmetry and a zero
 diagonal hold by construction. Budget `4 * n * K` bytes and chunk the queries.
+
+### Bounded exhaustive reductions
+
+`gapblock.topk_batch(queries, refs, k=10, matrix=None, gap_open=None, gap_extend=1,
+gap_prior=None, alphabet="aa", threads=0, exclude_exact=False)` returns nested Hit
+rows sorted by `(score, ref_id)`, scoring every reference with the same native
+single-gap-block cell. Only score/ref_id are provided; edit fields remain unset.
+Results use O(Q*k), worker scratch O(k+maxlen); encoded inputs/prior cube shared.
+Exact encoded identity is excluded before selection; zero-cost nonidentity remains.
+
+`gapblock.count_batch(queries, refs, thresholds, **same_scoring_args)` returns
+nested integer counts for scores<=each threshold, including ALL ties. Thresholds
+have one row/query, arbitrary order/duplicates/empty rows allowed, output order
+preserved, negative cutoffs count zero. No dense Q*N allocation.
+
+`gapblock.paired_topk_batch(queries_a, queries_b, refs_a, refs_b, k=10,
+**same_scoring_args)` ranks linked rows by `(max(score_a,score_b),ref_id)` and
+returns nested `(ref_id,score_a,score_b)` tuples. Matching lane axis lengths required.
+`paired_count_batch(..., thresholds, **same_scoring_args)` counts all linked rows
+at those maximum-score cutoffs. Exclusion removes only both-view identity.
+These are generic exhaustive score reductions, not statistical calibration.
 
 ### Performance
 
