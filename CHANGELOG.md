@@ -63,6 +63,14 @@ versioning: breaking changes need a **major** bump.
   **6,732 occurrences, zero missing and zero extra**. `max_indels=0` is byte-identical to the
   previous substitution path, hit for hit, and pays none of the cost.
 
+## [1.0.1] — 2026-10-09
+
+### Fixed
+
+- A one-thread batch executes on the calling thread instead of launching a worker.
+- Worker scratch-allocation exceptions propagate to the caller rather than terminating the process.
+- A partially started worker pool joins its running workers if thread creation fails.
+
 ## [1.0.0] — 2026-09-06
 
 ### Added
