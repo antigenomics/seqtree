@@ -647,6 +647,15 @@ NB_MODULE(_core, m) {
         .def("__len__", &Index::size)
         .def("ref_seq", [](const Index& i, uint32_t id) { return std::string(i.ref_seq(id)); },
              nb::arg("ref_id"), "Return the reference sequence string for a reference id.")
+        .def("ref_seqs", [](const Index& i) {
+            std::vector<std::string> out;
+            {
+                nb::gil_scoped_release release;
+                out.reserve(i.size());
+                for (uint32_t id = 0; id < i.size(); ++id) out.emplace_back(i.ref_seq(id));
+            }
+            return out;
+        }, "Return all reference strings in ref_id order in one native call, preserving duplicates.")
         .def("search", &py_search, nb::arg("query"), nb::arg("params"),
              "Return all hits for one query within the scope/budget in ``params``.")
         .def("search_top", &py_search_top, nb::arg("query"), nb::arg("params"), nb::arg("k") = 1,
@@ -776,6 +785,30 @@ NB_MODULE(_core, m) {
           "Exhaustive single-gap-block penalties for every (query, ref) pair, GIL released. "
           "`prior` is the gap prior flattened to [m][d][i]; see seqtree.gapblock.score_matrix, "
           "which builds it for you.");
+
+    m.def("gapblock_topk_batch", [](const std::vector<std::string>& queries, const std::vector<std::string>& refs, uint32_t k, const std::string& alphabet, const std::optional<SubstitutionMatrix>& matrix, int32_t go, int32_t ge, const std::vector<int32_t>& prior, uint32_t width, int threads, bool exclude_exact) {
+        const auto alph = parse_alphabet(alphabet);
+        nb::gil_scoped_release release;
+        return gapblock_topk_batch(queries, refs, k, alph, matrix ? &*matrix : nullptr, go, ge, prior, width, threads, exclude_exact);
+    }, nb::arg("queries"), nb::arg("refs"), nb::arg("k"), nb::arg("alphabet")="aa", nb::arg("matrix")=std::nullopt, nb::arg("gap_open")=1, nb::arg("gap_extend")=1, nb::arg("prior")=std::vector<int32_t>{}, nb::arg("prior_width")=0, nb::arg("threads")=0, nb::arg("exclude_exact")=false, "Bounded exhaustive gapblock reduction, GIL released.");
+
+    m.def("gapblock_count_batch", [](const std::vector<std::string>& queries, const std::vector<std::string>& refs, const std::vector<std::vector<int32_t>>& thresholds, const std::string& alphabet, const std::optional<SubstitutionMatrix>& matrix, int32_t go, int32_t ge, const std::vector<int32_t>& prior, uint32_t width, int threads, bool exclude_exact) {
+        const auto alph = parse_alphabet(alphabet);
+        nb::gil_scoped_release release;
+        return gapblock_count_batch(queries, refs, thresholds, alph, matrix ? &*matrix : nullptr, go, ge, prior, width, threads, exclude_exact);
+    }, nb::arg("queries"), nb::arg("refs"), nb::arg("thresholds"), nb::arg("alphabet")="aa", nb::arg("matrix")=std::nullopt, nb::arg("gap_open")=1, nb::arg("gap_extend")=1, nb::arg("prior")=std::vector<int32_t>{}, nb::arg("prior_width")=0, nb::arg("threads")=0, nb::arg("exclude_exact")=false, "Bounded exhaustive gapblock reduction, GIL released.");
+
+    m.def("gapblock_paired_topk_batch", [](const std::vector<std::string>& qa, const std::vector<std::string>& qb, const std::vector<std::string>& ra, const std::vector<std::string>& rb, uint32_t k, const std::string& alphabet, const std::optional<SubstitutionMatrix>& matrix, int32_t go, int32_t ge, const std::vector<int32_t>& prior, uint32_t width, int threads, bool exclude_exact) {
+        const auto alph = parse_alphabet(alphabet);
+        nb::gil_scoped_release release;
+        return gapblock_paired_topk_batch(qa, qb, ra, rb, k, alph, matrix ? &*matrix : nullptr, go, ge, prior, width, threads, exclude_exact);
+    }, nb::arg("qa"), nb::arg("qb"), nb::arg("ra"), nb::arg("rb"), nb::arg("k"), nb::arg("alphabet")="aa", nb::arg("matrix")=std::nullopt, nb::arg("gap_open")=1, nb::arg("gap_extend")=1, nb::arg("prior")=std::vector<int32_t>{}, nb::arg("prior_width")=0, nb::arg("threads")=0, nb::arg("exclude_exact")=false, "Bounded exhaustive gapblock reduction, GIL released.");
+
+    m.def("gapblock_paired_count_batch", [](const std::vector<std::string>& qa, const std::vector<std::string>& qb, const std::vector<std::string>& ra, const std::vector<std::string>& rb, const std::vector<std::vector<int32_t>>& thresholds, const std::string& alphabet, const std::optional<SubstitutionMatrix>& matrix, int32_t go, int32_t ge, const std::vector<int32_t>& prior, uint32_t width, int threads, bool exclude_exact) {
+        const auto alph = parse_alphabet(alphabet);
+        nb::gil_scoped_release release;
+        return gapblock_paired_count_batch(qa, qb, ra, rb, thresholds, alph, matrix ? &*matrix : nullptr, go, ge, prior, width, threads, exclude_exact);
+    }, nb::arg("qa"), nb::arg("qb"), nb::arg("ra"), nb::arg("rb"), nb::arg("thresholds"), nb::arg("alphabet")="aa", nb::arg("matrix")=std::nullopt, nb::arg("gap_open")=1, nb::arg("gap_extend")=1, nb::arg("prior")=std::vector<int32_t>{}, nb::arg("prior_width")=0, nb::arg("threads")=0, nb::arg("exclude_exact")=false, "Bounded exhaustive gapblock reduction, GIL released.");
 
     m.def("hamming", &hamming, nb::arg("a"), nb::arg("b"),
           "Hamming distance: the number of positions at which two EQUAL-length sequences differ. "

@@ -29,6 +29,7 @@ only, and nothing in the result says why. Passing a matrix to `seqtrie` without 
 
 ```python
 Index.build(refs: list[str], alphabet: str = "aa") -> Index      # 'aa' | 'nt' | 'iupac'
+Index.ref_seqs() -> list[str]                                  # one native call, ref_id order
 Index.search(query, params) -> list[Hit]                          # Hit(ref_id, score, n_subs, n_ins, n_dels)
 Index.search_top(query, params, k=1) -> list[Hit]
 Index.search_batch(queries, params, threads=0) -> list[list[Hit]] # releases the GIL
@@ -287,6 +288,27 @@ is flattened once into an `[m][d][i]` cube. Reproduce with `bench/bench_score_ma
 The result *is* the distance: the Gram transform is applied per residue when the matrix is built,
 so there is no `d = s(a,a) + s(b,b) - 2·s(a,b)` step, and non-negativity, symmetry and a zero
 diagonal hold by construction. Budget `4 * n * K` bytes and chunk the queries.
+
+### Bounded exhaustive reductions
+
+`gapblock.topk_batch(queries, refs, k=10, matrix=None, gap_open=None, gap_extend=1,
+gap_prior=None, alphabet="aa", threads=0, exclude_exact=False)` returns nested Hit
+rows sorted by `(score, ref_id)`, scoring every reference with the same native
+single-gap-block cell. Only score/ref_id are provided; edit fields remain unset.
+Results use O(Q*k), worker scratch O(k+maxlen); encoded inputs/prior cube shared.
+Exact encoded identity is excluded before selection; zero-cost nonidentity remains.
+
+`gapblock.count_batch(queries, refs, thresholds, **same_scoring_args)` returns
+nested integer counts for scores<=each threshold, including ALL ties. Thresholds
+have one row/query, arbitrary order/duplicates/empty rows allowed, output order
+preserved, negative cutoffs count zero. No dense Q*N allocation.
+
+`gapblock.paired_topk_batch(queries_a, queries_b, refs_a, refs_b, k=10,
+**same_scoring_args)` ranks linked rows by `(max(score_a,score_b),ref_id)` and
+returns nested `(ref_id,score_a,score_b)` tuples. Matching lane axis lengths required.
+`paired_count_batch(..., thresholds, **same_scoring_args)` counts all linked rows
+at those maximum-score cutoffs. Exclusion removes only both-view identity.
+These are generic exhaustive score reductions, not statistical calibration.
 
 ### Performance
 

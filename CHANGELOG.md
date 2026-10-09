@@ -7,6 +7,15 @@ versioning: breaking changes need a **major** bump.
 
 ### Added
 
+- **1.0.2 candidate: bounded exhaustive gapblock reductions.** `topk_batch` keeps
+  stable `(score, ref_id)` top-k rows without a dense score matrix; `count_batch`
+  counts all ties at arbitrary per-query thresholds. Linked two-view variants use
+  the maximum lane penalty and preserve both lane scores. Exact identity exclusion
+  precedes selection and removes only both-view identity for linked inputs.
+  `Index.ref_seqs()` retrieves stored reference strings in ID order in one native
+  call. All scoring reuses the existing single-gap-block cell; no calibration,
+  domain payload or runtime dependency is introduced.
+
 - **`TextIndex` searches with insertions and deletions.** `search_batch` takes `max_indels`
   alongside `max_subs`, capped independently — `max_subs=2, max_indels=1` accepts two
   substitutions *and* one gap, not three edits of any kind.

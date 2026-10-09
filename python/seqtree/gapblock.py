@@ -42,9 +42,13 @@ from collections.abc import Callable, Iterable, Sequence
 
 from ._core import Index, ScoreMatrix, SearchParams, SubstitutionMatrix
 from ._core import gapblock_matrix as _gapblock_matrix
+from ._core import gapblock_topk_batch as _gapblock_topk_batch
+from ._core import gapblock_count_batch as _gapblock_count_batch
+from ._core import gapblock_paired_topk_batch as _gapblock_paired_topk_batch
+from ._core import gapblock_paired_count_batch as _gapblock_paired_count_batch
 
 __all__ = [
-    "gapblock_score", "score_matrix", "deletion_variants", "central_prior", "profile_prior",
+    "gapblock_score", "score_matrix", "topk_batch", "count_batch", "paired_topk_batch", "paired_count_batch", "deletion_variants", "central_prior", "profile_prior",
     "frame_prior", "positions_prior", "embed_in_frame", "gap_cost", "GapBlockIndex", "ScoreMatrix",
     "IslandProfile",
 ]
@@ -562,6 +566,111 @@ def score_matrix(
     width = max((len(s) for s in q + r), default=0)
     cube = _prior_cube(gap_prior, width) if gap_prior is not None else []
     return _gapblock_matrix(q, r, alphabet, matrix, gap_open, gap_extend, cube, width, threads)
+
+
+def _batch_integer(value, name, lower=0, upper=(1 << 31) - 1):
+    import operator
+    if isinstance(value, bool):
+        raise ValueError(f"{name} must be an integer")
+    try:
+        result = operator.index(value)
+    except TypeError:
+        raise ValueError(f"{name} must be an integer") from None
+    if not lower <= result <= upper:
+        raise ValueError(f"{name} must lie in [{lower}, {upper}]")
+    return result
+
+
+def _batch_options(axes, matrix, gap_open, gap_extend, gap_prior, threads):
+    go = _batch_integer(_default_gap_open(matrix) if gap_open is None else gap_open, "gap_open")
+    ge = _batch_integer(gap_extend, "gap_extend")
+    threads = _batch_integer(threads, "threads")
+    width = max((len(s) for axis in axes for s in axis), default=0)
+    cube = _prior_cube(gap_prior, width) if gap_prior is not None else []
+    return go, ge, cube, width, threads
+
+
+def _threshold_rows(thresholds, n_queries):
+    rows = [list(row) for row in thresholds]
+    if len(rows) != n_queries:
+        raise ValueError("thresholds must have one row per query")
+    return [[_batch_integer(value, "threshold", -(1 << 31)) for value in row] for row in rows]
+
+
+def topk_batch(queries, refs, k=10, matrix=None, gap_open=None, gap_extend=1,
+               gap_prior=None, alphabet="aa", threads=0, exclude_exact=False):
+    """Exhaustive single-gap-block top-k penalties, one native batch, GIL released.
+
+    Return one list of ``Hit(ref_id, score)`` per query, ordered by
+    ``(score, ref_id)``. At most k reference ROWS survive; repeated reference
+    sequences remain distinct rows. Hit edit fields are unset (zero), not an
+    alignment decomposition. Empty references yield empty query rows.
+
+    Arguments match :func:`score_matrix`, with positive integer k added. Exact
+    exclusion compares case-insensitive alphabet-encoded sequences BEFORE
+    selection; a nonidentity zero penalty remains eligible.
+
+    Shared storage holds encoded inputs and the existing optional prior cube.
+    Each worker holds O(k + max_sequence_length) scratch; results take O(Q*k),
+    never a dense Q*N matrix. This remains exhaustive O(Q*N*sequence_length)
+    scoring; no radius predicate, approximation or statistical model is added.
+    """
+    q, r = list(queries), list(refs)
+    k = _batch_integer(k, "k", 1, (1 << 32) - 1)
+    go, ge, cube, width, threads = _batch_options((q, r), matrix, gap_open, gap_extend, gap_prior, threads)
+    return _gapblock_topk_batch(q, r, k, alphabet, matrix, go, ge, cube, width, threads, exclude_exact)
+
+
+def count_batch(queries, refs, thresholds, matrix=None, gap_open=None, gap_extend=1,
+                gap_prior=None, alphabet="aa", threads=0, exclude_exact=False):
+    """Count all reference scores <= each query's requested integer thresholds.
+
+    ``thresholds`` has one row per query; rows may be empty, unsorted or contain
+    duplicates. Return integer counts in their original order, including ALL
+    score ties. Negative cutoffs count zero. Same scorer/exclusion as
+    :func:`topk_batch`; one native batch with O(Q*S) output, no dense score matrix.
+    Worker scratch is O(max_sequence_length + maximum_threshold_row_length).
+    """
+    q, r = list(queries), list(refs)
+    thresholds = _threshold_rows(thresholds, len(q))
+    go, ge, cube, width, threads = _batch_options((q, r), matrix, gap_open, gap_extend, gap_prior, threads)
+    return _gapblock_count_batch(q, r, thresholds, alphabet, matrix, go, ge, cube, width, threads, exclude_exact)
+
+
+def paired_topk_batch(queries_a, queries_b, refs_a, refs_b, k=10, matrix=None,
+                      gap_open=None, gap_extend=1, gap_prior=None, alphabet="aa",
+                      threads=0, exclude_exact=False):
+    """Top-k linked two-view rows, ordered by (max(score_a,score_b), ref_id).
+
+    Return one list of ``(ref_id, score_a, score_b)`` tuples per linked query.
+    Both query axes and both reference axes must have matching lengths.
+    Exclusion removes only rows identical in BOTH views; one-view identities
+    remain eligible. Scoring arguments and memory bounds match :func:`topk_batch`.
+    No cross-row combinations, payloads or statistical assumptions are introduced.
+    """
+    qa, qb, ra, rb = map(list, (queries_a, queries_b, refs_a, refs_b))
+    if len(qa) != len(qb) or len(ra) != len(rb):
+        raise ValueError("paired query/reference axes must agree")
+    k = _batch_integer(k, "k", 1, (1 << 32) - 1)
+    go, ge, cube, width, threads = _batch_options((qa, qb, ra, rb), matrix, gap_open, gap_extend, gap_prior, threads)
+    return _gapblock_paired_topk_batch(qa, qb, ra, rb, k, alphabet, matrix, go, ge, cube, width, threads, exclude_exact)
+
+
+def paired_count_batch(queries_a, queries_b, refs_a, refs_b, thresholds, matrix=None,
+                       gap_open=None, gap_extend=1, gap_prior=None, alphabet="aa",
+                       threads=0, exclude_exact=False):
+    """Count all linked two-view rows with max(lane penalties) <= each cutoff.
+
+    Shape, threshold order, ties and negative-cutoff semantics match
+    :func:`count_batch`; exact exclusion is the both-view predicate described in
+    :func:`paired_topk_batch`. One native batch; no dense score matrix.
+    """
+    qa, qb, ra, rb = map(list, (queries_a, queries_b, refs_a, refs_b))
+    if len(qa) != len(qb) or len(ra) != len(rb):
+        raise ValueError("paired query/reference axes must agree")
+    thresholds = _threshold_rows(thresholds, len(qa))
+    go, ge, cube, width, threads = _batch_options((qa, qb, ra, rb), matrix, gap_open, gap_extend, gap_prior, threads)
+    return _gapblock_paired_count_batch(qa, qb, ra, rb, thresholds, alphabet, matrix, go, ge, cube, width, threads, exclude_exact)
 
 
 class GapBlockIndex:

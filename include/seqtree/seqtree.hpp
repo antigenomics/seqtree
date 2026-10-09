@@ -5,6 +5,7 @@
 #include <memory>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <vector>
 
 namespace seqtree {
@@ -220,6 +221,29 @@ std::vector<int32_t> gapblock_matrix(const std::vector<std::string>& queries,
                                      const SubstitutionMatrix* matrix, int32_t gap_open,
                                      int32_t gap_extend, const std::vector<int32_t>& prior,
                                      uint32_t prior_width, int threads = 0);
+
+// Exhaustive bounded reductions using the same gapblock cell. Top-k ties use
+// (penalty, ref_id); paired penalty is max(lane scores). Exact exclusion uses
+// encoded sequence identity (both lanes for pairs), never zero penalty alone.
+std::vector<std::vector<Hit>> gapblock_topk_batch(const std::vector<std::string>& queries,
+        const std::vector<std::string>& refs, uint32_t k, Alphabet alphabet,
+        const SubstitutionMatrix* matrix, int32_t go, int32_t ge, const std::vector<int32_t>& prior,
+        uint32_t width, int threads, bool exclude_exact);
+std::vector<std::vector<std::tuple<uint32_t, int32_t, int32_t>>> gapblock_paired_topk_batch(
+        const std::vector<std::string>& qa, const std::vector<std::string>& qb,
+        const std::vector<std::string>& ra, const std::vector<std::string>& rb,
+        uint32_t k, Alphabet alphabet, const SubstitutionMatrix* matrix, int32_t go, int32_t ge,
+        const std::vector<int32_t>& prior, uint32_t width, int threads, bool exclude_exact);
+std::vector<std::vector<uint64_t>> gapblock_count_batch(const std::vector<std::string>& queries,
+        const std::vector<std::string>& refs, const std::vector<std::vector<int32_t>>& thresholds,
+        Alphabet alphabet, const SubstitutionMatrix* matrix, int32_t go, int32_t ge,
+        const std::vector<int32_t>& prior, uint32_t width, int threads, bool exclude_exact);
+std::vector<std::vector<uint64_t>> gapblock_paired_count_batch(
+        const std::vector<std::string>& qa, const std::vector<std::string>& qb,
+        const std::vector<std::string>& ra, const std::vector<std::string>& rb,
+        const std::vector<std::vector<int32_t>>& thresholds,
+        Alphabet alphabet, const SubstitutionMatrix* matrix, int32_t go, int32_t ge,
+        const std::vector<int32_t>& prior, uint32_t width, int threads, bool exclude_exact);
 
 // ---------------------------------------------------------------------------------------
 // Plain string edit distances on raw characters, unit costs. Deliberately alphabet-agnostic:
