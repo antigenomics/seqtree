@@ -65,6 +65,7 @@ if(SEQTREE_TESTS)
     tests/cpp/test_positional.cpp
     tests/cpp/test_kmer_index.cpp
     tests/cpp/test_text_index.cpp
+    tests/cpp/test_parallel.cpp
   )
   target_include_directories(seqtree_tests PRIVATE tests/cpp src)
   target_link_libraries(seqtree_tests PRIVATE seqtree_core)

@@ -37,30 +37,38 @@ void parallel_for(size_t n, int threads, MakeLocal make_local, Body body,
                               : std::max(1u, std::thread::hardware_concurrency());
     nt = unsigned(std::min<size_t>(nt, n));  // n >= 1 here, so nt >= 1
 
+    // A serial budget runs on the calling thread; spawning one worker only adds overhead.
+    if (nt == 1) {
+        auto local = make_local();
+        for (size_t i = 0; i < n; ++i) body(i, local);
+        return;
+    }
+
     std::atomic<size_t> next{0};
     const size_t chunk = std::clamp<size_t>(n / (size_t(nt) * 8), chunk_min, chunk_max);
     std::exception_ptr err;
     std::mutex emu;
 
     auto worker = [&] {
-        auto local = make_local();
-        for (;;) {
-            const size_t start = next.fetch_add(chunk);
-            if (start >= n) break;
-            const size_t end = std::min(n, start + chunk);
-            for (size_t i = start; i < end; ++i) {
-                try {
+        // Scratch construction can allocate and throw too. Nothing may escape the entry point.
+        try {
+            auto local = make_local();
+            for (;;) {
+                const size_t start = next.fetch_add(chunk);
+                if (start >= n) break;
+                const size_t end = std::min(n, start + chunk);
+                for (size_t i = start; i < end; ++i) {
                     body(i, local);
-                } catch (...) {
-                    std::lock_guard<std::mutex> lk(emu);
-                    if (!err) err = std::current_exception();
-                    return;
                 }
             }
+        } catch (...) {
+            std::lock_guard<std::mutex> lk(emu);
+            if (!err) err = std::current_exception();
         }
     };
 
-    std::vector<std::thread> pool;
+    // A failed thread launch must also join workers already started before unwinding.
+    std::vector<std::jthread> pool;
     pool.reserve(nt);
     for (unsigned t = 0; t < nt; ++t) pool.emplace_back(worker);
     for (auto& th : pool) th.join();
