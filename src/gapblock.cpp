@@ -237,15 +237,18 @@ std::vector<std::vector<Ranked>> ranked(const GapInput& a, const GapInput* b, ui
 std::vector<std::vector<uint64_t>> counted(const GapInput& a, const GapInput* b,
                   const std::vector<std::vector<int32_t>>& thresholds, int32_t go, int32_t ge,
                   const std::vector<int32_t>& prior, int threads, bool exclude_exact,
-                  std::vector<std::vector<uint64_t>>* masses = nullptr) {
+                  std::vector<std::vector<uint64_t>>* masses = nullptr, bool sum_pair_distance = false) {
     if (thresholds.size() != a.q.size())
         throw std::invalid_argument("thresholds must have one row per query");
     if (b && (b->q.size() != a.q.size() || b->r.size() != a.r.size()))
         throw std::invalid_argument("paired query/reference axes must agree");
+    if (sum_pair_distance && !b)
+        throw std::invalid_argument("sum distance requires two linked views");
     std::vector<std::vector<uint64_t>> out(a.q.size());
     if (masses) {
         masses->resize(a.q.size());
-        if (std::any_of(a.pen.begin(), a.pen.end(), [](int32_t cost) { return cost < 0; }))
+        if (std::any_of(a.pen.begin(), a.pen.end(), [](int32_t cost) { return cost < 0; }) ||
+            (b && std::any_of(b->pen.begin(), b->pen.end(), [](int32_t cost) { return cost < 0; })))
             throw std::invalid_argument("linear mass requires nonnegative scores");
         // Every score admitted to a row is <= its largest positive threshold.
         // Bound both score sums and threshold*count before workers start.
@@ -267,11 +270,18 @@ std::vector<std::vector<uint64_t>> counted(const GapInput& a, const GapInput* b,
             if (sorted.empty()) return;
             for (size_t j = 0; j < a.r.size(); ++j) {
                 if (exclude_exact && a.q[i] == a.r[j] && (!b || b->q[i] == b->r[j])) continue;
-                if (group_offset(a, i, j) > sorted.back().first) continue;
-                auto score = score_cell(a, i, j, go, ge, prior, scratch.data());
-                if (b) score = std::max(score, score_cell(*b, i, j, go, ge, prior, scratch.data()));
+                const int64_t offset = int64_t(group_offset(a, i, j)) +
+                    (sum_pair_distance ? int64_t(group_offset(*b, i, j)) : 0);
+                if (offset > sorted.back().first) continue;
+                int64_t score = score_cell(a, i, j, go, ge, prior, scratch.data());
+                if (sum_pair_distance) {
+                    if (score > sorted.back().first) continue;
+                    score += int64_t(score_cell(*b, i, j, go, ge, prior, scratch.data()));
+                } else if (b) {
+                    score = std::max<int64_t>(score, score_cell(*b, i, j, go, ge, prior, scratch.data()));
+                }
                 const auto pos = std::lower_bound(sorted.begin(), sorted.end(), score,
-                    [](const auto& threshold, int32_t value) { return threshold.first < value; });
+                    [](const auto& threshold, int64_t value) { return threshold.first < value; });
                 if (pos != sorted.end()) {
                     const auto bin = size_t(pos - sorted.begin());
                     ++bins[bin];
@@ -397,6 +407,27 @@ std::vector<std::vector<uint64_t>> gapblock_paired_count_batch(
     const auto a = prepare(qa, ra, alphabet, matrix, go, ge, prior, width, threads);
     const auto b = prepare(qb, rb, alphabet, matrix, go, ge, prior, width, threads);
     return counted(a, &b, thresholds, go, ge, prior, threads, exclude_exact);
+}
+
+std::pair<std::vector<std::vector<uint64_t>>, std::vector<std::vector<uint64_t>>> gapblock_paired_sum_count_batch(
+        const std::vector<std::string>& qa, const std::vector<std::string>& qb,
+        const std::vector<std::string>& ra, const std::vector<std::string>& rb,
+        const std::vector<std::vector<int32_t>>& thresholds,
+        Alphabet alphabet, const SubstitutionMatrix* matrix, int32_t go, int32_t ge,
+        const std::vector<int32_t>& prior, uint32_t width, int threads, bool exclude_exact,
+        const std::vector<std::vector<int32_t>>& weights_alpha,
+        const std::vector<std::vector<int32_t>>& weights_beta,
+        const std::vector<int32_t>& query_groups_alpha, const std::vector<int32_t>& query_groups_beta,
+        const std::vector<int32_t>& reference_groups_alpha, const std::vector<int32_t>& reference_groups_beta,
+        const std::vector<std::vector<int32_t>>& group_distances_alpha,
+        const std::vector<std::vector<int32_t>>& group_distances_beta) {
+    const auto a = prepare(qa, ra, alphabet, matrix, go, ge, prior, width, threads,
+                           weights_alpha, query_groups_alpha, reference_groups_alpha, group_distances_alpha);
+    const auto b = prepare(qb, rb, alphabet, matrix, go, ge, prior, width, threads,
+                           weights_beta, query_groups_beta, reference_groups_beta, group_distances_beta);
+    std::vector<std::vector<uint64_t>> masses;
+    auto counts = counted(a, &b, thresholds, go, ge, prior, threads, exclude_exact, &masses, true);
+    return {std::move(counts), std::move(masses)};
 }
 
 }  // namespace seqtree

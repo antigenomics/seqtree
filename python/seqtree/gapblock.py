@@ -48,9 +48,10 @@ from ._core import gapblock_count_mass_batch as _gapblock_count_mass_batch
 from ._core import gapblock_ball_batch as _gapblock_ball_batch
 from ._core import gapblock_paired_topk_batch as _gapblock_paired_topk_batch
 from ._core import gapblock_paired_count_batch as _gapblock_paired_count_batch
+from ._core import gapblock_paired_sum_count_batch as _gapblock_paired_sum_count_batch
 
 __all__ = [
-    "gapblock_score", "score_matrix", "ball_batch", "topk_batch", "count_batch", "paired_topk_batch", "paired_count_batch", "deletion_variants", "central_prior", "profile_prior",
+    "gapblock_score", "score_matrix", "ball_batch", "topk_batch", "count_batch", "paired_topk_batch", "paired_count_batch", "paired_sum_count_batch", "deletion_variants", "central_prior", "profile_prior",
     "frame_prior", "positions_prior", "embed_in_frame", "gap_cost", "GapBlockIndex", "ScoreMatrix",
     "IslandProfile",
 ]
@@ -760,6 +761,38 @@ def paired_count_batch(queries_a, queries_b, refs_a, refs_b, thresholds, matrix=
     thresholds = _threshold_rows(thresholds, len(qa))
     go, ge, cube, width, threads = _batch_options((qa, qb, ra, rb), matrix, gap_open, gap_extend, gap_prior, threads)
     return _gapblock_paired_count_batch(qa, qb, ra, rb, thresholds, alphabet, matrix, go, ge, cube, width, threads, exclude_exact)
+
+
+def paired_sum_count_batch(queries_a, queries_b, refs_a, refs_b, thresholds, matrix=None,
+                           gap_open=None, gap_extend=1, gap_prior=None, alphabet="aa",
+                           threads=0, exclude_exact=False,
+                           position_weights_by_length_alpha=None, position_weights_by_length_beta=None,
+                           query_group_ids_alpha=None, query_group_ids_beta=None,
+                           reference_group_ids_alpha=None, reference_group_ids_beta=None,
+                           group_distances_alpha=None, group_distances_beta=None):
+    """Return (counts, linear masses) for linked rows under summed lane distances.
+
+    Shared matrix/gap costs/prior and separate full-coordinate lane weights and
+    group tables use the existing kernel. Sum distance is computed in int64;
+    thresholds remain int32. Count every score <= cutoff and sum max(0, cutoff
+    - score); ties count with zero mass. Negative cutoffs return zero. Preserve
+    duplicate reference observations and input threshold order. Exact exclusion
+    removes a row only when both encoded full strings match. One GIL-released
+    native traversal, O(Q*S) outputs and O(max_length + max_threshold_row) worker
+    scratch; no matrix/edges. The existing paired-max API is unchanged.
+    """
+    qa, qb, ra, rb = map(list, (queries_a, queries_b, refs_a, refs_b))
+    if len(qa) != len(qb) or len(ra) != len(rb):
+        raise ValueError("paired query/reference axes must agree")
+    thresholds = _threshold_rows(thresholds, len(qa))
+    go, ge, cube, width, threads = _batch_options((qa, qb, ra, rb), matrix, gap_open, gap_extend, gap_prior, threads)
+    ag = _group_options(query_group_ids_alpha, reference_group_ids_alpha, group_distances_alpha, qa, ra)
+    bg = _group_options(query_group_ids_beta, reference_group_ids_beta, group_distances_beta, qb, rb)
+    return _gapblock_paired_sum_count_batch(qa, qb, ra, rb, thresholds, alphabet, matrix, go, ge,
+        cube, width, threads, exclude_exact,
+        _position_weights(position_weights_by_length_alpha, qa, ra),
+        _position_weights(position_weights_by_length_beta, qb, rb),
+        ag[0], bg[0], ag[1], bg[1], ag[2], bg[2])
 
 
 class GapBlockIndex:

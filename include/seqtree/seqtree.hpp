@@ -279,6 +279,18 @@ std::vector<std::vector<uint64_t>> gapblock_paired_count_batch(
         const std::vector<std::vector<int32_t>>& thresholds,
         Alphabet alphabet, const SubstitutionMatrix* matrix, int32_t go, int32_t ge,
         const std::vector<int32_t>& prior, uint32_t width, int threads, bool exclude_exact);
+std::pair<std::vector<std::vector<uint64_t>>, std::vector<std::vector<uint64_t>>> gapblock_paired_sum_count_batch(
+        const std::vector<std::string>& qa, const std::vector<std::string>& qb,
+        const std::vector<std::string>& ra, const std::vector<std::string>& rb,
+        const std::vector<std::vector<int32_t>>& thresholds,
+        Alphabet alphabet, const SubstitutionMatrix* matrix, int32_t go, int32_t ge,
+        const std::vector<int32_t>& prior, uint32_t width, int threads, bool exclude_exact,
+        const std::vector<std::vector<int32_t>>& weights_alpha,
+        const std::vector<std::vector<int32_t>>& weights_beta,
+        const std::vector<int32_t>& query_groups_alpha, const std::vector<int32_t>& query_groups_beta,
+        const std::vector<int32_t>& reference_groups_alpha, const std::vector<int32_t>& reference_groups_beta,
+        const std::vector<std::vector<int32_t>>& group_distances_alpha,
+        const std::vector<std::vector<int32_t>>& group_distances_beta);
 
 // ---------------------------------------------------------------------------------------
 // Plain string edit distances on raw characters, unit costs. Deliberately alphabet-agnostic:
