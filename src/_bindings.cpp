@@ -186,6 +186,17 @@ nb::list py_search_batch(const Index& idx, const std::vector<std::string>& queri
     return out;
 }
 
+std::vector<std::vector<uint64_t>> py_edit_histogram_batch(
+        const Index& idx, const std::vector<std::string>& queries,
+        const PyParams& pp, int threads, bool exclude_exact) {
+    if (pp.max_total_edits < 1 || pp.max_total_edits > 65535)
+        throw nb::value_error("edit histogram requires max_total_edits in [1, 65535]");
+    auto mat = make_matrix(pp, idx.alphabet());
+    SearchParams cp = to_cpp(pp, mat ? &*mat : nullptr);
+    nb::gil_scoped_release release;
+    return idx.edit_histogram_batch(queries, cp, threads, exclude_exact);
+}
+
 std::vector<uint64_t> py_collisions_batch(const Index& idx, const std::vector<std::string>& queries,
                                           const PyParams& pp, int threads) {
     auto mat = make_matrix(pp, idx.alphabet());
@@ -664,6 +675,13 @@ NB_MODULE(_core, m) {
              nb::arg("threads") = 0,
              "Search many queries in parallel (releases the GIL). ``threads=0`` uses all "
              "cores. Returns one hit list per query, in input order.")
+        .def("edit_histogram_batch", &py_edit_histogram_batch,
+             nb::arg("queries"), nb::arg("params"), nb::arg("threads") = 0,
+             nb::arg("exclude_exact") = false,
+             "Exact reference counts by total n_subs+n_ins+n_dels, bins 0..max_total_edits. "
+             "Requires explicit positive max_total_edits and uncapped seqtm/auto all-hit search. "
+             "Duplicates count separately; exclude_exact retains bin 0 with count zero. threads<=0 uses hardware concurrency. Releases the GIL; "
+             "one reusable hit buffer per worker, no all-query hit vectors.")
         .def("align", &py_align, nb::arg("ref_id"), nb::arg("query"), nb::arg("params"),
              "Compute a global alignment between ``query`` and a reference, on demand.")
         .def("collisions_batch", &py_collisions_batch, nb::arg("queries"), nb::arg("params"),
