@@ -111,7 +111,7 @@ GapInput prepare(const std::vector<std::string>& queries, const std::vector<std:
             largest_prior = std::max(largest_prior, value);
         }
     }
-    int32_t largest_weight = 1;
+    int32_t largest_weight = weights.empty() ? 1 : 0;
     if (!weights.empty()) {
         in.weights = weights; // one immutable shared table, never copied per worker
         for (size_t length = 0; length < weights.size(); ++length) {

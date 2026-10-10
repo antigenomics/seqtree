@@ -74,3 +74,19 @@ def test_matrix_negative_threads_preserves_automatic_concurrency():
         args=dict(matrix=B,position_weights_by_length=weights)
         expected=np.asarray(gapblock.score_matrix(q,r,threads=1,**args))
         np.testing.assert_array_equal(expected,np.asarray(gapblock.score_matrix(q,r,threads=-1,**args)))
+
+
+@pytest.mark.parametrize('api', ['score_matrix', 'count_batch', 'ball_batch'])
+def test_zero_weights_accept_large_safe_matrix_penalties(api):
+    from seqtree import amino_acids
+    width = len(amino_acids())
+    matrix = SubstitutionMatrix.from_similarity(
+        [[0 if i == j else -600_000_000 for j in range(width)] for i in range(width)])
+    kwargs = dict(matrix=matrix, gap_open=0, gap_extend=0,
+                  position_weights_by_length={2: [0, 0]}, threads=1)
+    if api == 'score_matrix':
+        assert np.asarray(gapblock.score_matrix(['AA'], ['AC'], **kwargs)).tolist() == [[0]]
+    elif api == 'count_batch':
+        assert gapblock.count_batch(['AA'], ['AC'], [[0]], **kwargs) == [[1]]
+    else:
+        assert [(h.ref_id, h.score) for h in gapblock.ball_batch(['AA'], ['AC'], [0], **kwargs)[0]] == [(0, 0)]
