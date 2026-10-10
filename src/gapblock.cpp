@@ -38,7 +38,7 @@ std::vector<int32_t> pen_table(const SubstitutionMatrix* m, uint8_t A) {
 // contractually zero -- hence the early return, which also keeps s(q, q) == 0.
 inline int32_t cell(const uint8_t* q, uint32_t m, const uint8_t* r, uint32_t n,
                     const int32_t* pen, uint8_t A, int32_t gap_open, int32_t gap_extend,
-                    const int32_t* prior_row, int32_t* suf) {
+                    const int32_t* prior_row, int32_t* suf, const int32_t* weights = nullptr) {
     const uint32_t L = std::min(m, n);
     const uint32_t d = (m > n ? m - n : n - m);
     const bool q_longer = m >= n;
@@ -47,7 +47,7 @@ inline int32_t cell(const uint8_t* q, uint32_t m, const uint8_t* r, uint32_t n,
     for (uint32_t j = L; j-- > 0;) {
         const uint8_t a = q_longer ? q[j + d] : q[j];
         const uint8_t b = q_longer ? r[j] : r[j + d];
-        suf[j] = suf[j + 1] + pen[size_t(a) * A + b];
+        suf[j] = suf[j + 1] + pen[size_t(a) * A + b] * (weights ? weights[j + d] : 1);
     }
     if (d == 0) return suf[0];
 
@@ -56,7 +56,7 @@ inline int32_t cell(const uint8_t* q, uint32_t m, const uint8_t* r, uint32_t n,
     for (uint32_t i = 0; i <= L; ++i) {
         const int32_t cand = pre + suf[i] + (prior_row ? prior_row[i] : 0);
         if (cand < best) best = cand;
-        if (i < L) pre += pen[size_t(q[i]) * A + r[i]];
+        if (i < L) pre += pen[size_t(q[i]) * A + r[i]] * (weights ? weights[i] : 1);
     }
     return best + gap_open + int32_t(d - 1) * gap_extend;
 }
@@ -66,6 +66,7 @@ inline int32_t cell(const uint8_t* q, uint32_t m, const uint8_t* r, uint32_t n,
 struct GapInput {
     std::vector<std::vector<uint8_t>> q, r;
     std::vector<int32_t> pen;
+    std::vector<std::vector<int32_t>> weights;
     uint32_t longest = 0;
     uint8_t A = 0;
     size_t W1 = 0;
@@ -73,7 +74,8 @@ struct GapInput {
 
 GapInput prepare(const std::vector<std::string>& queries, const std::vector<std::string>& refs,
                  Alphabet alphabet, const SubstitutionMatrix* matrix, int32_t go, int32_t ge,
-                 const std::vector<int32_t>& prior, uint32_t width, int threads) {
+                 const std::vector<int32_t>& prior, uint32_t width, int threads,
+                 const std::vector<std::vector<int32_t>>& weights = {}) {
     if (go < 0 || ge < 0 || threads < 0)
         throw std::invalid_argument("gap costs and threads must be >= 0");
     if (refs.size() > std::numeric_limits<uint32_t>::max())
@@ -109,10 +111,31 @@ GapInput prepare(const std::vector<std::string>& queries, const std::vector<std:
             largest_prior = std::max(largest_prior, value);
         }
     }
+    int32_t largest_weight = weights.empty() ? 1 : 0;
+    if (!weights.empty()) {
+        in.weights = weights; // one immutable shared table, never copied per worker
+        for (size_t length = 0; length < weights.size(); ++length) {
+            if (weights[length].empty()) continue;
+            if (weights[length].size() != length)
+                throw std::invalid_argument("positional weight length must match its frame");
+            for (const auto value : weights[length]) {
+                if (value < 0) throw std::invalid_argument("positional weights must be nonnegative");
+                largest_weight = std::max(largest_weight, value);
+            }
+        }
+        for (const auto* axis : {&in.q, &in.r}) for (const auto& sequence : *axis) {
+            const auto length = sequence.size();
+            if (length && (length >= weights.size() || weights[length].size() != length))
+                throw std::invalid_argument("missing positional weights for an input frame");
+        }
+    }
     const auto largest_pen = *std::max_element(in.pen.begin(), in.pen.end());
     if (*std::min_element(in.pen.begin(), in.pen.end()) < 0)
         throw std::invalid_argument("matrix penalties must be nonnegative");
-    const uint64_t bound = uint64_t(in.longest) * uint32_t(largest_pen) +
+    const uint64_t weighted_pen = uint64_t(uint32_t(largest_pen)) * uint32_t(largest_weight);
+    if (in.longest && weighted_pen > uint64_t(std::numeric_limits<int32_t>::max()) / in.longest)
+        throw std::invalid_argument("gapblock weighted score can overflow int32");
+    const uint64_t bound = uint64_t(in.longest) * weighted_pen +
                            uint32_t(largest_prior) + uint32_t(go) +
                            uint64_t(in.longest ? in.longest - 1 : 0) * uint32_t(ge);
     if (bound > std::numeric_limits<int32_t>::max())
@@ -125,7 +148,7 @@ int32_t score_cell(const GapInput& in, size_t i, size_t j, int32_t go, int32_t g
     const uint32_t m = uint32_t(in.q[i].size()), n = uint32_t(in.r[j].size());
     const uint32_t M = std::max(m, n), d = m > n ? m - n : n - m;
     const int32_t* prow = prior.empty() ? nullptr : prior.data() + (size_t(M) * in.W1 + d) * in.W1;
-    return cell(in.q[i].data(), m, in.r[j].data(), n, in.pen.data(), in.A, go, ge, prow, scratch);
+    return cell(in.q[i].data(), m, in.r[j].data(), n, in.pen.data(), in.A, go, ge, prow, scratch, in.weights.empty() || !M ? nullptr : in.weights[M].data());
 }
 
 struct Ranked {
@@ -215,60 +238,40 @@ std::vector<std::vector<uint64_t>> counted(const GapInput& a, const GapInput* b,
 }  // namespace
 
 std::vector<int32_t> gapblock_matrix(const std::vector<std::string>& queries,
-                                     const std::vector<std::string>& refs, Alphabet alphabet,
-                                     const SubstitutionMatrix* matrix, int32_t gap_open,
-                                     int32_t gap_extend, const std::vector<int32_t>& prior,
-                                     uint32_t prior_width, int threads) {
-    if (gap_open < 0 || gap_extend < 0)
-        throw std::invalid_argument("gap_open and gap_extend must be >= 0");
+        const std::vector<std::string>& refs, Alphabet alphabet,
+        const SubstitutionMatrix* matrix, int32_t go, int32_t ge,
+        const std::vector<int32_t>& prior, uint32_t width, int threads,
+        const std::vector<std::vector<int32_t>>& weights) {
+    const auto in = prepare(queries, refs, alphabet, matrix, go, ge, prior, width, std::max(threads, 0), weights);
+    if (!refs.empty() && queries.size() > std::numeric_limits<size_t>::max() / refs.size())
+        throw std::invalid_argument("gapblock matrix size overflows size_t");
+    std::vector<int32_t> out(queries.size() * refs.size());
+    parallel_for(queries.size(), threads, [&] { return std::vector<int32_t>(size_t(in.longest) + 1); },
+        [&](size_t i, std::vector<int32_t>& scratch) {
+            for (size_t j = 0; j < refs.size(); ++j)
+                out[i * refs.size() + j] = score_cell(in, i, j, go, ge, prior, scratch.data());
+        });
+    return out;
+}
 
-    const Codec codec(alphabet);
-    const uint8_t A = codec.size();
-    if (matrix && matrix->size() != A)
-        throw std::invalid_argument("matrix size does not match the alphabet");
-
-    const size_t N = queries.size(), K = refs.size();
-    std::vector<int32_t> out(N * K);
-    if (N == 0 || K == 0) return out;
-
-    const std::vector<int32_t> pen = pen_table(matrix, A);
-
-    std::vector<std::vector<uint8_t>> qc(N), rc(K);
-    uint32_t longest = 0;
-    for (size_t i = 0; i < N; ++i) {
-        qc[i] = encode(codec, queries[i], "queries", i);
-        longest = std::max<uint32_t>(longest, uint32_t(qc[i].size()));
-    }
-    for (size_t k = 0; k < K; ++k) {
-        rc[k] = encode(codec, refs[k], "refs", k);
-        longest = std::max<uint32_t>(longest, uint32_t(rc[k].size()));
-    }
-
-    const size_t W1 = size_t(prior_width) + 1;
-    if (!prior.empty()) {
-        if (prior.size() != W1 * W1 * W1)
-            throw std::invalid_argument("prior table must have (prior_width + 1)^3 entries");
-        if (longest > prior_width)
-            throw std::invalid_argument("a sequence is longer than the prior table's width");
-    }
-    const int32_t* P = prior.empty() ? nullptr : prior.data();
-
-    // Every symbol was validated above and the kernel is arithmetic, so no worker throws --
-    // parallel_for's exception plumbing simply never fires here. `suf` is the per-worker
-    // suffix-score scratch, allocated once per thread rather than once per row.
-    parallel_for(N, threads, [&] { return std::vector<int32_t>(size_t(longest) + 1); },
-                 [&](size_t i, std::vector<int32_t>& suf) {
-                     const uint8_t* q = qc[i].data();
-                     const uint32_t m = uint32_t(qc[i].size());
-                     int32_t* row = out.data() + i * K;
-                     for (size_t k = 0; k < K; ++k) {
-                         const uint32_t n = uint32_t(rc[k].size());
-                         const uint32_t M = std::max(m, n), d = (m > n ? m - n : n - m);
-                         const int32_t* prow = P ? P + (size_t(M) * W1 + d) * W1 : nullptr;
-                         row[k] = cell(q, m, rc[k].data(), n, pen.data(), A, gap_open, gap_extend,
-                                       prow, suf.data());
-                     }
-                 });
+std::vector<std::vector<Hit>> gapblock_ball_batch(const std::vector<std::string>& queries,
+        const std::vector<std::string>& refs, const std::vector<int32_t>& thresholds,
+        Alphabet alphabet, const SubstitutionMatrix* matrix, int32_t go, int32_t ge,
+        const std::vector<int32_t>& prior, uint32_t width, int threads, bool exclude_exact,
+        const std::vector<std::vector<int32_t>>& weights) {
+    if (thresholds.size() != queries.size())
+        throw std::invalid_argument("ball thresholds must have one value per query");
+    const auto in = prepare(queries, refs, alphabet, matrix, go, ge, prior, width, threads, weights);
+    std::vector<std::vector<Hit>> out(queries.size());
+    parallel_for(queries.size(), threads, [&] { return std::vector<int32_t>(size_t(in.longest) + 1); },
+        [&](size_t i, std::vector<int32_t>& scratch) {
+            if (thresholds[i] < 0) return;
+            for (size_t j = 0; j < refs.size(); ++j) {
+                if (exclude_exact && in.q[i] == in.r[j]) continue;
+                const auto score = score_cell(in, i, j, go, ge, prior, scratch.data());
+                if (score <= thresholds[i]) out[i].push_back(Hit{uint32_t(j), score, 0, 0, 0});
+            }
+        });
     return out;
 }
 
@@ -303,8 +306,9 @@ std::vector<std::vector<std::tuple<uint32_t, int32_t, int32_t>>> gapblock_paired
 std::vector<std::vector<uint64_t>> gapblock_count_batch(const std::vector<std::string>& queries,
         const std::vector<std::string>& refs, const std::vector<std::vector<int32_t>>& thresholds,
         Alphabet alphabet, const SubstitutionMatrix* matrix, int32_t go, int32_t ge,
-        const std::vector<int32_t>& prior, uint32_t width, int threads, bool exclude_exact) {
-    const auto a = prepare(queries, refs, alphabet, matrix, go, ge, prior, width, threads);
+        const std::vector<int32_t>& prior, uint32_t width, int threads, bool exclude_exact,
+        const std::vector<std::vector<int32_t>>& weights) {
+    const auto a = prepare(queries, refs, alphabet, matrix, go, ge, prior, width, threads, weights);
     return counted(a, nullptr, thresholds, go, ge, prior, threads, exclude_exact);
 }
 

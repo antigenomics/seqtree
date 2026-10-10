@@ -221,11 +221,21 @@ std::vector<int32_t> align_dist_matrix(const std::vector<std::string>& queries,
 // substitution cost plus `prior`. `prior` is the gap prior flattened to [m][d][i] with stride
 // (prior_width+1); pass it empty for no prior. It is read only when d > 0, which is what keeps
 // the diagonal zero. `matrix` may be null for unit cost. threads <= 0 => hardware_concurrency.
+// Optional integer weights are indexed [longer length][longer position], symmetric in q/r.
+// All input frames must be covered; empty tables retain the existing unweighted scorer.
 std::vector<int32_t> gapblock_matrix(const std::vector<std::string>& queries,
                                      const std::vector<std::string>& refs, Alphabet,
                                      const SubstitutionMatrix* matrix, int32_t gap_open,
                                      int32_t gap_extend, const std::vector<int32_t>& prior,
-                                     uint32_t prior_width, int threads = 0);
+                                     uint32_t prior_width, int threads = 0,
+                                     const std::vector<std::vector<int32_t>>& weights = {});
+
+// Exhaustive ball rows in reference order; hit edit fields are unset (zero).
+std::vector<std::vector<Hit>> gapblock_ball_batch(const std::vector<std::string>& queries,
+        const std::vector<std::string>& refs, const std::vector<int32_t>& thresholds,
+        Alphabet alphabet, const SubstitutionMatrix* matrix, int32_t go, int32_t ge,
+        const std::vector<int32_t>& prior, uint32_t width, int threads, bool exclude_exact,
+        const std::vector<std::vector<int32_t>>& weights = {});
 
 // Exhaustive bounded reductions using the same gapblock cell. Top-k ties use
 // (penalty, ref_id); paired penalty is max(lane scores). Exact exclusion uses
@@ -242,7 +252,8 @@ std::vector<std::vector<std::tuple<uint32_t, int32_t, int32_t>>> gapblock_paired
 std::vector<std::vector<uint64_t>> gapblock_count_batch(const std::vector<std::string>& queries,
         const std::vector<std::string>& refs, const std::vector<std::vector<int32_t>>& thresholds,
         Alphabet alphabet, const SubstitutionMatrix* matrix, int32_t go, int32_t ge,
-        const std::vector<int32_t>& prior, uint32_t width, int threads, bool exclude_exact);
+        const std::vector<int32_t>& prior, uint32_t width, int threads, bool exclude_exact,
+        const std::vector<std::vector<int32_t>>& weights = {});
 std::vector<std::vector<uint64_t>> gapblock_paired_count_batch(
         const std::vector<std::string>& qa, const std::vector<std::string>& qb,
         const std::vector<std::string>& ra, const std::vector<std::string>& rb,
