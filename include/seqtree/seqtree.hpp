@@ -255,6 +255,20 @@ std::vector<std::vector<Hit>> gapblock_ball_batch(const std::vector<std::string>
 // Exhaustive bounded reductions using the same gapblock cell. Top-k ties use
 // (penalty, ref_id); paired penalty is max(lane scores). Exact exclusion uses
 // encoded sequence identity (both lanes for pairs), never zero penalty alone.
+// Count the component ball before/after group offsets; minimum full score within it.
+// One threshold per query; nearest=-1 denotes an empty component ball. O(Q) output.
+std::tuple<std::vector<uint64_t>, std::vector<uint64_t>, std::vector<int32_t>>
+gapblock_group_audit_batch(const std::vector<std::string>& queries,
+        const std::vector<std::string>& refs, const std::vector<int32_t>& thresholds,
+        Alphabet alphabet, const SubstitutionMatrix* matrix, int32_t go, int32_t ge,
+        const std::vector<int32_t>& prior, uint32_t width, int threads, bool exclude_exact,
+        const std::vector<std::vector<int32_t>>& weights = {},
+        const std::vector<int32_t>& query_groups = {},
+        const std::vector<int32_t>& reference_groups = {},
+        const std::vector<std::vector<int32_t>>& group_distances = {},
+        const std::vector<std::vector<int32_t>>& query_weights = {},
+        const std::vector<std::vector<int32_t>>& reference_weights = {});
+
 std::vector<std::vector<Hit>> gapblock_topk_batch(const std::vector<std::string>& queries,
         const std::vector<std::string>& refs, uint32_t k, Alphabet alphabet,
         const SubstitutionMatrix* matrix, int32_t go, int32_t ge, const std::vector<int32_t>& prior,

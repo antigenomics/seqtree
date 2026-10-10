@@ -371,6 +371,43 @@ std::vector<std::vector<Hit>> gapblock_ball_batch(const std::vector<std::string>
     return out;
 }
 
+std::tuple<std::vector<uint64_t>, std::vector<uint64_t>, std::vector<int32_t>>
+gapblock_group_audit_batch(const std::vector<std::string>& queries,
+        const std::vector<std::string>& refs, const std::vector<int32_t>& thresholds,
+        Alphabet alphabet, const SubstitutionMatrix* matrix, int32_t go, int32_t ge,
+        const std::vector<int32_t>& prior, uint32_t width, int threads, bool exclude_exact,
+        const std::vector<std::vector<int32_t>>& weights,
+        const std::vector<int32_t>& query_groups, const std::vector<int32_t>& reference_groups,
+        const std::vector<std::vector<int32_t>>& group_distances,
+        const std::vector<std::vector<int32_t>>& query_weights,
+        const std::vector<std::vector<int32_t>>& reference_weights) {
+    if (thresholds.size() != queries.size())
+        throw std::invalid_argument("group audit thresholds must have one value per query");
+    const auto in = prepare(queries, refs, alphabet, matrix, go, ge, prior, width, threads,
+                           weights, query_groups, reference_groups, group_distances,
+                           query_weights, reference_weights);
+    std::tuple<std::vector<uint64_t>, std::vector<uint64_t>, std::vector<int32_t>> out{
+        std::vector<uint64_t>(queries.size()), std::vector<uint64_t>(queries.size()),
+        std::vector<int32_t>(queries.size(), -1)};
+    auto& [before, after, nearest] = out;
+    parallel_for(queries.size(), threads,
+        [&] { return std::vector<int32_t>(size_t(in.longest) + 1); },
+        [&](size_t i, std::vector<int32_t>& scratch) {
+            if (thresholds[i] < 0) return;
+            int32_t minimum = std::numeric_limits<int32_t>::max();
+            for (size_t j = 0; j < refs.size(); ++j) {
+                if (exclude_exact && in.q[i] == in.r[j]) continue;
+                const auto score = score_cell(in, i, j, go, ge, prior, scratch.data());
+                if (score - group_offset(in, i, j) > thresholds[i]) continue;
+                ++before[i];
+                after[i] += score <= thresholds[i];
+                minimum = std::min(minimum, score);
+            }
+            if (before[i]) nearest[i] = minimum;
+        });
+    return out;
+}
+
 std::vector<std::vector<Hit>> gapblock_topk_batch(const std::vector<std::string>& queries,
         const std::vector<std::string>& refs, uint32_t k, Alphabet alphabet,
         const SubstitutionMatrix* matrix, int32_t go, int32_t ge, const std::vector<int32_t>& prior,

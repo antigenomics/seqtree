@@ -46,12 +46,13 @@ from ._core import gapblock_topk_batch as _gapblock_topk_batch
 from ._core import gapblock_count_batch as _gapblock_count_batch
 from ._core import gapblock_count_mass_batch as _gapblock_count_mass_batch
 from ._core import gapblock_ball_batch as _gapblock_ball_batch
+from ._core import gapblock_group_audit_batch as _gapblock_group_audit_batch
 from ._core import gapblock_paired_topk_batch as _gapblock_paired_topk_batch
 from ._core import gapblock_paired_count_batch as _gapblock_paired_count_batch
 from ._core import gapblock_paired_sum_count_batch as _gapblock_paired_sum_count_batch
 
 __all__ = [
-    "gapblock_score", "score_matrix", "ball_batch", "topk_batch", "count_batch", "paired_topk_batch", "paired_count_batch", "paired_sum_count_batch", "deletion_variants", "central_prior", "profile_prior",
+    "gapblock_score", "score_matrix", "ball_batch", "group_audit_batch", "topk_batch", "count_batch", "paired_topk_batch", "paired_count_batch", "paired_sum_count_batch", "deletion_variants", "central_prior", "profile_prior",
     "frame_prior", "positions_prior", "embed_in_frame", "gap_cost", "GapBlockIndex", "ScoreMatrix",
     "IslandProfile",
 ]
@@ -727,6 +728,30 @@ def count_batch(queries, refs, thresholds, matrix=None, gap_open=None, gap_exten
     return reduction(q, r, thresholds, alphabet, matrix, go, ge, cube, width, threads, exclude_exact,
                                  _position_weights(position_weights_by_length, q, r),
                                  *_group_options(query_group_ids, reference_group_ids, group_distances, q, r),
+                            *_sequence_weights(query_position_weights, reference_position_weights, position_weights_by_length, q, r))
+
+
+def group_audit_batch(queries, refs, thresholds, matrix=None, gap_open=None, gap_extend=1,
+               gap_prior=None, alphabet="aa", threads=0, exclude_exact=False,
+               position_weights_by_length=None,
+               query_group_ids=None, reference_group_ids=None, group_distances=None,
+               query_position_weights=None, reference_position_weights=None):
+    """Stream component-ball count, full-score count and bounded nearest in one batch.
+
+    Geometry/offset options match ball_batch. Component excludes the nonnegative
+    group offset; full score includes it. For each query threshold, return three
+    lists: component count, full count and minimum full score among component hits.
+    Empty component balls have nearest=-1. Duplicate references count separately;
+    full encoded exact puncturing is identical. O(Q) output; no sparse hit objects.
+    """
+    q, r = list(queries), list(refs)
+    thresholds = [_batch_integer(v, "threshold", -(1 << 31)) for v in thresholds]
+    if len(thresholds) != len(q):
+        raise ValueError("group audit thresholds must have one value per query")
+    go, ge, cube, width, threads = _batch_options((q, r), matrix, gap_open, gap_extend, gap_prior, threads)
+    return _gapblock_group_audit_batch(q, r, thresholds, alphabet, matrix, go, ge, cube, width,
+                               threads, exclude_exact, _position_weights(position_weights_by_length, q, r),
+                            *_group_options(query_group_ids, reference_group_ids, group_distances, q, r),
                             *_sequence_weights(query_position_weights, reference_position_weights, position_weights_by_length, q, r))
 
 

@@ -414,3 +414,19 @@ Supply both axes and do not combine them with ``position_weights_by_length``.
 ``paired_sum_count_batch`` accepts separate ``_alpha`` and ``_beta`` versions of
 these arguments. Each lane retains its own coordinates; distances sum against the
 same linked reference row. These are geometry options, not confidence estimates.
+
+Streaming component and group audit
+-----------------------------------
+
+``group_audit_batch`` accepts the same geometry as ``ball_batch``, with one
+threshold per query. It returns three lists: the component count before group
+offsets, the full-score count, and the minimum full score within the component
+ball. An empty component ball has minimum ``-1``; duplicate references count
+separately and encoded exact exclusion is preserved.
+
+If the component penalty is c and the nonnegative group offset is g, every
+full-score hit c+g <= t is also a component hit c <= t. The reduction visits
+references once with shared encoded inputs and per-worker alignment scratch;
+output occupies O(Q) storage without sparse hit objects or a dense matrix.
+The bounded minimum is not an unbounded nearest result. No statistical model
+or cutoff recommendation is introduced.
