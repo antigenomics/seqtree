@@ -125,6 +125,11 @@ public:
     std::vector<std::vector<Hit>> search_batch(const std::vector<std::string>& queries,
                                                const SearchParams&, int threads = 0) const;
 
+    // Exact edit-count bins 0..max_total_edits; one reusable hit buffer per worker.
+    std::vector<std::vector<uint64_t>> edit_histogram_batch(
+        const std::vector<std::string>& queries, const SearchParams&,
+        int threads = 0, bool exclude_exact = false) const;
+
     // Per-query count of seqtm collisions: how often a reference was re-reached via a
     // different edit path during branch-and-bound (0 for the seqtrie engine / Hamming).
     std::vector<uint64_t> collisions_batch(const std::vector<std::string>& queries,

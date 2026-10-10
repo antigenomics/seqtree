@@ -18,6 +18,15 @@ payload.
    :members:
    :undoc-members:
 
+For edit-count summaries, ``Index.edit_histogram_batch(queries, params, threads=1)``
+returns one list of exact counts per query, indexed by total substitutions,
+insertions and deletions. Set ``params.max_total_edits`` explicitly to a positive
+value; bins run from zero through that cap. Reference duplicates count separately.
+``exclude_exact=True`` leaves bin zero empty. This requires ``seqtm`` or ``auto``
+and all-hit mode; the search uses one reusable native hit buffer per worker rather
+than materializing all hits in Python. Counts are not cumulative; sum the bins up
+to a radius to obtain its ball count.
+
 .. autoclass:: SearchParams
    :members:
    :undoc-members:
