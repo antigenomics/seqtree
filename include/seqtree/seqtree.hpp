@@ -265,6 +265,14 @@ std::vector<std::vector<uint64_t>> gapblock_count_batch(const std::vector<std::s
         const std::vector<int32_t>& query_groups = {},
         const std::vector<int32_t>& reference_groups = {},
         const std::vector<std::vector<int32_t>>& group_distances = {});
+std::pair<std::vector<std::vector<uint64_t>>, std::vector<std::vector<uint64_t>>> gapblock_count_mass_batch(const std::vector<std::string>& queries,
+        const std::vector<std::string>& refs, const std::vector<std::vector<int32_t>>& thresholds,
+        Alphabet alphabet, const SubstitutionMatrix* matrix, int32_t go, int32_t ge,
+        const std::vector<int32_t>& prior, uint32_t width, int threads, bool exclude_exact,
+        const std::vector<std::vector<int32_t>>& weights = {},
+        const std::vector<int32_t>& query_groups = {},
+        const std::vector<int32_t>& reference_groups = {},
+        const std::vector<std::vector<int32_t>>& group_distances = {});
 std::vector<std::vector<uint64_t>> gapblock_paired_count_batch(
         const std::vector<std::string>& qa, const std::vector<std::string>& qb,
         const std::vector<std::string>& ra, const std::vector<std::string>& rb,

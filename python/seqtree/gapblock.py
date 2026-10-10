@@ -44,6 +44,7 @@ from ._core import Index, ScoreMatrix, SearchParams, SubstitutionMatrix
 from ._core import gapblock_matrix as _gapblock_matrix
 from ._core import gapblock_topk_batch as _gapblock_topk_batch
 from ._core import gapblock_count_batch as _gapblock_count_batch
+from ._core import gapblock_count_mass_batch as _gapblock_count_mass_batch
 from ._core import gapblock_ball_batch as _gapblock_ball_batch
 from ._core import gapblock_paired_topk_batch as _gapblock_paired_topk_batch
 from ._core import gapblock_paired_count_batch as _gapblock_paired_count_batch
@@ -675,7 +676,7 @@ def topk_batch(queries, refs, k=10, matrix=None, gap_open=None, gap_extend=1,
 
 def count_batch(queries, refs, thresholds, matrix=None, gap_open=None, gap_extend=1,
                 gap_prior=None, alphabet="aa", threads=0, exclude_exact=False, position_weights_by_length=None,
-                query_group_ids=None, reference_group_ids=None, group_distances=None):
+                query_group_ids=None, reference_group_ids=None, group_distances=None, linear_mass=False):
     """Count all reference scores <= each query's requested integer thresholds.
 
     Optional positional weights and additive group distances match :func:`score_matrix`.
@@ -685,11 +686,20 @@ def count_batch(queries, refs, thresholds, matrix=None, gap_open=None, gap_exten
     score ties. Negative cutoffs count zero. Same scorer/exclusion as
     :func:`topk_batch`; one native batch with O(Q*S) output, no dense score matrix.
     Worker scratch is O(max_sequence_length + maximum_threshold_row_length).
+    With ``linear_mass=True``, return ``(counts, masses)`` from the same traversal;
+    each mass is ``sum(max(0, threshold - score))`` over nonexcluded references.
+    Boundary ties still count but contribute zero mass. Scores are nonnegative;
+    integer mass is uint64, with overflow bounds checked before workers. Negative
+    and zero thresholds have zero mass. No normalization or statistical model is
+    applied; default counts and paired APIs remain unchanged.
     """
+    if not isinstance(linear_mass, bool):
+        raise TypeError("linear_mass must be a boolean")
     q, r = list(queries), list(refs)
     thresholds = _threshold_rows(thresholds, len(q))
     go, ge, cube, width, threads = _batch_options((q, r), matrix, gap_open, gap_extend, gap_prior, threads)
-    return _gapblock_count_batch(q, r, thresholds, alphabet, matrix, go, ge, cube, width, threads, exclude_exact,
+    reduction = _gapblock_count_mass_batch if linear_mass else _gapblock_count_batch
+    return reduction(q, r, thresholds, alphabet, matrix, go, ge, cube, width, threads, exclude_exact,
                                  _position_weights(position_weights_by_length, q, r),
                                  *_group_options(query_group_ids, reference_group_ids, group_distances, q, r))
 

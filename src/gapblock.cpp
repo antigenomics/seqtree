@@ -236,12 +236,23 @@ std::vector<std::vector<Ranked>> ranked(const GapInput& a, const GapInput* b, ui
 
 std::vector<std::vector<uint64_t>> counted(const GapInput& a, const GapInput* b,
                   const std::vector<std::vector<int32_t>>& thresholds, int32_t go, int32_t ge,
-                  const std::vector<int32_t>& prior, int threads, bool exclude_exact) {
+                  const std::vector<int32_t>& prior, int threads, bool exclude_exact,
+                  std::vector<std::vector<uint64_t>>* masses = nullptr) {
     if (thresholds.size() != a.q.size())
         throw std::invalid_argument("thresholds must have one row per query");
     if (b && (b->q.size() != a.q.size() || b->r.size() != a.r.size()))
         throw std::invalid_argument("paired query/reference axes must agree");
     std::vector<std::vector<uint64_t>> out(a.q.size());
+    if (masses) {
+        masses->resize(a.q.size());
+        if (std::any_of(a.pen.begin(), a.pen.end(), [](int32_t cost) { return cost < 0; }))
+            throw std::invalid_argument("linear mass requires nonnegative scores");
+        // Every score admitted to a row is <= its largest positive threshold.
+        // Bound both score sums and threshold*count before workers start.
+        for (const auto& row : thresholds) for (auto threshold : row)
+            if (threshold > 0 && a.r.size() > std::numeric_limits<uint64_t>::max() / uint64_t(threshold))
+                throw std::overflow_error("gapblock linear mass exceeds uint64");
+    }
     const auto longest = b ? std::max(a.longest, b->longest) : a.longest;
     parallel_for(a.q.size(), threads, [&] { return std::vector<int32_t>(size_t(longest) + 1); },
         [&](size_t i, std::vector<int32_t>& scratch) {
@@ -250,7 +261,9 @@ std::vector<std::vector<uint64_t>> counted(const GapInput& a, const GapInput* b,
             for (size_t t = 0; t < thresholds[i].size(); ++t) sorted.emplace_back(thresholds[i][t], t);
             std::sort(sorted.begin(), sorted.end());
             std::vector<uint64_t> bins(sorted.size());
+            std::vector<uint64_t> score_bins(masses ? sorted.size() : 0);
             out[i].resize(sorted.size());
+            if (masses) (*masses)[i].resize(sorted.size());
             if (sorted.empty()) return;
             for (size_t j = 0; j < a.r.size(); ++j) {
                 if (exclude_exact && a.q[i] == a.r[j] && (!b || b->q[i] == b->r[j])) continue;
@@ -259,12 +272,20 @@ std::vector<std::vector<uint64_t>> counted(const GapInput& a, const GapInput* b,
                 if (b) score = std::max(score, score_cell(*b, i, j, go, ge, prior, scratch.data()));
                 const auto pos = std::lower_bound(sorted.begin(), sorted.end(), score,
                     [](const auto& threshold, int32_t value) { return threshold.first < value; });
-                if (pos != sorted.end()) ++bins[size_t(pos - sorted.begin())];
+                if (pos != sorted.end()) {
+                    const auto bin = size_t(pos - sorted.begin());
+                    ++bins[bin];
+                    if (masses) score_bins[bin] += uint64_t(score);
+                }
             }
-            uint64_t cumulative = 0;
+            uint64_t cumulative = 0, score_sum = 0;
             for (size_t t = 0; t < sorted.size(); ++t) {
                 cumulative += bins[t];
                 out[i][sorted[t].second] = cumulative;
+                if (masses) {
+                    score_sum += score_bins[t];
+                    (*masses)[i][sorted[t].second] = uint64_t(std::max(sorted[t].first, 0)) * cumulative - score_sum;
+                }
             }
         });
     return out;
@@ -352,6 +373,19 @@ std::vector<std::vector<uint64_t>> gapblock_count_batch(const std::vector<std::s
         const std::vector<std::vector<int32_t>>& group_distances) {
     const auto a = prepare(queries, refs, alphabet, matrix, go, ge, prior, width, threads, weights, query_groups, reference_groups, group_distances);
     return counted(a, nullptr, thresholds, go, ge, prior, threads, exclude_exact);
+}
+
+std::pair<std::vector<std::vector<uint64_t>>, std::vector<std::vector<uint64_t>>> gapblock_count_mass_batch(const std::vector<std::string>& queries,
+        const std::vector<std::string>& refs, const std::vector<std::vector<int32_t>>& thresholds,
+        Alphabet alphabet, const SubstitutionMatrix* matrix, int32_t go, int32_t ge,
+        const std::vector<int32_t>& prior, uint32_t width, int threads, bool exclude_exact,
+        const std::vector<std::vector<int32_t>>& weights,
+        const std::vector<int32_t>& query_groups, const std::vector<int32_t>& reference_groups,
+        const std::vector<std::vector<int32_t>>& group_distances) {
+    const auto a = prepare(queries, refs, alphabet, matrix, go, ge, prior, width, threads, weights, query_groups, reference_groups, group_distances);
+    std::vector<std::vector<uint64_t>> masses;
+    auto counts = counted(a, nullptr, thresholds, go, ge, prior, threads, exclude_exact, &masses);
+    return {std::move(counts), std::move(masses)};
 }
 
 std::vector<std::vector<uint64_t>> gapblock_paired_count_batch(
