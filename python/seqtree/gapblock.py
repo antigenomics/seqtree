@@ -44,11 +44,12 @@ from ._core import Index, ScoreMatrix, SearchParams, SubstitutionMatrix
 from ._core import gapblock_matrix as _gapblock_matrix
 from ._core import gapblock_topk_batch as _gapblock_topk_batch
 from ._core import gapblock_count_batch as _gapblock_count_batch
+from ._core import gapblock_ball_batch as _gapblock_ball_batch
 from ._core import gapblock_paired_topk_batch as _gapblock_paired_topk_batch
 from ._core import gapblock_paired_count_batch as _gapblock_paired_count_batch
 
 __all__ = [
-    "gapblock_score", "score_matrix", "topk_batch", "count_batch", "paired_topk_batch", "paired_count_batch", "deletion_variants", "central_prior", "profile_prior",
+    "gapblock_score", "score_matrix", "ball_batch", "topk_batch", "count_batch", "paired_topk_batch", "paired_count_batch", "deletion_variants", "central_prior", "profile_prior",
     "frame_prior", "positions_prior", "embed_in_frame", "gap_cost", "GapBlockIndex", "ScoreMatrix",
     "IslandProfile",
 ]
@@ -522,6 +523,7 @@ def score_matrix(
     gap_prior: GapPrior | None = None,
     alphabet: str = "aa",
     threads: int = 0,
+    position_weights_by_length=None,
 ) -> ScoreMatrix:
     """Gap-block penalty of every query against every reference, in C++ with the GIL released.
 
@@ -533,6 +535,9 @@ def score_matrix(
     Args:
         queries: Query sequences (the matrix rows).
         refs: Reference sequences (the matrix columns).
+        position_weights_by_length: Optional mapping of full sequence lengths to nonnegative
+            integer weights. Weights index the longer sequence; both axes must be covered.
+            None or an empty mapping preserves unweighted defaults.
         matrix: Substitution penalties; ``None`` means unit cost.
         gap_open: Block-opening cost. Defaults to ``2 * matrix.scale()``. See the module note:
             leaving this at 1 with a real matrix makes gaps ~14x cheaper than substitutions.
@@ -565,7 +570,8 @@ def score_matrix(
         raise ValueError("gap_open and gap_extend must be >= 0")
     width = max((len(s) for s in q + r), default=0)
     cube = _prior_cube(gap_prior, width) if gap_prior is not None else []
-    return _gapblock_matrix(q, r, alphabet, matrix, gap_open, gap_extend, cube, width, threads)
+    return _gapblock_matrix(q, r, alphabet, matrix, gap_open, gap_extend, cube, width, threads,
+                            _position_weights(position_weights_by_length, q, r))
 
 
 def _batch_integer(value, name, lower=0, upper=(1 << 31) - 1):
@@ -588,6 +594,28 @@ def _batch_options(axes, matrix, gap_open, gap_extend, gap_prior, threads):
     width = max((len(s) for axis in axes for s in axis), default=0)
     cube = _prior_cube(gap_prior, width) if gap_prior is not None else []
     return go, ge, cube, width, threads
+
+
+def _position_weights(weights, *axes):
+    """Validated integer tables in the longer-junction frame; never round/truncate."""
+    if weights is None:
+        return []
+    if not hasattr(weights, "items"):
+        raise ValueError("position_weights_by_length must map lengths to integer weights")
+    tables = {}
+    for length, row in weights.items():
+        length = _batch_integer(length, "position frame", upper=65535)
+        row = list(row)
+        if len(row) != length:
+            raise ValueError("positional weight length must match its frame")
+        tables[length] = [_batch_integer(w, "position weight") for w in row]
+    if not tables:
+        return []
+    for axis in axes:
+        for sequence in axis:
+            if len(sequence) and len(sequence) not in tables:
+                raise ValueError("missing positional weights for an input frame")
+    return [tables.get(length, []) for length in range(max(tables) + 1)]
 
 
 def _threshold_rows(thresholds, n_queries):
@@ -622,9 +650,10 @@ def topk_batch(queries, refs, k=10, matrix=None, gap_open=None, gap_extend=1,
 
 
 def count_batch(queries, refs, thresholds, matrix=None, gap_open=None, gap_extend=1,
-                gap_prior=None, alphabet="aa", threads=0, exclude_exact=False):
+                gap_prior=None, alphabet="aa", threads=0, exclude_exact=False, position_weights_by_length=None):
     """Count all reference scores <= each query's requested integer thresholds.
 
+    Optional positional weights index the longer full sequence, exactly as in score_matrix.
     ``thresholds`` has one row per query; rows may be empty, unsorted or contain
     duplicates. Return integer counts in their original order, including ALL
     score ties. Negative cutoffs count zero. Same scorer/exclusion as
@@ -634,7 +663,26 @@ def count_batch(queries, refs, thresholds, matrix=None, gap_open=None, gap_exten
     q, r = list(queries), list(refs)
     thresholds = _threshold_rows(thresholds, len(q))
     go, ge, cube, width, threads = _batch_options((q, r), matrix, gap_open, gap_extend, gap_prior, threads)
-    return _gapblock_count_batch(q, r, thresholds, alphabet, matrix, go, ge, cube, width, threads, exclude_exact)
+    return _gapblock_count_batch(q, r, thresholds, alphabet, matrix, go, ge, cube, width, threads, exclude_exact,
+                                 _position_weights(position_weights_by_length, q, r))
+
+
+def ball_batch(queries, refs, thresholds, matrix=None, gap_open=None, gap_extend=1,
+               gap_prior=None, alphabet="aa", threads=0, exclude_exact=False,
+               position_weights_by_length=None):
+    """Exhaustive bounded ball rows, reference order, unset edit fields; no Q*N matrix.
+
+    One integer cutoff per query. Negative cutoffs yield empty rows. Optional integer
+    positional weights index the longer full sequence, symmetrically, at every length.
+    This reduces output memory; it is not a trie-based candidate filter.
+    """
+    q, r = list(queries), list(refs)
+    thresholds = [_batch_integer(v, "threshold", -(1 << 31)) for v in thresholds]
+    if len(thresholds) != len(q):
+        raise ValueError("ball thresholds must have one value per query")
+    go, ge, cube, width, threads = _batch_options((q, r), matrix, gap_open, gap_extend, gap_prior, threads)
+    return _gapblock_ball_batch(q, r, thresholds, alphabet, matrix, go, ge, cube, width,
+                               threads, exclude_exact, _position_weights(position_weights_by_length, q, r))
 
 
 def paired_topk_batch(queries_a, queries_b, refs_a, refs_b, k=10, matrix=None,

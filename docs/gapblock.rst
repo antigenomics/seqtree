@@ -355,3 +355,24 @@ statistical model or calibration.
 
 ``Index.ref_seqs()`` retrieves all stored strings in reference-ID order through
 one native call, preserving duplicate rows.
+
+Positional weights in bounded batches
+-------------------------------------
+
+``score_matrix``, ``count_batch`` and ``ball_batch`` accept
+``position_weights_by_length``: a mapping from full sequence length to a vector
+of nonnegative integer weights of that width. Supply every input length.
+The longer sequence supplies the frame for each pair; prefix positions use their
+original weights and the shifted suffix uses the corresponding longer-frame
+weights. Equal-length scoring is weighted Hamming scoring. This pairwise frame
+does not imply a consistent embedding of a whole collection. Gap charges and
+position priors remain explicit and must use the same units as the weighted
+substitution penalties. Invalid widths, fractional weights and possible int32
+overflow are rejected. Omitting the mapping preserves ordinary scoring.
+
+``ball_batch`` takes one integer cutoff per query and returns all accepted
+reference rows, including ties, in reference order. Exact exclusion and duplicate
+rows follow ``count_batch``. It avoids a dense score matrix but still evaluates
+every reference; accepted output can itself be large. Positional weights are
+currently unavailable in top-k and paired reducers. These operations supply
+geometry, without a statistical calibration or a retrieval speed guarantee.
