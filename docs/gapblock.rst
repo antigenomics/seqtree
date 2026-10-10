@@ -400,3 +400,17 @@ or offset, including when a matching junction has a positive group penalty.
 Omitting all three options preserves the existing scorer. Group offsets are not
 exposed by top-k or paired reducers; the paired maximum-score contract is
 unchanged. These additions supply geometry, not statistical calibration.
+
+Per-input positional geometry
+-----------------------------
+
+``score_matrix``, ``ball_batch`` and ``count_batch`` accept
+``query_position_weights`` and ``reference_position_weights``: nonnegative integer
+rows matching each full input sequence. Each aligned substitution uses the larger
+of its query and reference weights. This rule is symmetric when the substitution
+matrix is symmetric; gap costs and exact identity exclusion remain unchanged.
+Supply both axes and do not combine them with ``position_weights_by_length``.
+
+``paired_sum_count_batch`` accepts separate ``_alpha`` and ``_beta`` versions of
+these arguments. Each lane retains its own coordinates; distances sum against the
+same linked reference row. These are geometry options, not confidence estimates.
