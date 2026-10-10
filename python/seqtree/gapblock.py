@@ -527,6 +527,7 @@ def score_matrix(
     threads: int = 0,
     position_weights_by_length=None,
     query_group_ids=None, reference_group_ids=None, group_distances=None,
+    query_position_weights=None, reference_position_weights=None,
 ) -> ScoreMatrix:
     """Gap-block penalty of every query against every reference, in C++ with the GIL released.
 
@@ -541,6 +542,11 @@ def score_matrix(
         position_weights_by_length: Optional mapping of full sequence lengths to nonnegative
             integer weights. Weights index the longer sequence; both axes must be covered.
             None or an empty mapping preserves unweighted defaults.
+        query_position_weights: Optional nonnegative integer rows, one per query and residue.
+            Supply with reference_position_weights; incompatible with length profiles.
+            Substitutions use max(query_weight, reference_weight) at aligned coordinates.
+            Gap costs remain unchanged.
+        reference_position_weights: Per-reference rows with the same contract.
         query_group_ids: Optional integer IDs, one per query; supply all group options together.
         reference_group_ids: Optional integer IDs, one per reference.
         group_distances: Nonempty rectangular nonnegative integer penalty table.
@@ -579,7 +585,8 @@ def score_matrix(
     cube = _prior_cube(gap_prior, width) if gap_prior is not None else []
     return _gapblock_matrix(q, r, alphabet, matrix, gap_open, gap_extend, cube, width, threads,
                             _position_weights(position_weights_by_length, q, r),
-                            *_group_options(query_group_ids, reference_group_ids, group_distances, q, r))
+                            *_group_options(query_group_ids, reference_group_ids, group_distances, q, r),
+                            *_sequence_weights(query_position_weights, reference_position_weights, position_weights_by_length, q, r))
 
 
 def _batch_integer(value, name, lower=0, upper=(1 << 31) - 1):
@@ -644,6 +651,22 @@ def _position_weights(weights, *axes):
     return [tables.get(length, []) for length in range(max(tables) + 1)]
 
 
+def _sequence_weights(query_weights, reference_weights, by_length, queries, refs):
+    """Integer full-coordinate weights; aligned substitutions use the larger weight."""
+    if query_weights is None and reference_weights is None:
+        return [], []
+    if query_weights is None or reference_weights is None:
+        raise ValueError("both query and reference positional weights are required")
+    if by_length:
+        raise ValueError("length and per-input weights cannot be combined")
+    def validate(rows, axis):
+        rows = [list(row) for row in rows]
+        if len(rows) != len(axis) or any(len(row) != len(seq) for row, seq in zip(rows, axis)):
+            raise ValueError("per-input weights must match their sequence axis and lengths")
+        return [[_batch_integer(value, "position weight") for value in row] for row in rows]
+    return validate(query_weights, queries), validate(reference_weights, refs)
+
+
 def _threshold_rows(thresholds, n_queries):
     rows = [list(row) for row in thresholds]
     if len(rows) != n_queries:
@@ -677,7 +700,8 @@ def topk_batch(queries, refs, k=10, matrix=None, gap_open=None, gap_extend=1,
 
 def count_batch(queries, refs, thresholds, matrix=None, gap_open=None, gap_extend=1,
                 gap_prior=None, alphabet="aa", threads=0, exclude_exact=False, position_weights_by_length=None,
-                query_group_ids=None, reference_group_ids=None, group_distances=None, linear_mass=False):
+                query_group_ids=None, reference_group_ids=None, group_distances=None, linear_mass=False,
+                query_position_weights=None, reference_position_weights=None):
     """Count all reference scores <= each query's requested integer thresholds.
 
     Optional positional weights and additive group distances match :func:`score_matrix`.
@@ -702,13 +726,15 @@ def count_batch(queries, refs, thresholds, matrix=None, gap_open=None, gap_exten
     reduction = _gapblock_count_mass_batch if linear_mass else _gapblock_count_batch
     return reduction(q, r, thresholds, alphabet, matrix, go, ge, cube, width, threads, exclude_exact,
                                  _position_weights(position_weights_by_length, q, r),
-                                 *_group_options(query_group_ids, reference_group_ids, group_distances, q, r))
+                                 *_group_options(query_group_ids, reference_group_ids, group_distances, q, r),
+                            *_sequence_weights(query_position_weights, reference_position_weights, position_weights_by_length, q, r))
 
 
 def ball_batch(queries, refs, thresholds, matrix=None, gap_open=None, gap_extend=1,
                gap_prior=None, alphabet="aa", threads=0, exclude_exact=False,
                position_weights_by_length=None,
-               query_group_ids=None, reference_group_ids=None, group_distances=None):
+               query_group_ids=None, reference_group_ids=None, group_distances=None,
+               query_position_weights=None, reference_position_weights=None):
     """Exhaustive bounded ball rows, reference order, unset edit fields; no Q*N matrix.
 
     One integer cutoff per query. Negative cutoffs yield empty rows. Optional integer
@@ -724,7 +750,8 @@ def ball_batch(queries, refs, thresholds, matrix=None, gap_open=None, gap_extend
     go, ge, cube, width, threads = _batch_options((q, r), matrix, gap_open, gap_extend, gap_prior, threads)
     return _gapblock_ball_batch(q, r, thresholds, alphabet, matrix, go, ge, cube, width,
                                threads, exclude_exact, _position_weights(position_weights_by_length, q, r),
-                            *_group_options(query_group_ids, reference_group_ids, group_distances, q, r))
+                            *_group_options(query_group_ids, reference_group_ids, group_distances, q, r),
+                            *_sequence_weights(query_position_weights, reference_position_weights, position_weights_by_length, q, r))
 
 
 def paired_topk_batch(queries_a, queries_b, refs_a, refs_b, k=10, matrix=None,
@@ -769,7 +796,9 @@ def paired_sum_count_batch(queries_a, queries_b, refs_a, refs_b, thresholds, mat
                            position_weights_by_length_alpha=None, position_weights_by_length_beta=None,
                            query_group_ids_alpha=None, query_group_ids_beta=None,
                            reference_group_ids_alpha=None, reference_group_ids_beta=None,
-                           group_distances_alpha=None, group_distances_beta=None):
+                           group_distances_alpha=None, group_distances_beta=None,
+                           query_position_weights_alpha=None, query_position_weights_beta=None,
+                           reference_position_weights_alpha=None, reference_position_weights_beta=None):
     """Return (counts, linear masses) for linked rows under summed lane distances.
 
     Shared matrix/gap costs/prior and separate full-coordinate lane weights and
@@ -788,11 +817,14 @@ def paired_sum_count_batch(queries_a, queries_b, refs_a, refs_b, thresholds, mat
     go, ge, cube, width, threads = _batch_options((qa, qb, ra, rb), matrix, gap_open, gap_extend, gap_prior, threads)
     ag = _group_options(query_group_ids_alpha, reference_group_ids_alpha, group_distances_alpha, qa, ra)
     bg = _group_options(query_group_ids_beta, reference_group_ids_beta, group_distances_beta, qb, rb)
+    aw = _sequence_weights(query_position_weights_alpha, reference_position_weights_alpha, position_weights_by_length_alpha, qa, ra)
+    bw = _sequence_weights(query_position_weights_beta, reference_position_weights_beta, position_weights_by_length_beta, qb, rb)
     return _gapblock_paired_sum_count_batch(qa, qb, ra, rb, thresholds, alphabet, matrix, go, ge,
         cube, width, threads, exclude_exact,
         _position_weights(position_weights_by_length_alpha, qa, ra),
         _position_weights(position_weights_by_length_beta, qb, rb),
-        ag[0], bg[0], ag[1], bg[1], ag[2], bg[2])
+        ag[0], bg[0], ag[1], bg[1], ag[2], bg[2],
+        aw[0], bw[0], aw[1], bw[1])
 
 
 class GapBlockIndex:

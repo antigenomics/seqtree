@@ -38,7 +38,8 @@ std::vector<int32_t> pen_table(const SubstitutionMatrix* m, uint8_t A) {
 // contractually zero -- hence the early return, which also keeps s(q, q) == 0.
 inline int32_t cell(const uint8_t* q, uint32_t m, const uint8_t* r, uint32_t n,
                     const int32_t* pen, uint8_t A, int32_t gap_open, int32_t gap_extend,
-                    const int32_t* prior_row, int32_t* suf, const int32_t* weights = nullptr) {
+                    const int32_t* prior_row, int32_t* suf, const int32_t* weights = nullptr,
+                    const int32_t* qw = nullptr, const int32_t* rw = nullptr) {
     const uint32_t L = std::min(m, n);
     const uint32_t d = (m > n ? m - n : n - m);
     const bool q_longer = m >= n;
@@ -47,7 +48,7 @@ inline int32_t cell(const uint8_t* q, uint32_t m, const uint8_t* r, uint32_t n,
     for (uint32_t j = L; j-- > 0;) {
         const uint8_t a = q_longer ? q[j + d] : q[j];
         const uint8_t b = q_longer ? r[j] : r[j + d];
-        suf[j] = suf[j + 1] + pen[size_t(a) * A + b] * (weights ? weights[j + d] : 1);
+        suf[j] = suf[j + 1] + pen[size_t(a) * A + b] * (qw && rw ? std::max(qw[j + (q_longer ? d : 0)], rw[j + (q_longer ? 0 : d)]) : (weights ? weights[j + d] : 1));
     }
     if (d == 0) return suf[0];
 
@@ -56,7 +57,7 @@ inline int32_t cell(const uint8_t* q, uint32_t m, const uint8_t* r, uint32_t n,
     for (uint32_t i = 0; i <= L; ++i) {
         const int32_t cand = pre + suf[i] + (prior_row ? prior_row[i] : 0);
         if (cand < best) best = cand;
-        if (i < L) pre += pen[size_t(q[i]) * A + r[i]] * (weights ? weights[i] : 1);
+        if (i < L) pre += pen[size_t(q[i]) * A + r[i]] * (qw && rw ? std::max(qw[i], rw[i]) : (weights ? weights[i] : 1));
     }
     return best + gap_open + int32_t(d - 1) * gap_extend;
 }
@@ -66,7 +67,7 @@ inline int32_t cell(const uint8_t* q, uint32_t m, const uint8_t* r, uint32_t n,
 struct GapInput {
     std::vector<std::vector<uint8_t>> q, r;
     std::vector<int32_t> pen;
-    std::vector<std::vector<int32_t>> weights;
+    std::vector<std::vector<int32_t>> weights, query_weights, reference_weights;
     std::vector<int32_t> query_groups, reference_groups;
     std::vector<std::vector<int32_t>> group_distances;
     uint32_t longest = 0;
@@ -80,7 +81,9 @@ GapInput prepare(const std::vector<std::string>& queries, const std::vector<std:
                  const std::vector<std::vector<int32_t>>& weights = {},
                  const std::vector<int32_t>& query_groups = {},
                  const std::vector<int32_t>& reference_groups = {},
-                 const std::vector<std::vector<int32_t>>& group_distances = {}) {
+                 const std::vector<std::vector<int32_t>>& group_distances = {},
+                 const std::vector<std::vector<int32_t>>& query_weights = {},
+                 const std::vector<std::vector<int32_t>>& reference_weights = {}) {
     if (go < 0 || ge < 0 || threads < 0)
         throw std::invalid_argument("gap costs and threads must be >= 0");
     if (refs.size() > std::numeric_limits<uint32_t>::max())
@@ -134,6 +137,26 @@ GapInput prepare(const std::vector<std::string>& queries, const std::vector<std:
                 throw std::invalid_argument("missing positional weights for an input frame");
         }
     }
+    if (!query_weights.empty() || !reference_weights.empty()) {
+        if (!weights.empty()) throw std::invalid_argument("length and per-input weights cannot be combined");
+        auto validate = [&](const auto& rows, const auto& axis) {
+            if (rows.size() != axis.size())
+                throw std::invalid_argument("per-input weight rows must match their sequence axis");
+            for (size_t i = 0; i < axis.size(); ++i) {
+                if (rows[i].size() != axis[i].size())
+                    throw std::invalid_argument("per-input weight length must match its sequence");
+                for (auto value : rows[i]) {
+                    if (value < 0) throw std::invalid_argument("positional weights must be nonnegative");
+                    largest_weight = std::max(largest_weight, value);
+                }
+            }
+        };
+        largest_weight = 0;
+        validate(query_weights, in.q);
+        validate(reference_weights, in.r);
+        in.query_weights = query_weights;
+        in.reference_weights = reference_weights;
+    }
     int32_t largest_offset = 0;
     if (!query_groups.empty() || !reference_groups.empty() || !group_distances.empty()) {
         if (query_groups.size() != queries.size() || reference_groups.size() != refs.size())
@@ -182,7 +205,9 @@ int32_t score_cell(const GapInput& in, size_t i, size_t j, int32_t go, int32_t g
     const uint32_t m = uint32_t(in.q[i].size()), n = uint32_t(in.r[j].size());
     const uint32_t M = std::max(m, n), d = m > n ? m - n : n - m;
     const int32_t* prow = prior.empty() ? nullptr : prior.data() + (size_t(M) * in.W1 + d) * in.W1;
-    return group_offset(in, i, j) + cell(in.q[i].data(), m, in.r[j].data(), n, in.pen.data(), in.A, go, ge, prow, scratch, in.weights.empty() || !M ? nullptr : in.weights[M].data());
+    return group_offset(in, i, j) + cell(in.q[i].data(), m, in.r[j].data(), n, in.pen.data(), in.A, go, ge, prow, scratch, in.weights.empty() || !M ? nullptr : in.weights[M].data(),
+        in.query_weights.empty() ? nullptr : in.query_weights[i].data(),
+        in.reference_weights.empty() ? nullptr : in.reference_weights[j].data());
 }
 
 struct Ranked {
@@ -309,8 +334,8 @@ std::vector<int32_t> gapblock_matrix(const std::vector<std::string>& queries,
         const std::vector<int32_t>& prior, uint32_t width, int threads,
         const std::vector<std::vector<int32_t>>& weights,
         const std::vector<int32_t>& query_groups, const std::vector<int32_t>& reference_groups,
-        const std::vector<std::vector<int32_t>>& group_distances) {
-    const auto in = prepare(queries, refs, alphabet, matrix, go, ge, prior, width, std::max(threads, 0), weights, query_groups, reference_groups, group_distances);
+        const std::vector<std::vector<int32_t>>& group_distances, const std::vector<std::vector<int32_t>>& query_weights, const std::vector<std::vector<int32_t>>& reference_weights) {
+    const auto in = prepare(queries, refs, alphabet, matrix, go, ge, prior, width, std::max(threads, 0), weights, query_groups, reference_groups, group_distances, query_weights, reference_weights);
     if (!refs.empty() && queries.size() > std::numeric_limits<size_t>::max() / refs.size())
         throw std::invalid_argument("gapblock matrix size overflows size_t");
     std::vector<int32_t> out(queries.size() * refs.size());
@@ -328,10 +353,10 @@ std::vector<std::vector<Hit>> gapblock_ball_batch(const std::vector<std::string>
         const std::vector<int32_t>& prior, uint32_t width, int threads, bool exclude_exact,
         const std::vector<std::vector<int32_t>>& weights,
         const std::vector<int32_t>& query_groups, const std::vector<int32_t>& reference_groups,
-        const std::vector<std::vector<int32_t>>& group_distances) {
+        const std::vector<std::vector<int32_t>>& group_distances, const std::vector<std::vector<int32_t>>& query_weights, const std::vector<std::vector<int32_t>>& reference_weights) {
     if (thresholds.size() != queries.size())
         throw std::invalid_argument("ball thresholds must have one value per query");
-    const auto in = prepare(queries, refs, alphabet, matrix, go, ge, prior, width, threads, weights, query_groups, reference_groups, group_distances);
+    const auto in = prepare(queries, refs, alphabet, matrix, go, ge, prior, width, threads, weights, query_groups, reference_groups, group_distances, query_weights, reference_weights);
     std::vector<std::vector<Hit>> out(queries.size());
     parallel_for(queries.size(), threads, [&] { return std::vector<int32_t>(size_t(in.longest) + 1); },
         [&](size_t i, std::vector<int32_t>& scratch) {
@@ -380,8 +405,8 @@ std::vector<std::vector<uint64_t>> gapblock_count_batch(const std::vector<std::s
         const std::vector<int32_t>& prior, uint32_t width, int threads, bool exclude_exact,
         const std::vector<std::vector<int32_t>>& weights,
         const std::vector<int32_t>& query_groups, const std::vector<int32_t>& reference_groups,
-        const std::vector<std::vector<int32_t>>& group_distances) {
-    const auto a = prepare(queries, refs, alphabet, matrix, go, ge, prior, width, threads, weights, query_groups, reference_groups, group_distances);
+        const std::vector<std::vector<int32_t>>& group_distances, const std::vector<std::vector<int32_t>>& query_weights, const std::vector<std::vector<int32_t>>& reference_weights) {
+    const auto a = prepare(queries, refs, alphabet, matrix, go, ge, prior, width, threads, weights, query_groups, reference_groups, group_distances, query_weights, reference_weights);
     return counted(a, nullptr, thresholds, go, ge, prior, threads, exclude_exact);
 }
 
@@ -391,8 +416,8 @@ std::pair<std::vector<std::vector<uint64_t>>, std::vector<std::vector<uint64_t>>
         const std::vector<int32_t>& prior, uint32_t width, int threads, bool exclude_exact,
         const std::vector<std::vector<int32_t>>& weights,
         const std::vector<int32_t>& query_groups, const std::vector<int32_t>& reference_groups,
-        const std::vector<std::vector<int32_t>>& group_distances) {
-    const auto a = prepare(queries, refs, alphabet, matrix, go, ge, prior, width, threads, weights, query_groups, reference_groups, group_distances);
+        const std::vector<std::vector<int32_t>>& group_distances, const std::vector<std::vector<int32_t>>& query_weights, const std::vector<std::vector<int32_t>>& reference_weights) {
+    const auto a = prepare(queries, refs, alphabet, matrix, go, ge, prior, width, threads, weights, query_groups, reference_groups, group_distances, query_weights, reference_weights);
     std::vector<std::vector<uint64_t>> masses;
     auto counts = counted(a, nullptr, thresholds, go, ge, prior, threads, exclude_exact, &masses);
     return {std::move(counts), std::move(masses)};
@@ -420,11 +445,15 @@ std::pair<std::vector<std::vector<uint64_t>>, std::vector<std::vector<uint64_t>>
         const std::vector<int32_t>& query_groups_alpha, const std::vector<int32_t>& query_groups_beta,
         const std::vector<int32_t>& reference_groups_alpha, const std::vector<int32_t>& reference_groups_beta,
         const std::vector<std::vector<int32_t>>& group_distances_alpha,
-        const std::vector<std::vector<int32_t>>& group_distances_beta) {
+        const std::vector<std::vector<int32_t>>& group_distances_beta,
+        const std::vector<std::vector<int32_t>>& query_weights_alpha,
+        const std::vector<std::vector<int32_t>>& query_weights_beta,
+        const std::vector<std::vector<int32_t>>& reference_weights_alpha,
+        const std::vector<std::vector<int32_t>>& reference_weights_beta) {
     const auto a = prepare(qa, ra, alphabet, matrix, go, ge, prior, width, threads,
-                           weights_alpha, query_groups_alpha, reference_groups_alpha, group_distances_alpha);
+                           weights_alpha, query_groups_alpha, reference_groups_alpha, group_distances_alpha, query_weights_alpha, reference_weights_alpha);
     const auto b = prepare(qb, rb, alphabet, matrix, go, ge, prior, width, threads,
-                           weights_beta, query_groups_beta, reference_groups_beta, group_distances_beta);
+                           weights_beta, query_groups_beta, reference_groups_beta, group_distances_beta, query_weights_beta, reference_weights_beta);
     std::vector<std::vector<uint64_t>> masses;
     auto counts = counted(a, &b, thresholds, go, ge, prior, threads, exclude_exact, &masses, true);
     return {std::move(counts), std::move(masses)};
