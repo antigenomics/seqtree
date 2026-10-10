@@ -17,7 +17,8 @@ def test_edit_histogram_matches_search():
                     bins[total] += 1
             expected.append(bins)
         assert index.edit_histogram_batch(queries, params, threads=1, exclude_exact=exclude) == expected
-        assert index.edit_histogram_batch(queries, params, threads=4, exclude_exact=exclude) == expected
+        for threads in (4, 0, -1):
+            assert index.edit_histogram_batch(queries, params, threads=threads, exclude_exact=exclude) == expected
     assert Index.build([]).edit_histogram_batch(['ACDE'], params, threads=1) == [[0, 0, 0]]
     assert index.edit_histogram_batch([], params, threads=1) == []
 

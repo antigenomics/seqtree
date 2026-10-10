@@ -680,7 +680,7 @@ NB_MODULE(_core, m) {
              nb::arg("exclude_exact") = false,
              "Exact reference counts by total n_subs+n_ins+n_dels, bins 0..max_total_edits. "
              "Requires explicit positive max_total_edits and uncapped seqtm/auto all-hit search. "
-             "Duplicates count separately; exclude_exact drops bin 0. Releases the GIL; "
+             "Duplicates count separately; exclude_exact retains bin 0 with count zero. threads<=0 uses hardware concurrency. Releases the GIL; "
              "one reusable hit buffer per worker, no all-query hit vectors.")
         .def("align", &py_align, nb::arg("ref_id"), nb::arg("query"), nb::arg("params"),
              "Compute a global alignment between ``query`` and a reference, on demand.")

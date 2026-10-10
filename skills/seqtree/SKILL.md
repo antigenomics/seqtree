@@ -33,6 +33,7 @@ Index.ref_seqs() -> list[str]                                  # one native call
 Index.search(query, params) -> list[Hit]                          # Hit(ref_id, score, n_subs, n_ins, n_dels)
 Index.search_top(query, params, k=1) -> list[Hit]
 Index.search_batch(queries, params, threads=0) -> list[list[Hit]] # releases the GIL
+Index.edit_histogram_batch(queries, params, threads=0, exclude_exact=False) -> list[list[int]]
 Index.align(ref_id, query, params) -> Alignment                   # true Gotoh affine, on demand
 Index.save(path) / Index.load(path)
 pairwise_batch(a, b, params, alphabet="aa", threads=0) -> list[list[Hit]]   # a-major
@@ -41,6 +42,11 @@ SearchParams(max_subs=0, max_ins=0, max_dels=0, max_total_edits=0, max_penalty=0
              matrix="", gap_open=1, gap_extend=1, engine="auto", mode="all")
 SearchParams.pos_matrix = PositionalMatrix | None
 ```
+
+`edit_histogram_batch` returns exact counts in bins 0..`max_total_edits`, not a CDF.
+Require an explicit positive total-edit cap, `seqtm`/`auto`, and uncapped all-hit mode.
+Duplicate references count separately; `exclude_exact=True` retains bin zero with
+count zero. The GIL is released; nonpositive `threads` uses hardware concurrency.
 
 **`pairwise_batch` is a bounded trie search, not an aligner.** It returns nothing outside
 `max_penalty`. The only affine aligner is `Index.align`.

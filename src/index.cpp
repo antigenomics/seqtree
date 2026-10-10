@@ -194,7 +194,6 @@ std::vector<std::vector<uint64_t>> Index::edit_histogram_batch(
         throw std::invalid_argument("edit histogram requires explicit positive max_total_edits");
     if (p.engine == Engine::SeqTrie || p.mode != Mode::AllHits || p.max_hits)
         throw std::invalid_argument("edit histogram requires uncapped seqtm/auto all-hit search");
-    if (threads < 0) throw std::invalid_argument("threads must be nonnegative");
     std::vector<std::vector<uint64_t>> out(queries.size(),
         std::vector<uint64_t>(size_t(p.max_total_edits) + 1));
     struct Local { Searcher s; std::vector<Hit> hits; };
