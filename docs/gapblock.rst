@@ -376,3 +376,27 @@ rows follow ``count_batch``. It avoids a dense score matrix but still evaluates
 every reference; accepted output can itself be large. Positional weights are
 currently unavailable in top-k and paired reducers. These operations supply
 geometry, without a statistical calibration or a retrieval speed guarantee.
+
+Additive group distances
+------------------------
+
+``score_matrix``, ``count_batch`` and ``ball_batch`` also accept optional
+``query_group_ids``, ``reference_group_ids`` and ``group_distances``. Supply all
+three together: one nonnegative integer ID per sequence on each axis, and a
+nonempty rectangular matrix of nonnegative integer penalties. The total pair
+score is the ordinary gapblock score plus
+``group_distances[query_group_ids[i]][reference_group_ids[j]]``. The table must
+use the same units as substitution, gap and position-prior penalties. Group IDs
+index rows on the query axis and columns on the reference axis. No symmetry or
+zero diagonal is imposed; callers wanting a distance must provide those
+properties themselves.
+
+Dimensions, IDs and possible int32 score overflow are checked before workers
+start. The small table and encoded group IDs are shared read-only, with no dense
+pair-offset allocation. Bounded reducers skip a pair when its group offset alone
+exceeds the requested radius, since all other penalties are nonnegative. Exact
+exclusion still punctures full encoded junction identity regardless of group ID
+or offset, including when a matching junction has a positive group penalty.
+Omitting all three options preserves the existing scorer. Group offsets are not
+exposed by top-k or paired reducers; the paired maximum-score contract is
+unchanged. These additions supply geometry, not statistical calibration.
