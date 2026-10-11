@@ -117,6 +117,14 @@ cutoff that achieves a target false-positive rate. See :doc:`evalue`.
 
 .. autofunction:: seqtree.evalue.evalue_result
 
+The same question for substring hits in a text, where counts are per distinct record
+rather than per offset and the ball is a mismatch radius rather than a penalty. The
+module docstring of :mod:`seqtree.text_evalue` explains both choices.
+
+.. autofunction:: text_evalues
+
+.. autofunction:: text_threshold_for_evalue
+
 Pairwise alignment (Needleman-Wunsch / Smith-Waterman)
 ------------------------------------------------------
 

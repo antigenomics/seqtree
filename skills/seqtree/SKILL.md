@@ -201,6 +201,32 @@ k in {3,4,5} x max_subs 0-3 x max_indels 1-2, 6,732 occurrences, zero missing an
 - **`max_hits` caps after the sort**, so the best hits survive, and always sets `truncated`.
 - Order is `(n_subs, ref_id, offset)`, stable across runs and thread counts.
 
+### Is a text hit real? — `text_evalues`
+
+```python
+proteome = seqtree.TextIndex.build(records, "aa", k=5)
+decoy    = seqtree.TextIndex.build(shuffled_records, "aa", k=5)
+for peptide, r in zip(peptides, seqtree.text_evalues(proteome, decoy, peptides, max_subs=2)):
+    if r["p_enrichment"] < 0.01:      # also n_target, n_control, E, p_any, rule_of_three
+        ...
+cutoffs = seqtree.text_threshold_for_evalue(proteome, decoy, peptides, max_subs=2,
+                                            e_target=0.05)   # per-query radius, -1 if unreachable
+```
+
+Same arithmetic as `evalues` (`evalue.evalue_result`); two things differ and both are forced
+by the derivation.
+
+- **Counts are per distinct record, not per offset.** One query hits a repeat at many
+  overlapping offsets and those events are dependent; counting them separately
+  over-disperses the Poisson. `N` and `M` are `num_refs`.
+- **The ball is `max_subs`, never `TextResult.score`** — that score is a *similarity*
+  (`0` exact, more negative worse), the opposite sign to the penalty `thetas_from_scores`
+  inverts. `n_subs` is non-negative, integer and monotone, so it nests.
+- **A truncated search raises.** A `max_hits`-capped count is a floor, so its E-value is wrong.
+- **There is no `load_control` for texts.** The background must be composition- and
+  length-matched (shuffled/reversed target, or a comparable proteome); nothing in the
+  library can check that, so it stays the caller's explicit choice.
+
 ## Gap-block alignment — `seqtree.gapblock`
 
 A V(D)J junction's length variation is **one** contiguous indel event, so restrict alignment to

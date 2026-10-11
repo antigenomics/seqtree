@@ -12,7 +12,8 @@ query is short and the reference is long and has no length of its own:
     length, exact answer.
 
 This is peptide-to-proteome mapping. It is not homology search: no scoring matrix in the
-predicate, no E-value, no local alignment.
+predicate, no local alignment. Significance is a separate layer:
+:func:`seqtree.text_evalues` calibrates a hit against a background text.
 
 Why not ``Index``
 -----------------
