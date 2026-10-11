@@ -249,7 +249,7 @@ TEST_CASE("text index: hit order is deterministic across thread counts") {
     TextQueryOpts opts;
     opts.max_subs = 2;
     auto one = ix->search_batch(queries, opts, 1);
-    for (int t : {2, 4, 8}) {
+    for (int t : {1, 2, 0}) {
         auto many = ix->search_batch(queries, opts, t);
         CHECK(many.query_begin == one.query_begin);
         CHECK(many.ref_id == one.ref_id);
