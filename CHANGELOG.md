@@ -7,6 +7,36 @@ versioning: breaking changes need a **major** bump.
 
 ### Added
 
+- **E-values for substring hits.** `text_evalues` and `text_threshold_for_evalue`
+  calibrate a `TextIndex` hit against a background text, the way `evalues` already
+  does for an `Index`:
+
+  ```python
+  proteome = seqtree.TextIndex.build(records, "aa", k=5)
+  decoy    = seqtree.TextIndex.build(shuffled, "aa", k=5)
+  for q, r in zip(peptides, seqtree.text_evalues(proteome, decoy, peptides, max_subs=2)):
+      if r["p_enrichment"] < 0.01:
+          ...
+  ```
+
+  The arithmetic is `evalue.evalue_result` unchanged; what is specific to text search
+  is two choices the derivation forces. **Counts are per distinct record, not per
+  offset**: one query typically hits a record at several overlapping offsets, those
+  events are strongly dependent, and counting them separately gives the
+  over-dispersed compound-Poisson count `appendix/evalue.tex` collapses away by
+  counting unique clonotypes rather than reads. `N` and `M` are `num_refs`. **The ball
+  is `max_subs`, never `TextResult.score`**: that score is a similarity, `0` at an
+  exact match and more negative for a worse one, the opposite sign to the
+  non-negative penalty `thetas_from_scores` inverts; `n_subs` is non-negative,
+  integer and monotone in the scope, so it nests the way the proof requires.
+
+  Two limits, both refusals rather than partial answers. A search whose hits were
+  capped by `max_hits` raises, because a truncated count is a floor and an E-value
+  computed from it is simply wrong. And there is no `load_control` for texts: the
+  background must be composition- and length-matched to the target, that assumption
+  is what the whole calibration rests on, and nothing in the library can check it, so
+  it stays the caller's explicit choice.
+
 - **1.0.2 candidate: bounded exhaustive gapblock reductions.** `topk_batch` keeps
   stable `(score, ref_id)` top-k rows without a dense score matrix; `count_batch`
   counts all ties at arbitrary per-query thresholds. Linked two-view variants use
