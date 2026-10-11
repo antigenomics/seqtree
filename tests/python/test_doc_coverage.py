@@ -15,7 +15,7 @@ import seqtree
 
 DOCS = pathlib.Path(__file__).resolve().parents[2] / "docs"
 SUBMODULES = ["distance", "gapblock", "pairwise", "seeds", "evalue", "layout", "pmhc", "control",
-              "pmhc_evalue"]
+              "pmhc_evalue", "text_evalue"]
 
 #: Modules with no public functions/classes of their own need no page of their own.
 NO_PAGE_REQUIRED = {"control", "pmhc_evalue"}

@@ -1,4 +1,4 @@
-// Private prototype: exact unit histogram acceleration; not installed or integrated.
+// Internal exact unit histogram acceleration for the bounded unit-cost profile.
 #pragma once
 #include "seqtree/seqtree.hpp"
 #include <array>
@@ -13,7 +13,7 @@ struct Pattern {
     std::array<uint8_t,63> codes{};
     size_t length;
     Pattern(std::string_view query, const Codec& codec):length(query.size()) {
-        if (!length || length>63) throw std::invalid_argument("prototype pattern length must be 1..63");
+        if (!length || length>63) throw std::invalid_argument("pattern length must be 1..63");
         for (size_t i=0;i<length;++i) {
             codes[i]=codec.encode(query[i]);
             if (codes[i]==Codec::kInvalid) throw std::invalid_argument("invalid query symbol");

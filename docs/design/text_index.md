@@ -1,7 +1,7 @@
 # `TextIndex` — exact k-mismatch search over a concatenated reference text
 
-**Status: implemented in `seqtree` 1.0.0, 2026-09-06.** Steps 1-6 of §8 shipped; §3.7 gapped
-q-grams and §9's `mhcmatch` adapter did not. Six things below were corrected during
+**Status: implemented in `seqtree` 1.0.0, 2026-09-06, and consumed by `mhcmatch` 1.15.0 the same
+day.** Steps 1-8 of §8 shipped, including §9's `mhcmatch` adapter; §3.7 gapped q-grams did not. Six things below were corrected during
 implementation and the code, not this document, is authoritative on them:
 
 1. **The amino-acid codec is 24 symbols** (`ARNDCQEGHILKMFPSTWYVBZX*`), not 20. So `A^k` at
@@ -620,6 +620,27 @@ What `mhcmatch` then deletes: `Proteome._index`, `_index_key`, `_index_from_disk
 `_await_index`, `_index_building_path`, `index_cache_dir`, and the `O_EXCL` cross-process build
 hand-off — an entire subsystem that exists only because the current index is expensive enough to be
 worth racing over.
+
+**Shipped in mhcmatch 1.15.0, and it went as written.** `proteome.py` is 741 → 469 lines; everything
+in the deletion list above is gone, along with `_Meta`, `MHCMATCH_INDEX_WAIT` and
+`mhcmatch bootstrap --index`. Measured on the human proteome (147,506 records, 69,578,135 residues):
+**0.7 s build / 0.6 GB peak RSS / 0.35 GB on disk**, against ~65 s / 12.6 GB / ~5.5 GB *per query
+length* — and ~82 GB for the fifteen lengths MHC class II admits. Its `resolve_genes` stage went from
+a recorded **2 h 18 min to 11.1 s** on 447,776 peptides over 45 distinct lengths, reproducing the
+previous output with 0 differing lines of 593,842 rows.
+
+Two things the design did not anticipate, both worth knowing before writing another adapter:
+
+1. **`X` is a real symbol in the codec, so the caller must filter what the old index filtered at
+   build time.** `mhcmatch` dropped any window containing a non-standard residue when it enumerated
+   windows; `TextIndex` indexes the text as given, so an `X`-bearing window is a legitimate hit one
+   substitution from a query. Re-applying that filter on read is what made the port hit-for-hit
+   identical.
+2. **`best_only` does not compose with a caller-side filter.** The search picks the nearest
+   non-empty shell *before* the caller sees it, so a shell the caller then empties yields nothing
+   rather than falling through to the next one. Real cost: 1 peptide of 445,466 silently lost its
+   five candidate parent genes. The adapter re-asks those few queries without `best_only`. Worth
+   considering whether a future `min_hits`/predicate hook belongs in the search itself.
 
 ---
 

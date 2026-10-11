@@ -1036,6 +1036,10 @@ NB_MODULE(_core, m) {
         .def("__len__", [](const TextResult& r) { return r.num_queries(); })
         .def_prop_ro("num_hits", [](const TextResult& r) { return r.num_hits(); },
                      "Total hits across every query.")
+        .def("record_distances", &TextResult::record_distances,
+             nb::call_guard<nb::gil_scoped_release>(),
+             "Sorted best substitution distances per distinct record for each query. "
+             "Reduces offsets in one native call; rejects truncated results.")
         .def(
             "__getitem__",
             [](const TextResult& r, Py_ssize_t i) {

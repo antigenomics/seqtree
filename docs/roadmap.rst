@@ -13,9 +13,11 @@ E-values and neoantigen mimic discovery (see :doc:`pmhc`). Planned next:
 2. **Graded / native pMHC scoring** — ``PositionalMatrix`` already supports per-position PSSMs and
    graded TCR-hotspot weights; remaining work is a native local/best-window engine mode and
    predictor-driven proteome-to-presented-peptide pipelines for full mimic scans.
-3. **Significance, continued.** Control-set + presentation-aware E-values ship; a *tf-idf redundancy
-   weighting* — down-weighting hits to common / clustered motifs without an external control set — is
-   still under consideration.
+3. **Significance, continued.** Control-set, presentation-aware and substring (``TextIndex``)
+   E-values ship. Remaining: a bundled background *text* — there is no ``load_control`` analogue
+   for :func:`seqtree.text_evalues`, so the caller must supply a composition-matched decoy — and a
+   *tf-idf redundancy weighting*, down-weighting hits to common / clustered motifs without an
+   external control set, still under consideration.
 4. **Memory** — succinct (LOUDS) trie / packed reference strings if reference counts reach the
    10M+ range; memory-mapped frozen index for zero-copy load.
 5. **Batch-of-batches & distribution** — streaming query batches and optional process-level fan-out.

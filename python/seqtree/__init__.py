@@ -34,6 +34,7 @@ from ._core import (
 )
 from .control import load_control
 from .evalue import evalues, thetas_from_scores, threshold_for_evalue
+from .text_evalue import text_evalues, text_threshold_for_evalue
 from . import distance, gapblock, layout, pairwise, pmhc, seeds
 from .gapblock import (
     GapBlockIndex, IslandProfile, ScoreMatrix, central_prior, embed_in_frame, frame_prior,
@@ -87,4 +88,6 @@ __all__ = [
     "evalues",
     "thetas_from_scores",
     "threshold_for_evalue",
+    "text_evalues",
+    "text_threshold_for_evalue",
 ]

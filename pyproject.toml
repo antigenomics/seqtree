@@ -4,7 +4,7 @@ build-backend = "scikit_build_core.build"
 
 [project]
 name = "seqtree"
-version = "1.0.3"
+version = "1.1.0"
 description = "Fast fuzzy search over biological sequences (C++ core, Python bindings)"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -40,9 +40,10 @@ wheel.packages = ["python/seqtree"]
 cmake.build-type = "Release"
 # Keep the sdist lean: ship only what builds the package. Anchor with a leading "/".
 sdist.exclude = [
-    "/bench", "/tests", "/docs", "/.github", "/setup.sh", "/build",
+    "/bench", "/tests", "/docs", "/.github", "/setup.sh", "/build", "/appendix", "/examples",
     # Local agent config: machine-specific absolute paths and unrelated repo names.
-    "/.claude", "/CLAUDE.md",
+    "/.claude", "/CLAUDE.md", "/AGENTS.md", "/ROADMAP.md", "/SOURCES.md", "/skills",
+    "/tmp", "/add_bindings.py", "/add_native.py", "/appendix/immunogenicity_hooks.md",
 ]
 editable.rebuild = false
 

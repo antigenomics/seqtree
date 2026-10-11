@@ -42,6 +42,7 @@
 
 #include "seqtree/text_index.hpp"
 #include "seqtree/parallel.hpp"
+#include <unordered_map>
 
 #include "atomic_write.hpp"
 
@@ -65,6 +66,24 @@
 #endif
 
 namespace seqtree {
+
+std::vector<std::vector<uint16_t>> TextResult::record_distances() const {
+    if (std::any_of(truncated.begin(), truncated.end(), [](uint8_t flag) { return flag != 0; }))
+        throw std::invalid_argument("truncated text hits cannot provide complete record counts");
+    std::vector<std::vector<uint16_t>> out(num_queries());
+    std::unordered_map<uint32_t, uint16_t> best;
+    for (size_t i = 0; i < num_queries(); ++i) {
+        best.clear();
+        for (uint32_t h = query_begin[i]; h < query_begin[i + 1]; ++h) {
+            auto [it, inserted] = best.emplace(ref_id[h], n_subs[h]);
+            if (!inserted) it->second = std::min(it->second, n_subs[h]);
+        }
+        out[i].reserve(best.size());
+        for (const auto& item : best) out[i].push_back(item.second);
+        std::sort(out[i].begin(), out[i].end());
+    }
+    return out;
+}
 namespace {
 
 constexpr char kMagic[4] = {'S', 'Q', 'T', 'X'};

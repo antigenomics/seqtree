@@ -4,6 +4,7 @@
 #   --bench  also install benchmark extras (huggingface_hub, psutil)
 #
 # Needs uv (https://docs.astral.sh/uv/); `brew install uv` or the standalone installer.
+set -eu
 cd "$(dirname "$0")" || exit 1
 
 if ! command -v uv >/dev/null 2>&1; then
@@ -21,11 +22,12 @@ fi
 extras=""
 for arg in "$@"; do
     case "$arg" in
-        --tests) extras="[test]" ;;
-        --bench) extras="[bench]" ;;
+        --tests) extras="${extras}test," ;;
+        --bench) extras="${extras}bench," ;;
     esac
 done
 
+if [ -n "$extras" ]; then extras="[${extras%,}]"; fi
 uv pip install -e ".$extras"
 
 echo ""

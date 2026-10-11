@@ -70,6 +70,8 @@ struct TextResult {
 
     size_t num_queries() const { return query_begin.empty() ? 0 : query_begin.size() - 1; }
     size_t num_hits() const { return ref_id.size(); }
+    // Best substitution distance per distinct record, sorted per query. Reject capped hits.
+    std::vector<std::vector<uint16_t>> record_distances() const;
 };
 
 // Exact k-mismatch (Hamming) search over a CONCATENATED reference text.
