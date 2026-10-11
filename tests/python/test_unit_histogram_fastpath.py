@@ -34,16 +34,16 @@ def test_boundaries_iupac_and_existing_engine_fallbacks():
     queries=sequences+['','ACDE','EFGHIKLM','ACDEFGHIK','INVALID!']
     for cap in range(1,6):
         params=SearchParams(max_subs=cap,max_ins=2,max_dels=2,max_total_edits=cap)
-        assert index.edit_histogram_batch(queries[:-1],params,4,True)==_expected(index,queries[:-1],params,True)
-        with pytest.raises(ValueError):index.edit_histogram_batch(queries,params,4,True)
+        assert index.edit_histogram_batch(queries[:-1],params,threads=2,exclude_exact=True)==_expected(index,queries[:-1],params,True)
+        with pytest.raises(ValueError):index.edit_histogram_batch(queries,params,threads=2,exclude_exact=True)
     q=['ACDE','ACD'];i=Index.build(['ACDE','ACD','ACGDE','ACDF'])
     for kwargs in ({'max_ins':1},{'gap_open':0},{'max_penalty':2},{'matrix':SubstitutionMatrix.unit(24)}):
         args=dict(max_subs=5,max_ins=2,max_dels=2,max_total_edits=5);args.update(kwargs)
         p=SearchParams(**args)
-        assert i.edit_histogram_batch(q,p,4,True)==_expected(i,q,p,True)
+        assert i.edit_histogram_batch(q,p,threads=2,exclude_exact=True)==_expected(i,q,p,True)
     p=SearchParams(max_subs=5,max_ins=0,max_dels=0,max_total_edits=5)
     p.pos_matrix=PositionalMatrix.from_weights(SubstitutionMatrix.unit(24),[0,1,1,0])
-    assert i.edit_histogram_batch(['ACDE'],p,4,True)==_expected(i,['ACDE'],p,True)
+    assert i.edit_histogram_batch(['ACDE'],p,threads=2,exclude_exact=True)==_expected(i,['ACDE'],p,True)
     n=Index.build(['ACGTN','RYACGT','ryacgt','RYYACGT'],'iupac')
     p=SearchParams(max_subs=5,max_ins=2,max_dels=2,max_total_edits=5)
-    assert n.edit_histogram_batch(['acgtN','RYACGT'],p,4,True)==_expected(n,['acgtN','RYACGT'],p,True)
+    assert n.edit_histogram_batch(['acgtN','RYACGT'],p,threads=2,exclude_exact=True)==_expected(n,['acgtN','RYACGT'],p,True)
