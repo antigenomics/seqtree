@@ -1,6 +1,6 @@
 """Regression tests for the engine-routing and scoring bugs fixed on feature/engine-bugfix.
 
-Each test pins one previously-silent wrong answer. See ROADMAP.md and the commit message.
+Each test pins one previously-silent wrong answer. See docs/roadmap.rst and the commit message.
 """
 import pytest
 

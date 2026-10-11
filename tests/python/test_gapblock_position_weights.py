@@ -23,7 +23,7 @@ def test_positions_symmetry_reducers(prior):
     weights={n:[1+j*17 for j in range(n)] for n in range(6)}
     options=dict(matrix=B,gap_open=37,gap_extend=11,gap_prior=prior,position_weights_by_length=weights)
     expected=np.array([[exhaustive(q,r,weights,prior=prior) for r in refs] for q in queries])
-    for threads in (1,4):
+    for threads in (1,2):
         observed=np.asarray(gapblock.score_matrix(queries,refs,threads=threads,**options))
         np.testing.assert_array_equal(observed,expected)
         np.testing.assert_array_equal(np.asarray(gapblock.score_matrix(refs,queries,threads=threads,**options)).T,expected)
@@ -60,7 +60,7 @@ def test_validation(weights,api):
 def test_defaults_zero_weight_identity_duplicates_empty():
     queries=['AA'];refs=['AA','AC','AC']
     plain=np.asarray(gapblock.score_matrix(queries,refs,matrix=B,threads=1))
-    np.testing.assert_array_equal(plain,np.asarray(gapblock.score_matrix(queries,refs,matrix=B,position_weights_by_length={},threads=4)))
+    np.testing.assert_array_equal(plain,np.asarray(gapblock.score_matrix(queries,refs,matrix=B,position_weights_by_length={},threads=2)))
     assert gapblock.count_batch(queries,refs,[[0]],matrix=B,position_weights_by_length={2:[0,0]},exclude_exact=True,threads=1)==[[2]]
     assert gapblock.count_batch([],refs,[],matrix=B,threads=1)==[]
     assert gapblock.count_batch(queries,[],[[0]],matrix=B,threads=1)==[[0]]

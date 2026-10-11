@@ -20,13 +20,13 @@ def test_topk_and_counts_equal_exhaustive_matrix(matrix,prior,exclude):
     for k in (1,5,10,100):
         expected=[sorted([(j,sm[i,j]) for j,s in enumerate(r) if not exclude or s.upper()!=x.upper()],
                          key=lambda h:(h[1],h[0]))[:k] for i,x in enumerate(q)]
-        for threads in (1,4,0):
+        for threads in (1,2,0):
             assert tuples(topk_batch(q,r,k,**opts,threads=threads,exclude_exact=exclude))==expected
     thresholds=[[30,0,-1,9,9,200] if i%2 else [] for i in range(len(q))]
     expected=[[sum(sm[i,j]<=t for j,s in enumerate(r) if not exclude or s.upper()!=x.upper())
                for t in thresholds[i]] for i,x in enumerate(q)]
     assert count_batch(q,r,thresholds,**opts,threads=1,exclude_exact=exclude)==expected
-    assert count_batch(q,r,thresholds,**opts,threads=4,exclude_exact=exclude)==expected
+    assert count_batch(q,r,thresholds,**opts,threads=2,exclude_exact=exclude)==expected
 
 
 def test_paired_topk_max_lane_oracle_and_joint_exact_puncture():
@@ -38,7 +38,7 @@ def test_paired_topk_max_lane_oracle_and_joint_exact_puncture():
         expected=[sorted([(j,a[i,j],b[i,j]) for j in range(len(ra))
                           if not exclude or (qa[i].upper(),qb[i].upper())!=(ra[j].upper(),rb[j].upper())],
                          key=lambda h:(max(h[1],h[2]),h[0]))[:3] for i in range(len(qa))]
-        for threads in (1,4):
+        for threads in (1,2):
             assert paired_topk_batch(qa,qb,ra,rb,3,**opts,threads=threads,exclude_exact=exclude)==expected
 
 
@@ -98,7 +98,7 @@ def test_paired_count_matches_all_matrix_ties_and_threshold_order(prior):
         expected=[[sum(max(a[i,j],b[i,j])<=t for j in range(len(ra))
                        if not exclude or (qa[i],qb[i])!=(ra[j],rb[j])) for t in ts]
                   for i,ts in enumerate(thresholds)]
-        for threads in (1,4):
+        for threads in (1,2):
             assert paired_count_batch(qa,qb,ra,rb,thresholds,**opts,threads=threads,exclude_exact=exclude)==expected
         selected=paired_topk_batch(qa,qb,ra,rb,3,**opts,exclude_exact=exclude)
         expected_top=[[j for j in sorted(range(len(ra)),key=lambda j:(max(a[i,j],b[i,j]),j))

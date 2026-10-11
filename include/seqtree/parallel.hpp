@@ -6,15 +6,68 @@
 #include <algorithm>
 #include <atomic>
 #include <cstddef>
+#include <cstdint>
+#include <cstdlib>
 #include <exception>
+#include <fstream>
 #include <mutex>
+#include <stdexcept>
 #include <thread>
 #include <vector>
 
+#ifdef __linux__
+#include <sched.h>
+#elif defined(__APPLE__)
+#include <sys/sysctl.h>
+#elif defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#endif
+
 namespace seqtree {
 
+// Resolve once per batch; affinity/quota limits can change between calls.
+inline unsigned available_cpus() {
+    unsigned count = std::max(1u, std::thread::hardware_concurrency());
+#ifdef __linux__
+    cpu_set_t affinity;
+    if (sched_getaffinity(0, sizeof(affinity), &affinity) == 0)
+        count = std::min(count, unsigned(std::max(1, CPU_COUNT(&affinity))));
+    std::ifstream limits("/sys/fs/cgroup/cpu.max");
+    uint64_t quota, period;
+    if (limits >> quota >> period && period)
+        count = unsigned(std::min<uint64_t>(count, std::max<uint64_t>(1, quota / period)));
+    for (const char* name : {"SLURM_CPUS_PER_TASK", "SLURM_CPUS_ON_NODE"}) {
+        if (const char* value = std::getenv(name)) {
+            char* end = nullptr;
+            const auto allocated = std::strtoul(value, &end, 10);
+            if (end != value && !*end && allocated)
+                count = unsigned(std::min<unsigned long>(count, allocated));
+        }
+    }
+#elif defined(__APPLE__)
+    unsigned physical = count;
+    size_t size = sizeof(physical);
+    if (sysctlbyname("hw.physicalcpu", &physical, &size, nullptr, 0) == 0 && physical)
+        count = std::min(count, physical);
+#elif defined(_WIN32)
+    DWORD_PTR process_mask, system_mask;
+    if (GetProcessAffinityMask(GetCurrentProcess(), &process_mask, &system_mask)) {
+        unsigned allowed = 0;
+        for (; process_mask; process_mask &= process_mask - 1) ++allowed;
+        if (allowed) count = std::min(count, allowed);
+    }
+#endif
+    return count;
+}
+
 // Runs body(i, local) for every i in [0, n), across nt workers pulling contiguous chunks off
-// one atomic cursor. `threads <= 0` means hardware concurrency.
+// one atomic cursor. `threads <= 0` means the detected available CPU budget.
 //
 // `make_local()` is called once per worker and its result handed to every body() that worker
 // runs -- that is how a Searcher or a scratch buffer gets allocated once per thread rather
@@ -31,11 +84,12 @@ namespace seqtree {
 template <class MakeLocal, class Body>
 void parallel_for(size_t n, int threads, MakeLocal make_local, Body body,
                   size_t chunk_min = 1, size_t chunk_max = 1024) {
+    const unsigned available = available_cpus();
+    unsigned nt = threads > 0 ? unsigned(threads) : available;
+    if (nt > available || nt >= 1000)
+        throw std::invalid_argument("worker count exceeds the available CPU budget; request fewer threads");
     if (n == 0) return;
-
-    unsigned nt = threads > 0 ? unsigned(threads)
-                              : std::max(1u, std::thread::hardware_concurrency());
-    nt = unsigned(std::min<size_t>(nt, n));  // n >= 1 here, so nt >= 1
+    nt = unsigned(std::min<size_t>(nt, n));  // Do not start idle workers for absent work.
 
     // A serial budget runs on the calling thread; spawning one worker only adds overhead.
     if (nt == 1) {
@@ -70,7 +124,9 @@ void parallel_for(size_t n, int threads, MakeLocal make_local, Body body,
     // A failed thread launch must also join workers already started before unwinding.
     std::vector<std::jthread> pool;
     pool.reserve(nt);
-    for (unsigned t = 0; t < nt; ++t) pool.emplace_back(worker);
+    // The caller is one compute thread: a budget B creates only B-1 OS workers.
+    for (unsigned t = 1; t < nt; ++t) pool.emplace_back(worker);
+    worker();
     for (auto& th : pool) th.join();
     if (err) std::rethrow_exception(err);
 }

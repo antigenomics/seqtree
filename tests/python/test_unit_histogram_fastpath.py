@@ -23,7 +23,7 @@ def test_exhaustive_binary_and_duplicate_case_counts():
         params=SearchParams(max_subs=cap,max_ins=2,max_dels=2,max_total_edits=cap)
         for exclude in (False,True):
             expected=_expected(index,sequences,params,exclude)
-            for threads in (1,4):
+            for threads in (1,2):
                 assert index.edit_histogram_batch(sequences,params,threads,exclude)==expected
 
 

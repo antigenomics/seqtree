@@ -374,7 +374,8 @@ overflow are rejected. Omitting the mapping preserves ordinary scoring.
 reference rows, including ties, in reference order. Exact exclusion and duplicate
 rows follow ``count_batch``. It avoids a dense score matrix but still evaluates
 every reference; accepted output can itself be large. Positional weights are
-currently unavailable in top-k and paired reducers. These operations supply
+currently unavailable in ``topk_batch``, ``paired_topk_batch`` and
+``paired_count_batch``; ``paired_sum_count_batch`` accepts lane-specific weights. These operations supply
 geometry, without a statistical calibration or a retrieval speed guarantee.
 
 Additive group distances
@@ -398,8 +399,9 @@ exceeds the requested radius, since all other penalties are nonnegative. Exact
 exclusion still punctures full encoded junction identity regardless of group ID
 or offset, including when a matching junction has a positive group penalty.
 Omitting all three options preserves the existing scorer. Group offsets are not
-exposed by top-k or paired reducers; the paired maximum-score contract is
-unchanged. These additions supply geometry, not statistical calibration.
+exposed by ``topk_batch``, ``paired_topk_batch`` or ``paired_count_batch``;
+``paired_sum_count_batch`` accepts lane-specific groups. The paired maximum-score
+contract is unchanged. These additions supply geometry, not statistical calibration.
 
 Per-input positional geometry
 -----------------------------

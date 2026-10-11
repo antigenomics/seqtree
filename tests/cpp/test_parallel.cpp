@@ -14,9 +14,9 @@ TEST_CASE("serial batches run inline and create one scratch") {
     });
     CHECK(factories == 1);
     CHECK(seen == 17);
-    seqtree::parallel_for(0, 8, [&] { ++factories; return 0; }, [](size_t, int&) {});
+    seqtree::parallel_for(0, 1, [&] { ++factories; return 0; }, [](size_t, int&) {});
     CHECK(factories == 1);
-    seqtree::parallel_for(1, 8, [] { return 0; }, [&](size_t, int&) {
+    seqtree::parallel_for(1, 1, [] { return 0; }, [&](size_t, int&) {
         CHECK(std::this_thread::get_id() == caller);
     });
 }
@@ -27,23 +27,24 @@ TEST_CASE("parallel batches visit each item once and join every scratch") {
         explicit Local(std::atomic<int>& a) : alive(a) { ++alive; }
         ~Local() { --alive; }
     };
-    std::atomic<int> alive{0}, factories{0};
+    std::atomic<int> alive{0}, factories{0}, caller_factories{0};
     std::vector<std::atomic<int>> visits(1031);
     const auto caller = std::this_thread::get_id();
-    seqtree::parallel_for(visits.size(), 4, [&] {
+    seqtree::parallel_for(visits.size(), 2, [&] {
         ++factories;
+        if (std::this_thread::get_id() == caller) ++caller_factories;
         return std::make_unique<Local>(alive);
     }, [&](size_t i, const auto&) {
-        CHECK(std::this_thread::get_id() != caller);
         ++visits[i];
     });
-    CHECK(factories == 4);
+    CHECK(factories == 2);
+    CHECK(caller_factories == 1);
     CHECK(alive == 0);
     for (const auto& n : visits) CHECK(n == 1);
 }
 
 TEST_CASE("factory and body exceptions propagate after workers join") {
-    for (int threads : {1, 4}) {
+    for (int threads : {1, 2}) {
         CHECK_THROWS_WITH_AS(seqtree::parallel_for(100, threads, []() -> int {
             throw std::runtime_error("scratch failed");
         }, [](size_t, int&) {}), "scratch failed", std::runtime_error);
@@ -57,4 +58,12 @@ TEST_CASE("factory and body exceptions propagate after workers join") {
                              "body failed", std::runtime_error);
         CHECK(alive == 0);
     }
+}
+
+TEST_CASE("parallel batches reject an excessive live worker budget") {
+    const unsigned available = seqtree::available_cpus();
+    REQUIRE(available >= 1);
+    CHECK_THROWS_AS(seqtree::parallel_for(size_t(available) + 1, int(available) + 1,
+                                        [] { return 0; }, [](size_t, int&) {}),
+                    std::invalid_argument);
 }

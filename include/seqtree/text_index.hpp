@@ -110,7 +110,7 @@ public:
 
     // Every query must be at least k long: seeds are only indexed where a whole k-mer fits
     // inside a record, so a shorter query could match within k-L of a record end and be
-    // missed. Raises rather than answering incompletely. threads <= 0 => hardware_concurrency.
+    // missed. Raises rather than answering incompletely. threads <= 0 => available CPU budget.
     TextResult search_batch(const std::vector<std::string>& queries, const TextQueryOpts&,
                             int threads = 0) const;
 

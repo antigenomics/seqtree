@@ -121,7 +121,7 @@ public:
     Alignment align(std::string_view query, uint32_t ref_id, const SearchParams&) const;
 
     // Parallel batch: pure C++ (no Python), one Searcher per worker thread.
-    // threads <= 0 => hardware_concurrency. Results aligned with input order.
+    // threads <= 0 => available CPU budget. Results aligned with input order.
     std::vector<std::vector<Hit>> search_batch(const std::vector<std::string>& queries,
                                                const SearchParams&, int threads = 0) const;
 
@@ -200,7 +200,7 @@ Alignment align_pair(std::string_view query, std::string_view ref, const Substit
                      Alphabet, AlignMode, int32_t gap_open, int32_t gap_extend);
 
 // Dense N*K similarity matrix, row-major (row i is queries[i] vs every ref). Parallel;
-// threads <= 0 => hardware_concurrency.
+// threads <= 0 => available CPU budget.
 std::vector<int32_t> align_score_matrix(const std::vector<std::string>& queries,
                                         const std::vector<std::string>& refs,
                                         const SubstitutionMatrix&, Alphabet, AlignMode,
@@ -220,7 +220,7 @@ std::vector<int32_t> align_dist_matrix(const std::vector<std::string>& queries,
 // The block of length d = |m-n| is placed at whichever of the min(m,n)+1 positions minimises
 // substitution cost plus `prior`. `prior` is the gap prior flattened to [m][d][i] with stride
 // (prior_width+1); pass it empty for no prior. It is read only when d > 0, which is what keeps
-// the diagonal zero. `matrix` may be null for unit cost. threads <= 0 => hardware_concurrency.
+// the diagonal zero. `matrix` may be null for unit cost. threads <= 0 => available CPU budget.
 // Optional integer weights are indexed [longer length][longer position], symmetric in q/r.
 // All input frames must be covered; empty tables retain the existing unweighted scorer.
 // Alternatively, per-input rows index each sequence's full coordinates. Aligned
@@ -335,7 +335,7 @@ int hamming(std::string_view a, std::string_view b);
 int levenshtein(std::string_view a, std::string_view b);
 
 // Dense N*K distance matrices, row-major (row i is a[i] vs every b[k]). Parallel;
-// threads <= 0 => hardware_concurrency. hamming_matrix throws on any length-mismatched pair.
+// threads <= 0 => available CPU budget. hamming_matrix throws on any length-mismatched pair.
 std::vector<int32_t> hamming_matrix(const std::vector<std::string>& a,
                                     const std::vector<std::string>& b, int threads = 0);
 std::vector<int32_t> levenshtein_matrix(const std::vector<std::string>& a,

@@ -16,6 +16,8 @@ versioning: breaking changes need a **major** bump.
 ### Fixed
 
 - Stable small Poisson tails and tiny expectation probabilities.
+- Shared native batches respect detected CPU allocations and reject oversubscribed
+  worker counts; serial budgets execute inline and all pools close before returning.
 - Setup combines requested test and benchmark extras and propagates installation errors.
 - Local agent instructions, planning notes and scratch scripts are excluded from distributions.
 
@@ -693,7 +695,7 @@ Numbers that constrain the API, all reproducible from `bench/` and the downstrea
 
 ### Docs
 
-- `skills/seqtree/SKILL.md` — public API surface, invariants, and the gotchas that have bitten.
+- Public API surface, invariants, and gotchas are documented in `docs/api.rst` and the API guides.
 - `docs/gapblock.rst` — a worked guide: why one gap block, how to choose its position, why a
   placement rule is a column frame, and why a fixed score cutoff is not a calibrated one.
 - README corrected: `seqtrie` is a full-width DP that ignores per-type caps, not a banded one, and

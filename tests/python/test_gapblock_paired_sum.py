@@ -24,7 +24,7 @@ def test_paired_sum_dense_oracle_and_threads(exclude_exact):
         expected_mass.append([sum(max(0,t-d) for d in scores) for t in row])
     opts={**common,**{key+'_alpha':value for key,value in alpha.items()},
                    **{key+'_beta':value for key,value in beta.items()}}
-    for threads in (1,4):
+    for threads in (1,2):
         assert gapblock.paired_sum_count_batch(qa,qb,ra,rb,cut,threads=threads,
             exclude_exact=exclude_exact,**opts)==(expected_counts,expected_mass)
 

@@ -25,7 +25,7 @@ def test_sequence_weights_oracle_and_linked_reductions():
     expected = np.array([[oracle(a,b,aw,bw) for b,bw in zip(r,rw)] for a,aw in zip(q,qw)])
     cuts = [[-1,0,10,100,250,100] for _ in q]
     opts = dict(gap_open=7, gap_extend=3, query_position_weights=qw, reference_position_weights=rw)
-    for threads in (1,4):
+    for threads in (1,2):
         np.testing.assert_array_equal(np.asarray(gapblock.score_matrix(q,r,threads=threads,**opts)), expected)
         reverse = gapblock.score_matrix(r,q,gap_open=7,gap_extend=3,threads=threads,
             query_position_weights=rw,reference_position_weights=qw)

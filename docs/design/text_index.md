@@ -64,7 +64,7 @@ with room (0.127 ms/query against <= 0.5) and `L = 8-11, m = 2` lands at **1.24-
 `docs/text-index.rst` for the measured `k` guidance.
 
 Driven by a measured failure in `mhcmatch`, but the primitive is generic and stays generic
-(`ROADMAP.md` §4, "seqtree is upstream and stays generic"). The reference implementation to beat is
+(see the generic-core boundary in `docs/roadmap.rst`). The reference implementation to beat is
 **PEPMatch** (§3); this document sets out how, on seven axes, with the numbers for each.
 
 ---
@@ -554,7 +554,7 @@ unfinished** — target **< 5 min / < 2 GB** on 8 threads.
 8. **Only then** the `mhcmatch` adapter (§9), behind a keyword so the trie path stays reachable for
    one release and the two can be diffed on real data.
 
-Gitflow per `ROADMAP.md` §4: `feature/text-index` → `dev` → `master`, `CHANGELOG.md` entry, 0.8.0.
+Gitflow for this repository: `feature/text-index` → `dev` → `master`, `CHANGELOG.md` entry, 0.8.0.
 
 ---
 

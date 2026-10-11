@@ -39,7 +39,7 @@ exist only for TRA/TRB while the third was already falsified against structure (
 untemplated-span rule recovers the true block position 0.4% of the time for TRA, against 42.4%
 for a central prior).
 
-Data (see SOURCES.md): mirpy's per-locus prototype files and a VDJdb slim dump. Neither ships with
+Data (see docs/data-sources.rst): mirpy's per-locus prototype files and a VDJdb slim dump. Neither ships with
 seqtree; pass their paths. This script imports only seqtree and the standard library.
 
 Run:

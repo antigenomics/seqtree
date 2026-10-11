@@ -22,7 +22,7 @@ def test_linear_mass_scalar_oracle_and_threads(exclude_exact):
                  query_group_ids=[0,1,1,0],reference_group_ids=[1,0,1,0,0],group_distances=[[7,2],[0,11]])
     scores=np.asarray(gapblock.score_matrix(q,r,threads=1,**options))
     expected=scalar(scores,thresholds,q,r,exclude_exact)
-    for threads in (1,4):
+    for threads in (1,2):
         actual=gapblock.count_batch(q,r,thresholds,threads=threads,exclude_exact=exclude_exact,
                                    linear_mass=True,**options)
         assert actual==expected

@@ -12,7 +12,7 @@ def test_group_offsets_matrix_reducers_and_puncture():
     expected=base+np.array([[distances[a][b] for b in rg] for a in qg])
     group=dict(query_group_ids=qg,reference_group_ids=rg,group_distances=distances)
     thresholds=[[-1,0,2,5,20,5],[],[0,3,20],[20]]
-    for t in (1,4):
+    for t in (1,2):
         np.testing.assert_array_equal(np.asarray(gapblock.score_matrix(q,r,threads=t,**opts,**group)),expected)
         for excluded in (False,True):
             counts=gapblock.count_batch(q,r,thresholds,threads=t,exclude_exact=excluded,**opts,**group)
@@ -73,7 +73,7 @@ def test_native_validation_before_workers(api,groups):
     if api=='gapblock_count_batch':args+=([[10]],)
     if api=='gapblock_ball_batch':args+=([10],)
     with pytest.raises(ValueError):
-        getattr(_core,api)(*args,threads=4,**groups)
+        getattr(_core,api)(*args,threads=2,**groups)
 
 
 def test_rectangular_group_table():
@@ -84,7 +84,7 @@ def test_rectangular_group_table():
 
 def test_int32_boundary_group_only_score():
     maximum=2**31-1
-    opts=dict(gap_open=0,gap_extend=0,query_group_ids=[0],reference_group_ids=[0],group_distances=[[maximum]],threads=4)
+    opts=dict(gap_open=0,gap_extend=0,query_group_ids=[0],reference_group_ids=[0],group_distances=[[maximum]],threads=2)
     assert gapblock.score_matrix([''],[''],**opts)[0,0]==maximum
     assert gapblock.count_batch([''],[''],[[maximum-1,maximum]],**opts)==[[0,1]]
     assert [(h.ref_id,h.score) for h in gapblock.ball_batch([''],[''],[maximum],**opts)[0]]==[(0,maximum)]
