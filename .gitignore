@@ -16,3 +16,6 @@ bench/cache/
 .coverage
 .coverage.*
 htmlcov/
+
+# scratch worktrees and probe output
+tmp/
