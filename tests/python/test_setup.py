@@ -12,7 +12,12 @@ def test_setup_extras_and_install_failure(tmp_path):
     uv.write_text('#!/bin/sh\nprintf "%s\\n" "$*"\nexit "${TEST_UV_STATUS:-0}"\n')
     uv.chmod(0o755)
     env = dict(os.environ, PATH=str(tmp_path) + os.pathsep + os.environ["PATH"])
-    root = Path(__file__).resolve().parents[2]
+    root = tmp_path / "project"
+    root.mkdir()
+    (root / "setup.sh").write_text((Path(__file__).resolve().parents[2] / "setup.sh").read_text())
+    activation = root / ".venv" / "bin" / "activate"
+    activation.parent.mkdir(parents=True)
+    activation.write_text("")
     ok = subprocess.run(["sh", "setup.sh", "--tests", "--bench"], cwd=root,
                         env=env, capture_output=True, text=True, timeout=10)
     assert ok.returncode == 0 and "pip install -e .[test,bench]" in ok.stdout
