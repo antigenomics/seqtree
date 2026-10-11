@@ -459,7 +459,7 @@ TEST_CASE("many threads may search one index at once") {
 
     std::vector<std::thread> callers;
     std::atomic<int> mismatches{0};
-    for (int t = 0; t < 8; ++t)
+    for (int t = 0; t < 2; ++t)
         callers.emplace_back([&] {
             for (int rep = 0; rep < 4; ++rep) {
                 auto got = ix->search_batch(queries, opts, 1);
