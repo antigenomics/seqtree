@@ -355,3 +355,80 @@ statistical model or calibration.
 
 ``Index.ref_seqs()`` retrieves all stored strings in reference-ID order through
 one native call, preserving duplicate rows.
+
+Positional weights in bounded batches
+-------------------------------------
+
+``score_matrix``, ``count_batch`` and ``ball_batch`` accept
+``position_weights_by_length``: a mapping from full sequence length to a vector
+of nonnegative integer weights of that width. Supply every input length.
+The longer sequence supplies the frame for each pair; prefix positions use their
+original weights and the shifted suffix uses the corresponding longer-frame
+weights. Equal-length scoring is weighted Hamming scoring. This pairwise frame
+does not imply a consistent embedding of a whole collection. Gap charges and
+position priors remain explicit and must use the same units as the weighted
+substitution penalties. Invalid widths, fractional weights and possible int32
+overflow are rejected. Omitting the mapping preserves ordinary scoring.
+
+``ball_batch`` takes one integer cutoff per query and returns all accepted
+reference rows, including ties, in reference order. Exact exclusion and duplicate
+rows follow ``count_batch``. It avoids a dense score matrix but still evaluates
+every reference; accepted output can itself be large. Positional weights are
+currently unavailable in ``topk_batch``, ``paired_topk_batch`` and
+``paired_count_batch``; ``paired_sum_count_batch`` accepts lane-specific weights. These operations supply
+geometry, without a statistical calibration or a retrieval speed guarantee.
+
+Additive group distances
+------------------------
+
+``score_matrix``, ``count_batch`` and ``ball_batch`` also accept optional
+``query_group_ids``, ``reference_group_ids`` and ``group_distances``. Supply all
+three together: one nonnegative integer ID per sequence on each axis, and a
+nonempty rectangular matrix of nonnegative integer penalties. The total pair
+score is the ordinary gapblock score plus
+``group_distances[query_group_ids[i]][reference_group_ids[j]]``. The table must
+use the same units as substitution, gap and position-prior penalties. Group IDs
+index rows on the query axis and columns on the reference axis. No symmetry or
+zero diagonal is imposed; callers wanting a distance must provide those
+properties themselves.
+
+Dimensions, IDs and possible int32 score overflow are checked before workers
+start. The small table and encoded group IDs are shared read-only, with no dense
+pair-offset allocation. Bounded reducers skip a pair when its group offset alone
+exceeds the requested radius, since all other penalties are nonnegative. Exact
+exclusion still punctures full encoded junction identity regardless of group ID
+or offset, including when a matching junction has a positive group penalty.
+Omitting all three options preserves the existing scorer. Group offsets are not
+exposed by ``topk_batch``, ``paired_topk_batch`` or ``paired_count_batch``;
+``paired_sum_count_batch`` accepts lane-specific groups. The paired maximum-score
+contract is unchanged. These additions supply geometry, not statistical calibration.
+
+Per-input positional geometry
+-----------------------------
+
+``score_matrix``, ``ball_batch`` and ``count_batch`` accept
+``query_position_weights`` and ``reference_position_weights``: nonnegative integer
+rows matching each full input sequence. Each aligned substitution uses the larger
+of its query and reference weights. This rule is symmetric when the substitution
+matrix is symmetric; gap costs and exact identity exclusion remain unchanged.
+Supply both axes and do not combine them with ``position_weights_by_length``.
+
+``paired_sum_count_batch`` accepts separate ``_alpha`` and ``_beta`` versions of
+these arguments. Each lane retains its own coordinates; distances sum against the
+same linked reference row. These are geometry options, not confidence estimates.
+
+Streaming component and group audit
+-----------------------------------
+
+``group_audit_batch`` accepts the same geometry as ``ball_batch``, with one
+threshold per query. It returns three lists: the component count before group
+offsets, the full-score count, and the minimum full score within the component
+ball. An empty component ball has minimum ``-1``; duplicate references count
+separately and encoded exact exclusion is preserved.
+
+If the component penalty is c and the nonnegative group offset is g, every
+full-score hit c+g <= t is also a component hit c <= t. The reduction visits
+references once with shared encoded inputs and per-worker alignment scratch;
+output occupies O(Q) storage without sparse hit objects or a dense matrix.
+The bounded minimum is not an unbounded nearest result. No statistical model
+or cutoff recommendation is introduced.

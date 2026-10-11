@@ -153,7 +153,7 @@ def test_matrix_thread_counts_agree():
     a = [rand_seq(rng, "ACGT", 0, 15) for _ in range(30)]
     b = [rand_seq(rng, "ACGT", 0, 15) for _ in range(20)]
     one = np.asarray(levenshtein_matrix(a, b, threads=1))
-    many = np.asarray(levenshtein_matrix(a, b, threads=8))
+    many = np.asarray(levenshtein_matrix(a, b, threads=2))
     assert (one == many).all()
 
 

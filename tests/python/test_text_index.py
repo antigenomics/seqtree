@@ -94,7 +94,7 @@ def test_hit_order_is_deterministic_across_thread_counts():
     ixr = TextIndex.build(refs, alphabet="aa", k=4)
     queries = [r[:12] for r in refs]
     base = ixr.search_batch(queries, max_subs=2, threads=1).to_numpy()
-    for t in (2, 4, 8):
+    for t in (1, 2, 0):
         got = ixr.search_batch(queries, max_subs=2, threads=t).to_numpy()
         for key in ("query_begin", "ref_id", "offset", "n_subs", "mm_pos"):
             assert (got[key] == base[key]).all(), key

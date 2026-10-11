@@ -39,7 +39,7 @@ public:
     // For each query (its k-mer list), return candidates with >= min_shared shared k-mers,
     // ranked by (shared_kmers desc, best_score asc). `params` drives the per-k-mer fuzzy
     // match (max_subs / pos_matrix / engine). allele_filter >= 0 keeps only peptides with
-    // that allele tag; < 0 means no filter. threads <= 0 => hardware_concurrency.
+    // that allele tag; < 0 means no filter. threads <= 0 => available CPU budget.
     std::vector<std::vector<Candidate>> seed_and_gather(
         const std::vector<std::vector<std::string>>& query_kmers, const SearchParams& params,
         uint32_t min_shared = 1, int64_t allele_filter = -1, int threads = 0) const;

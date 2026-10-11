@@ -3,6 +3,20 @@ API Reference
 
 .. currentmodule:: seqtree
 
+Batch CPU budgets
+-----------------
+
+``threads=1`` runs inline. ``threads=0`` selects the detected available CPU budget:
+Linux affinity, root cgroup v2 quota and SLURM allocation; macOS physical cores;
+Windows process affinity. Legacy nonpositive values also select automatic mode.
+Positive counts bound workers; a batch launches at most its query count. A request
+above the detected allocation raises ``ValueError``; explicit counts are never clamped.
+The caller performs one share of the work: a budget of B uses B compute threads
+in total, creating only B-1 additional OS threads when there is enough work.
+Pools are joined before the call returns; use one batch rather than an outer pool
+of internally threaded searches. Cgroup layouts outside the detected root quota
+and Windows CPU-rate job limits require an explicit thread budget.
+
 Grouped by the job you are doing. For a starting point: :class:`Index` searches a *set of
 sequences*, :class:`TextIndex` searches a *long text*, and :mod:`seqtree.pairwise` aligns *two
 sequences*.
@@ -17,6 +31,16 @@ payload.
 .. autoclass:: Index
    :members:
    :undoc-members:
+
+For edit-count summaries, ``Index.edit_histogram_batch(queries, params, threads=0, exclude_exact=False)``
+returns one list of exact counts per query, indexed by total substitutions,
+insertions and deletions. Set ``params.max_total_edits`` explicitly to a positive
+value; bins run from zero through that cap. Reference duplicates count separately.
+``exclude_exact=True`` retains bin zero with count zero. Nonpositive ``threads``
+uses the detected available CPU budget, matching the other batch APIs. This requires ``seqtm`` or ``auto``
+and all-hit mode; the search uses one reusable native hit buffer per worker rather
+than materializing all hits in Python. Counts are not cumulative; sum the bins up
+to a radius to obtain its ball count.
 
 .. autoclass:: SearchParams
    :members:
@@ -116,6 +140,14 @@ cutoff that achieves a target false-positive rate. See :doc:`evalue`.
 .. autofunction:: thetas_from_scores
 
 .. autofunction:: seqtree.evalue.evalue_result
+
+The same question for substring hits in a text, where counts are per distinct record
+rather than per offset and the ball is a mismatch radius rather than a penalty. The
+module docstring of :mod:`seqtree.text_evalue` explains both choices.
+
+.. autofunction:: text_evalues
+
+.. autofunction:: text_threshold_for_evalue
 
 Pairwise alignment (Needleman-Wunsch / Smith-Waterman)
 ------------------------------------------------------

@@ -3,7 +3,7 @@ import random
 import pytest
 
 import seqtree
-from seqtree.evalue import _poisson_sf, evalues, thetas_from_scores, threshold_for_evalue
+from seqtree.evalue import _poisson_sf, evalue_result, evalues, thetas_from_scores, threshold_for_evalue
 
 AA = "ACDEFGHIKLMNPQRSTVWY"
 
@@ -32,8 +32,33 @@ def _hamming_params(theta, qlen):
 def test_poisson_sf_basics():
     assert _poisson_sf(0, 5.0) == 1.0
     assert _poisson_sf(1, 0.0) == 0.0
+    assert _poisson_sf(4, float("inf")) == 1.0
     # P(Poisson(1) >= 1) = 1 - e^-1
     assert abs(_poisson_sf(1, 1.0) - (1 - 2.718281828 ** -1)) < 1e-6
+
+
+@pytest.mark.parametrize("k,lam,expected", [
+    (1, 1e-20, 1e-20),
+    (4, 1e-5, 4.1666333334722077e-22),
+    (2000, 1000.0, 3.058192080169065e-170),
+    (1000, 1000.0, 0.5042052441802155),
+    (1001, 1000.0, 0.491590632831494),
+])
+def test_poisson_tail_avoids_cancellation_and_underflow(k, lam, expected):
+    # Independent scipy.stats.poisson.sf(k-1, lam) reference values; no runtime dependency.
+    assert _poisson_sf(k, lam) == pytest.approx(expected, rel=1e-10, abs=0)
+
+
+def test_poisson_tail_survives_subnormal_pmf():
+    # Independent high-precision Decimal references, rounded to binary64.
+    assert _poisson_sf(14086, 10000.0) == 5e-324
+    assert _poisson_sf(112398, 100000.0) == 2e-323
+
+
+def test_public_evalue_keeps_tiny_nonzero_probabilities():
+    result = evalue_result(4, 1, 1, 100000)
+    assert result["p_enrichment"] == pytest.approx(4.1666333334722077e-22, rel=1e-10, abs=0)
+    assert evalue_result(1, 1, 1, 10**20)["p_any"] == pytest.approx(1e-20, rel=1e-10, abs=0)
 
 
 def test_planted_cluster_is_significant_background_is_not():

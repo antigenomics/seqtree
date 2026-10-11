@@ -44,11 +44,15 @@ from ._core import Index, ScoreMatrix, SearchParams, SubstitutionMatrix
 from ._core import gapblock_matrix as _gapblock_matrix
 from ._core import gapblock_topk_batch as _gapblock_topk_batch
 from ._core import gapblock_count_batch as _gapblock_count_batch
+from ._core import gapblock_count_mass_batch as _gapblock_count_mass_batch
+from ._core import gapblock_ball_batch as _gapblock_ball_batch
+from ._core import gapblock_group_audit_batch as _gapblock_group_audit_batch
 from ._core import gapblock_paired_topk_batch as _gapblock_paired_topk_batch
 from ._core import gapblock_paired_count_batch as _gapblock_paired_count_batch
+from ._core import gapblock_paired_sum_count_batch as _gapblock_paired_sum_count_batch
 
 __all__ = [
-    "gapblock_score", "score_matrix", "topk_batch", "count_batch", "paired_topk_batch", "paired_count_batch", "deletion_variants", "central_prior", "profile_prior",
+    "gapblock_score", "score_matrix", "ball_batch", "group_audit_batch", "topk_batch", "count_batch", "paired_topk_batch", "paired_count_batch", "paired_sum_count_batch", "deletion_variants", "central_prior", "profile_prior",
     "frame_prior", "positions_prior", "embed_in_frame", "gap_cost", "GapBlockIndex", "ScoreMatrix",
     "IslandProfile",
 ]
@@ -522,6 +526,9 @@ def score_matrix(
     gap_prior: GapPrior | None = None,
     alphabet: str = "aa",
     threads: int = 0,
+    position_weights_by_length=None,
+    query_group_ids=None, reference_group_ids=None, group_distances=None,
+    query_position_weights=None, reference_position_weights=None,
 ) -> ScoreMatrix:
     """Gap-block penalty of every query against every reference, in C++ with the GIL released.
 
@@ -533,6 +540,18 @@ def score_matrix(
     Args:
         queries: Query sequences (the matrix rows).
         refs: Reference sequences (the matrix columns).
+        position_weights_by_length: Optional mapping of full sequence lengths to nonnegative
+            integer weights. Weights index the longer sequence; both axes must be covered.
+            None or an empty mapping preserves unweighted defaults.
+        query_position_weights: Optional nonnegative integer rows, one per query and residue.
+            Supply with reference_position_weights; incompatible with length profiles.
+            Substitutions use max(query_weight, reference_weight) at aligned coordinates.
+            Gap costs remain unchanged.
+        reference_position_weights: Per-reference rows with the same contract.
+        query_group_ids: Optional integer IDs, one per query; supply all group options together.
+        reference_group_ids: Optional integer IDs, one per reference.
+        group_distances: Nonempty rectangular nonnegative integer penalty table.
+            Added to each pair score in the same units; no symmetry/zero diagonal imposed.
         matrix: Substitution penalties; ``None`` means unit cost.
         gap_open: Block-opening cost. Defaults to ``2 * matrix.scale()``. See the module note:
             leaving this at 1 with a real matrix makes gaps ~14x cheaper than substitutions.
@@ -565,7 +584,10 @@ def score_matrix(
         raise ValueError("gap_open and gap_extend must be >= 0")
     width = max((len(s) for s in q + r), default=0)
     cube = _prior_cube(gap_prior, width) if gap_prior is not None else []
-    return _gapblock_matrix(q, r, alphabet, matrix, gap_open, gap_extend, cube, width, threads)
+    return _gapblock_matrix(q, r, alphabet, matrix, gap_open, gap_extend, cube, width, threads,
+                            _position_weights(position_weights_by_length, q, r),
+                            *_group_options(query_group_ids, reference_group_ids, group_distances, q, r),
+                            *_sequence_weights(query_position_weights, reference_position_weights, position_weights_by_length, q, r))
 
 
 def _batch_integer(value, name, lower=0, upper=(1 << 31) - 1):
@@ -588,6 +610,62 @@ def _batch_options(axes, matrix, gap_open, gap_extend, gap_prior, threads):
     width = max((len(s) for axis in axes for s in axis), default=0)
     cube = _prior_cube(gap_prior, width) if gap_prior is not None else []
     return go, ge, cube, width, threads
+
+
+def _group_options(query_ids, reference_ids, distances, queries, refs):
+    """Validate one small group table; native preparation rechecks its safety."""
+    if query_ids is None and reference_ids is None and distances is None:
+        return [], [], []
+    if query_ids is None or reference_ids is None or distances is None:
+        raise ValueError("query_group_ids, reference_group_ids and group_distances are required together")
+    qg = [_batch_integer(v, "query group ID") for v in query_ids]
+    rg = [_batch_integer(v, "reference group ID") for v in reference_ids]
+    if len(qg) != len(queries) or len(rg) != len(refs):
+        raise ValueError("group IDs must match their query/reference axes")
+    table = [[_batch_integer(v, "group distance") for v in row] for row in distances]
+    if not table or not table[0] or any(len(row) != len(table[0]) for row in table):
+        raise ValueError("group distances must be a nonempty rectangular matrix")
+    if any(v >= len(table) for v in qg) or any(v >= len(table[0]) for v in rg):
+        raise ValueError("group ID outside group distances")
+    return qg, rg, table
+
+
+def _position_weights(weights, *axes):
+    """Validated integer tables in the longer-junction frame; never round/truncate."""
+    if weights is None:
+        return []
+    if not hasattr(weights, "items"):
+        raise ValueError("position_weights_by_length must map lengths to integer weights")
+    tables = {}
+    for length, row in weights.items():
+        length = _batch_integer(length, "position frame", upper=65535)
+        row = list(row)
+        if len(row) != length:
+            raise ValueError("positional weight length must match its frame")
+        tables[length] = [_batch_integer(w, "position weight") for w in row]
+    if not tables:
+        return []
+    for axis in axes:
+        for sequence in axis:
+            if len(sequence) and len(sequence) not in tables:
+                raise ValueError("missing positional weights for an input frame")
+    return [tables.get(length, []) for length in range(max(tables) + 1)]
+
+
+def _sequence_weights(query_weights, reference_weights, by_length, queries, refs):
+    """Integer full-coordinate weights; aligned substitutions use the larger weight."""
+    if query_weights is None and reference_weights is None:
+        return [], []
+    if query_weights is None or reference_weights is None:
+        raise ValueError("both query and reference positional weights are required")
+    if by_length:
+        raise ValueError("length and per-input weights cannot be combined")
+    def validate(rows, axis):
+        rows = [list(row) for row in rows]
+        if len(rows) != len(axis) or any(len(row) != len(seq) for row, seq in zip(rows, axis)):
+            raise ValueError("per-input weights must match their sequence axis and lengths")
+        return [[_batch_integer(value, "position weight") for value in row] for row in rows]
+    return validate(query_weights, queries), validate(reference_weights, refs)
 
 
 def _threshold_rows(thresholds, n_queries):
@@ -622,19 +700,83 @@ def topk_batch(queries, refs, k=10, matrix=None, gap_open=None, gap_extend=1,
 
 
 def count_batch(queries, refs, thresholds, matrix=None, gap_open=None, gap_extend=1,
-                gap_prior=None, alphabet="aa", threads=0, exclude_exact=False):
+                gap_prior=None, alphabet="aa", threads=0, exclude_exact=False, position_weights_by_length=None,
+                query_group_ids=None, reference_group_ids=None, group_distances=None, linear_mass=False,
+                query_position_weights=None, reference_position_weights=None):
     """Count all reference scores <= each query's requested integer thresholds.
 
+    Optional positional weights and additive group distances match :func:`score_matrix`.
+    Exact exclusion remains full encoded identity, irrespective of group distance.
     ``thresholds`` has one row per query; rows may be empty, unsorted or contain
     duplicates. Return integer counts in their original order, including ALL
     score ties. Negative cutoffs count zero. Same scorer/exclusion as
     :func:`topk_batch`; one native batch with O(Q*S) output, no dense score matrix.
     Worker scratch is O(max_sequence_length + maximum_threshold_row_length).
+    With ``linear_mass=True``, return ``(counts, masses)`` from the same traversal;
+    each mass is ``sum(max(0, threshold - score))`` over nonexcluded references.
+    Boundary ties still count but contribute zero mass. Scores are nonnegative;
+    integer mass is uint64, with overflow bounds checked before workers. Negative
+    and zero thresholds have zero mass. No normalization or statistical model is
+    applied; default counts and paired APIs remain unchanged.
     """
+    if not isinstance(linear_mass, bool):
+        raise TypeError("linear_mass must be a boolean")
     q, r = list(queries), list(refs)
     thresholds = _threshold_rows(thresholds, len(q))
     go, ge, cube, width, threads = _batch_options((q, r), matrix, gap_open, gap_extend, gap_prior, threads)
-    return _gapblock_count_batch(q, r, thresholds, alphabet, matrix, go, ge, cube, width, threads, exclude_exact)
+    reduction = _gapblock_count_mass_batch if linear_mass else _gapblock_count_batch
+    return reduction(q, r, thresholds, alphabet, matrix, go, ge, cube, width, threads, exclude_exact,
+                                 _position_weights(position_weights_by_length, q, r),
+                                 *_group_options(query_group_ids, reference_group_ids, group_distances, q, r),
+                            *_sequence_weights(query_position_weights, reference_position_weights, position_weights_by_length, q, r))
+
+
+def group_audit_batch(queries, refs, thresholds, matrix=None, gap_open=None, gap_extend=1,
+               gap_prior=None, alphabet="aa", threads=0, exclude_exact=False,
+               position_weights_by_length=None,
+               query_group_ids=None, reference_group_ids=None, group_distances=None,
+               query_position_weights=None, reference_position_weights=None):
+    """Stream component-ball count, full-score count and bounded nearest in one batch.
+
+    Geometry/offset options match ball_batch. Component excludes the nonnegative
+    group offset; full score includes it. For each query threshold, return three
+    lists: component count, full count and minimum full score among component hits.
+    Empty component balls have nearest=-1. Duplicate references count separately;
+    full encoded exact puncturing is identical. O(Q) output; no sparse hit objects.
+    """
+    q, r = list(queries), list(refs)
+    thresholds = [_batch_integer(v, "threshold", -(1 << 31)) for v in thresholds]
+    if len(thresholds) != len(q):
+        raise ValueError("group audit thresholds must have one value per query")
+    go, ge, cube, width, threads = _batch_options((q, r), matrix, gap_open, gap_extend, gap_prior, threads)
+    return _gapblock_group_audit_batch(q, r, thresholds, alphabet, matrix, go, ge, cube, width,
+                               threads, exclude_exact, _position_weights(position_weights_by_length, q, r),
+                            *_group_options(query_group_ids, reference_group_ids, group_distances, q, r),
+                            *_sequence_weights(query_position_weights, reference_position_weights, position_weights_by_length, q, r))
+
+
+def ball_batch(queries, refs, thresholds, matrix=None, gap_open=None, gap_extend=1,
+               gap_prior=None, alphabet="aa", threads=0, exclude_exact=False,
+               position_weights_by_length=None,
+               query_group_ids=None, reference_group_ids=None, group_distances=None,
+               query_position_weights=None, reference_position_weights=None):
+    """Exhaustive bounded ball rows, reference order, unset edit fields; no Q*N matrix.
+
+    One integer cutoff per query. Negative cutoffs yield empty rows. Optional integer
+    positional weights index the longer full sequence, symmetrically, at every length.
+    Optional additive group distances match :func:`score_matrix`; exact exclusion
+    remains full encoded identity, irrespective of group distance.
+    This reduces output memory; it is not a trie-based candidate filter.
+    """
+    q, r = list(queries), list(refs)
+    thresholds = [_batch_integer(v, "threshold", -(1 << 31)) for v in thresholds]
+    if len(thresholds) != len(q):
+        raise ValueError("ball thresholds must have one value per query")
+    go, ge, cube, width, threads = _batch_options((q, r), matrix, gap_open, gap_extend, gap_prior, threads)
+    return _gapblock_ball_batch(q, r, thresholds, alphabet, matrix, go, ge, cube, width,
+                               threads, exclude_exact, _position_weights(position_weights_by_length, q, r),
+                            *_group_options(query_group_ids, reference_group_ids, group_distances, q, r),
+                            *_sequence_weights(query_position_weights, reference_position_weights, position_weights_by_length, q, r))
 
 
 def paired_topk_batch(queries_a, queries_b, refs_a, refs_b, k=10, matrix=None,
@@ -671,6 +813,43 @@ def paired_count_batch(queries_a, queries_b, refs_a, refs_b, thresholds, matrix=
     thresholds = _threshold_rows(thresholds, len(qa))
     go, ge, cube, width, threads = _batch_options((qa, qb, ra, rb), matrix, gap_open, gap_extend, gap_prior, threads)
     return _gapblock_paired_count_batch(qa, qb, ra, rb, thresholds, alphabet, matrix, go, ge, cube, width, threads, exclude_exact)
+
+
+def paired_sum_count_batch(queries_a, queries_b, refs_a, refs_b, thresholds, matrix=None,
+                           gap_open=None, gap_extend=1, gap_prior=None, alphabet="aa",
+                           threads=0, exclude_exact=False,
+                           position_weights_by_length_alpha=None, position_weights_by_length_beta=None,
+                           query_group_ids_alpha=None, query_group_ids_beta=None,
+                           reference_group_ids_alpha=None, reference_group_ids_beta=None,
+                           group_distances_alpha=None, group_distances_beta=None,
+                           query_position_weights_alpha=None, query_position_weights_beta=None,
+                           reference_position_weights_alpha=None, reference_position_weights_beta=None):
+    """Return (counts, linear masses) for linked rows under summed lane distances.
+
+    Shared matrix/gap costs/prior and separate full-coordinate lane weights and
+    group tables use the existing kernel. Sum distance is computed in int64;
+    thresholds remain int32. Count every score <= cutoff and sum max(0, cutoff
+    - score); ties count with zero mass. Negative cutoffs return zero. Preserve
+    duplicate reference observations and input threshold order. Exact exclusion
+    removes a row only when both encoded full strings match. One GIL-released
+    native traversal, O(Q*S) outputs and O(max_length + max_threshold_row) worker
+    scratch; no matrix/edges. The existing paired-max API is unchanged.
+    """
+    qa, qb, ra, rb = map(list, (queries_a, queries_b, refs_a, refs_b))
+    if len(qa) != len(qb) or len(ra) != len(rb):
+        raise ValueError("paired query/reference axes must agree")
+    thresholds = _threshold_rows(thresholds, len(qa))
+    go, ge, cube, width, threads = _batch_options((qa, qb, ra, rb), matrix, gap_open, gap_extend, gap_prior, threads)
+    ag = _group_options(query_group_ids_alpha, reference_group_ids_alpha, group_distances_alpha, qa, ra)
+    bg = _group_options(query_group_ids_beta, reference_group_ids_beta, group_distances_beta, qb, rb)
+    aw = _sequence_weights(query_position_weights_alpha, reference_position_weights_alpha, position_weights_by_length_alpha, qa, ra)
+    bw = _sequence_weights(query_position_weights_beta, reference_position_weights_beta, position_weights_by_length_beta, qb, rb)
+    return _gapblock_paired_sum_count_batch(qa, qb, ra, rb, thresholds, alphabet, matrix, go, ge,
+        cube, width, threads, exclude_exact,
+        _position_weights(position_weights_by_length_alpha, qa, ra),
+        _position_weights(position_weights_by_length_beta, qb, rb),
+        ag[0], bg[0], ag[1], bg[1], ag[2], bg[2],
+        aw[0], bw[0], aw[1], bw[1])
 
 
 class GapBlockIndex:

@@ -282,7 +282,7 @@ def test_score_matrix_is_thread_invariant():
     q = [rand_seq(rng, 8, 20) for _ in range(24)]
     r = [rand_seq(rng, 8, 20) for _ in range(12)]
     ref = [score_matrix(q, r, m, threads=1).row(i) for i in range(len(q))]
-    for threads in (2, 4, 0):
+    for threads in (1, 2, 0):
         got = score_matrix(q, r, m, threads=threads)
         assert [got.row(i) for i in range(len(q))] == ref
 
@@ -340,7 +340,7 @@ def test_bad_arguments_raise():
 # Two crashes found by an adversarial audit, both of them regressions from the overflow fix
 # ---------------------------------------------------------------------------------------------
 
-@pytest.mark.parametrize("threads", [1, 0, 4])
+@pytest.mark.parametrize("threads", [1, 0, 2])
 def test_an_overflow_in_a_worker_raises_instead_of_killing_the_process(threads):
     """The batch paths run on std::thread. An exception escaping a thread entry function calls
     std::terminate -- so the int64 narrowing guard, which raises cleanly on the scalar path, was

@@ -16,3 +16,15 @@ bench/cache/
 .coverage
 .coverage.*
 htmlcov/
+
+# scratch worktrees and probe output
+tmp/
+
+# Local agent instructions and planning notes
+/AGENTS.md
+/CLAUDE.md
+/ROADMAP.md
+/SOURCES.md
+/skills/
+/add_bindings.py
+/add_native.py

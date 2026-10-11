@@ -3,11 +3,57 @@
 All notable changes to `seqtree`. Dates are release dates. From 1.0.0 the project follows semantic
 versioning: breaking changes need a **major** bump.
 
-## [Unreleased]
+## [1.1.0] — 2026-10-11
 
 ### Added
 
-- **1.0.2 candidate: bounded exhaustive gapblock reductions.** `topk_batch` keeps
+- Native batched edit-count histograms, with an exact bit-vector fast path for bounded unit-cost searches.
+- Gap-block length profiles and symmetric per-input positional weights, optional group penalties,
+  exhaustive balls, linked sum-distance counts, integer linear mass, and streaming group audits.
+- TextIndex E-values and per-query mismatch cutoffs using distinct-record counts, with native
+  reduction of repeated offsets and rejection of truncated results.
+
+### Fixed
+
+- Stable small Poisson tails and tiny expectation probabilities.
+- Shared native batches respect detected CPU allocations and reject oversubscribed
+  worker counts; serial budgets execute inline and all pools close before returning.
+- Setup combines requested test and benchmark extras and propagates installation errors.
+- Local agent instructions, planning notes and scratch scripts are excluded from distributions.
+
+### API details
+
+- **E-values for substring hits.** `text_evalues` and `text_threshold_for_evalue`
+  calibrate a `TextIndex` hit against a background text, the way `evalues` already
+  does for an `Index`:
+
+  ```python
+  proteome = seqtree.TextIndex.build(records, "aa", k=5)
+  decoy    = seqtree.TextIndex.build(shuffled, "aa", k=5)
+  for q, r in zip(peptides, seqtree.text_evalues(proteome, decoy, peptides, max_subs=2)):
+      if r["p_enrichment"] < 0.01:
+          ...
+  ```
+
+  The arithmetic is `evalue.evalue_result` unchanged; what is specific to text search
+  is two counting choices. **Counts are per distinct record, not per
+  offset**: one query typically hits a record at several overlapping offsets, those
+  events are strongly dependent, and counting them separately gives the
+  over-dispersed compound-Poisson count `appendix/evalue.tex` collapses away by
+  counting unique clonotypes rather than reads. `N` and `M` are `num_refs`. **The ball
+  is `max_subs`, never `TextResult.score`**: that score is a similarity, `0` at an
+  exact match and more negative for a worse one, the opposite sign to the
+  non-negative penalty `thetas_from_scores` inverts; `n_subs` is non-negative,
+  integer and monotone in the scope, so it nests the way the proof requires.
+
+  Two limits, both refusals rather than partial answers. A search whose hits were
+  capped by `max_hits` raises, because a truncated count is a floor and an E-value
+  computed from it is simply wrong. And there is no `load_control` for texts: the
+  background must be composition- and length-matched to the target, that assumption
+  is what the whole calibration rests on, and nothing in the library can check it, so
+  it stays the caller's explicit choice.
+
+- **Bounded exhaustive gapblock reductions.** `topk_batch` keeps
   stable `(score, ref_id)` top-k rows without a dense score matrix; `count_batch`
   counts all ties at arbitrary per-query thresholds. Linked two-view variants use
   the maximum lane penalty and preserve both lane scores. Exact identity exclusion
@@ -649,7 +695,7 @@ Numbers that constrain the API, all reproducible from `bench/` and the downstrea
 
 ### Docs
 
-- `skills/seqtree/SKILL.md` — public API surface, invariants, and the gotchas that have bitten.
+- Public API surface, invariants, and gotchas are documented in `docs/api.rst` and the API guides.
 - `docs/gapblock.rst` — a worked guide: why one gap block, how to choose its position, why a
   placement rule is a column frame, and why a fixed score cutoff is not a calibrated one.
 - README corrected: `seqtrie` is a full-width DP that ignores per-type caps, not a banded one, and

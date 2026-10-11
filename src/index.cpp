@@ -2,6 +2,7 @@
 #include "seqtree/parallel.hpp"
 #include "atomic_write.hpp"
 #include "trie.hpp"
+#include "count_unit.hpp"
 
 #include <algorithm>
 #include <cstring>
@@ -185,6 +186,30 @@ std::vector<std::vector<Hit>> Index::search_batch(const std::vector<std::string>
     parallel_for(n, threads, [&] { return Searcher(*this); },
                  [&](size_t i, Searcher& s) { s.search_into(queries[i], p, results[i]); });
     return results;
+}
+
+std::vector<std::vector<uint64_t>> Index::edit_histogram_batch(
+        const std::vector<std::string>& queries, const SearchParams& p,
+        int threads, bool exclude_exact) const {
+    if (!p.max_total_edits)
+        throw std::invalid_argument("edit histogram requires explicit positive max_total_edits");
+    if (p.engine == Engine::SeqTrie || p.mode != Mode::AllHits || p.max_hits)
+        throw std::invalid_argument("edit histogram requires uncapped seqtm/auto all-hit search");
+    std::vector<std::vector<uint64_t>> out(queries.size(),
+        std::vector<uint64_t>(size_t(p.max_total_edits) + 1));
+    struct Local { Searcher s; std::vector<Hit> hits; };
+    parallel_for(queries.size(), threads, [&] { return Local{Searcher(*this), {}}; },
+        [&](size_t i, Local& worker) {
+            if (count_unit::fill_histogram(*this,queries[i],p,exclude_exact,out[i])) return;
+            worker.s.search_into(queries[i], p, worker.hits);
+            for (const auto& h : worker.hits) {
+                const uint32_t edits = uint32_t(h.n_subs) + h.n_ins + h.n_dels;
+                if (edits > p.max_total_edits)
+                    throw std::logic_error("search hit exceeds max_total_edits");
+                if (!exclude_exact || edits) ++out[i][edits];
+            }
+        });
+    return out;
 }
 
 std::vector<uint64_t> Index::collisions_batch(const std::vector<std::string>& queries,

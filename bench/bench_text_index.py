@@ -22,7 +22,7 @@ that decides whether any of the rest is worth reading. A missed hit does not deg
 caller's answer, it changes it, so recall below 1.000 anywhere means the work has failed.
 
 Texts, in size steps. The small ones are generated so the script runs with no downloads; the
-real proteomes come from the HuggingFace dataset `isalgo/pmhc_data` (see SOURCES.md) and are
+real proteomes come from the HuggingFace dataset `isalgo/pmhc_data` (see docs/data-sources.rst) and are
 used only when `huggingface_hub` is installed.
 
 Usage:
@@ -71,7 +71,7 @@ def from_fasta_gz(path: str) -> list[str]:
 
 
 def proteome(name: str) -> list[str] | None:
-    """`isalgo/pmhc_data` proteomes, if huggingface_hub is available. See SOURCES.md."""
+    """`isalgo/pmhc_data` proteomes, if huggingface_hub is available. See docs/data-sources.rst."""
     try:
         from huggingface_hub import hf_hub_download
     except ImportError:
