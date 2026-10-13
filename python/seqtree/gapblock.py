@@ -893,6 +893,25 @@ def _withheld_metadata(q, query_withheld_peptide_ids, reference_peptide_offsets,
     return withheld, offsets, peptides
 
 
+def _additional_geometry(geometry, features):
+    if features is None:
+        return
+    terms = list(features)
+    if any(not isinstance(term, PairedFeatureOffsets) for term in terms):
+        raise ValueError("additional_feature_offsets must contain PairedFeatureOffsets")
+    if terms:
+        if not hasattr(geometry, "additional_features"):
+            raise RuntimeError("additional factored offsets require native additional_features support")
+        geometry.additional_features = terms
+
+
+def _lane_prior(geometry, prior, width):
+    if prior is not None:
+        if not hasattr(geometry, "gap_prior"):
+            raise RuntimeError("lane priors require native grouped gap_prior support")
+        geometry.gap_prior = _prior_cube(prior, width)
+
+
 def _alignment_options(geometry, q, r, mode, scale, left, right, matrix, prior,
                        *weights):
     if mode not in ("gapblock", "global", "local"):
@@ -943,7 +962,8 @@ def grouped_count_batch(queries, refs, thresholds, *, reference_target_offsets,
         group_distances=None, query_position_weights=None, reference_position_weights=None,
         feature_offsets=None, query_withheld_peptide_ids=None,
         reference_peptide_offsets=None, reference_peptide_ids=None, score_quantum=1,
-        alignment_mode="gapblock", alignment_scale=1, trim_left=0, trim_right=0):
+        alignment_mode="gapblock", alignment_scale=1, trim_left=0, trim_right=0,
+        additional_feature_offsets=None):
     """Yield bounded label curves from one immutable prepared scoring population.
 
     ``alignment_mode`` defaults to gapblock. Global/local reuse the existing affine
@@ -955,6 +975,13 @@ def grouped_count_batch(queries, refs, thresholds, *, reference_target_offsets,
     magnitudes in these modes. Position weights and gap_prior are rejected.
     Paired lanes compute distances independently before summation. Scratch rows are
     reused per worker; no dense query/reference score matrix is produced.
+
+    ``additional_feature_offsets`` is an optional iterable of PairedFeatureOffsets.
+    Every term is independently ties-even rounded/scaled, then added to the primary
+    feature and group offsets. All descriptors are snapshotted/validated once.
+    Combined score/offset bounds must fit int32 per lane. In the paired API, use
+    additional_feature_offsets_alpha/beta; gap_prior_alpha/beta independently
+    override the shared gap_prior. None inherits the shared prior for that lane.
 
     ``score_quantum`` is a positive int32. Floor the raw alignment score to a
     multiple of this quantum before adding group/feature offsets. Default1 leaves
@@ -991,6 +1018,7 @@ def grouped_count_batch(queries, refs, thresholds, *, reference_target_offsets,
     go, ge, cube, width, threads = _batch_options((q, r), matrix, gap_open, gap_extend, gap_prior, threads)
     geometry = _grouped_geometry(q, r, position_weights_by_length, query_group_ids,
         reference_group_ids, group_distances, query_position_weights, reference_position_weights, feature_offsets, score_quantum)
+    _additional_geometry(geometry, additional_feature_offsets)
     _alignment_options(geometry, q, r, alignment_mode, alignment_scale, trim_left, trim_right,
         matrix, gap_prior, position_weights_by_length, query_position_weights, reference_position_weights)
     withheld = _withheld_metadata(q, query_withheld_peptide_ids,
@@ -1014,7 +1042,9 @@ def grouped_paired_sum_count_batch(queries_a, queries_b, refs_a, refs_b, thresho
         reference_position_weights_alpha=None, reference_position_weights_beta=None,
         feature_offsets_alpha=None, feature_offsets_beta=None,
         query_withheld_peptide_ids=None, reference_peptide_offsets=None, reference_peptide_ids=None, score_quantum_alpha=1, score_quantum_beta=1,
-        alignment_mode="gapblock", alignment_scale=1, trim_left=0, trim_right=0):
+        alignment_mode="gapblock", alignment_scale=1, trim_left=0, trim_right=0,
+        additional_feature_offsets_alpha=None, additional_feature_offsets_beta=None,
+        gap_prior_alpha=None, gap_prior_beta=None):
     """Grouped buffers under existing linked sum geometry; see grouped_count_batch.
 
     Composite full-key exclusion requires both lanes equal. Canonical paired gene
@@ -1035,11 +1065,15 @@ def grouped_paired_sum_count_batch(queries_a, queries_b, refs_a, refs_b, thresho
     beta = _grouped_geometry(qb, rb, position_weights_by_length_beta, query_group_ids_beta,
         reference_group_ids_beta, group_distances_beta, query_position_weights_beta,
         reference_position_weights_beta, feature_offsets_beta, score_quantum_beta)
+    _additional_geometry(alpha, additional_feature_offsets_alpha)
+    _additional_geometry(beta, additional_feature_offsets_beta)
+    _lane_prior(alpha, gap_prior_alpha, width)
+    _lane_prior(beta, gap_prior_beta, width)
     _alignment_options(alpha, qa, ra, alignment_mode, alignment_scale, trim_left, trim_right,
-        matrix, gap_prior, position_weights_by_length_alpha, query_position_weights_alpha,
+        matrix, gap_prior if gap_prior_alpha is None else gap_prior_alpha, position_weights_by_length_alpha, query_position_weights_alpha,
         reference_position_weights_alpha)
     _alignment_options(beta, qb, rb, alignment_mode, alignment_scale, trim_left, trim_right,
-        matrix, gap_prior, position_weights_by_length_beta, query_position_weights_beta,
+        matrix, gap_prior if gap_prior_beta is None else gap_prior_beta, position_weights_by_length_beta, query_position_weights_beta,
         reference_position_weights_beta)
     withheld = _withheld_metadata(qa, query_withheld_peptide_ids,
                                  reference_peptide_offsets, reference_peptide_ids)

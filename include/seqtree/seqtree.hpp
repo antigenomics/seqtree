@@ -365,6 +365,8 @@ std::vector<int32_t> levenshtein_matrix(const std::vector<std::string>& a,
 
 // Generic label histograms over one prepared native query/reference population.
 struct GroupedGeometry {
+    std::vector<PairedFeatureOffsets> additional_features;
+    std::optional<std::vector<int32_t>> gap_prior;
     std::string alignment_mode = "gapblock";
     int32_t alignment_scale = 1;
     uint32_t trim_left = 0, trim_right = 0;

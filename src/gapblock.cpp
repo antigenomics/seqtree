@@ -85,6 +85,45 @@ inline double round_even(double value) {
     return base + (fraction > 0.5 || (fraction == 0.5 && std::fmod(base, 2.0) != 0.0));
 }
 
+uint64_t validate_feature(const PairedFeatureOffsets& f, size_t query_count, size_t reference_count) {
+    if (!std::isfinite(f.weight) || f.weight < 0 || f.scale < 0)
+        throw std::invalid_argument("feature weight and scale must be finite and nonnegative");
+    if (f.query_codes.size() != query_count || f.reference_codes.size() != reference_count)
+        throw std::invalid_argument("feature code rows must match query/reference axes");
+    if (f.costs.empty() || f.costs.front().empty())
+        throw std::invalid_argument("feature costs must be a nonempty rectangular matrix");
+    const size_t columns = f.costs.front().size();
+    int32_t maximum = 0;
+    for (const auto& row : f.costs) {
+        if (row.size() != columns) throw std::invalid_argument("feature costs must be rectangular");
+        for (auto cost : row) {
+            if (cost < 0) throw std::invalid_argument("feature costs must be nonnegative");
+            maximum = std::max(maximum, cost);
+        }
+    }
+    const size_t width = !f.query_codes.empty() ? f.query_codes.front().size() :
+                         (!f.reference_codes.empty() ? f.reference_codes.front().size() : 0);
+    if (width % 2 || (!width && (query_count!=0 || reference_count!=0)))
+        throw std::invalid_argument("feature rows must contain a positive number of code pairs");
+    auto validate = [&](const auto& rows, size_t bound) {
+        for (const auto& row : rows) {
+            if (row.size() != width) throw std::invalid_argument("feature rows must have equal depth");
+            for (auto code : row)
+                if (code < 0 || size_t(code) >= bound)
+                    throw std::invalid_argument("feature code outside costs");
+        }
+    };
+    validate(f.query_codes, f.costs.size());
+    validate(f.reference_codes, columns);
+    const size_t depth = width / 2;
+    if (depth && uint64_t(maximum) > std::numeric_limits<uint64_t>::max() / depth)
+        throw std::invalid_argument("feature cost sum can overflow uint64");
+    const double bound = depth && f.weight && f.scale ? round_even(f.weight * double(uint64_t(maximum) * depth) / double(depth)) * f.scale : 0;
+    if (!std::isfinite(bound) || bound > std::numeric_limits<int32_t>::max())
+        throw std::invalid_argument("feature offset can overflow int32");
+    return uint64_t(bound);
+}
+
 GapInput prepare(const std::vector<std::string>& queries, const std::vector<std::string>& refs,
                  Alphabet alphabet, const SubstitutionMatrix* matrix, int32_t go, int32_t ge,
                  const std::vector<int32_t>& prior, uint32_t width, int threads,
@@ -94,7 +133,8 @@ GapInput prepare(const std::vector<std::string>& queries, const std::vector<std:
                  const std::vector<std::vector<int32_t>>& group_distances = {},
                  const std::vector<std::vector<int32_t>>& query_weights = {},
                  const std::vector<std::vector<int32_t>>& reference_weights = {},
-                 const std::optional<PairedFeatureOffsets>& feature_offsets = std::nullopt) {
+                 const std::optional<PairedFeatureOffsets>& feature_offsets = std::nullopt,
+                 uint64_t* score_bound = nullptr) {
     if (go < 0 || ge < 0 || threads < 0)
         throw std::invalid_argument("gap costs and threads must be >= 0");
     if (refs.size() > std::numeric_limits<uint32_t>::max())
@@ -193,47 +233,9 @@ GapInput prepare(const std::vector<std::string>& queries, const std::vector<std:
         in.reference_groups = reference_groups;
         in.group_distances = group_distances;
     }
-    uint64_t largest_feature_offset = 0;
-    if (feature_offsets) {
-        const auto& f = *feature_offsets;
-        if (!std::isfinite(f.weight) || f.weight < 0 || f.scale < 0)
-            throw std::invalid_argument("feature weight and scale must be finite and nonnegative");
-        if (f.query_codes.size() != queries.size() || f.reference_codes.size() != refs.size())
-            throw std::invalid_argument("feature code rows must match query/reference axes");
-        if (f.costs.empty() || f.costs.front().empty())
-            throw std::invalid_argument("feature costs must be a nonempty rectangular matrix");
-        const size_t columns = f.costs.front().size();
-        int32_t maximum = 0;
-        for (const auto& row : f.costs) {
-            if (row.size() != columns) throw std::invalid_argument("feature costs must be rectangular");
-            for (auto cost : row) {
-                if (cost < 0) throw std::invalid_argument("feature costs must be nonnegative");
-                maximum = std::max(maximum, cost);
-            }
-        }
-        const size_t width = !f.query_codes.empty() ? f.query_codes.front().size() :
-                             (!f.reference_codes.empty() ? f.reference_codes.front().size() : 0);
-        if (width % 2 || (!width && (!queries.empty() || !refs.empty())))
-            throw std::invalid_argument("feature rows must contain a positive number of code pairs");
-        auto validate = [&](const auto& rows, size_t bound) {
-            for (const auto& row : rows) {
-                if (row.size() != width) throw std::invalid_argument("feature rows must have equal depth");
-                for (auto code : row)
-                    if (code < 0 || size_t(code) >= bound)
-                        throw std::invalid_argument("feature code outside costs");
-            }
-        };
-        validate(f.query_codes, f.costs.size());
-        validate(f.reference_codes, columns);
-        const size_t depth = width / 2;
-        if (depth && uint64_t(maximum) > std::numeric_limits<uint64_t>::max() / depth)
-            throw std::invalid_argument("feature cost sum can overflow uint64");
-        const double bound = depth && f.weight && f.scale ? round_even(f.weight * double(uint64_t(maximum) * depth) / double(depth)) * f.scale : 0;
-        if (!std::isfinite(bound) || bound > std::numeric_limits<int32_t>::max())
-            throw std::invalid_argument("feature offset can overflow int32");
-        largest_feature_offset = uint64_t(bound);
-        in.features = f;
-    }
+    const uint64_t largest_feature_offset = feature_offsets ?
+        validate_feature(*feature_offsets,queries.size(),refs.size()) : 0;
+    if (feature_offsets) in.features=*feature_offsets;
     const auto largest_pen = *std::max_element(in.pen.begin(), in.pen.end());
     if (*std::min_element(in.pen.begin(), in.pen.end()) < 0)
         throw std::invalid_argument("matrix penalties must be nonnegative");
@@ -245,22 +247,23 @@ GapInput prepare(const std::vector<std::string>& queries, const std::vector<std:
                            uint64_t(in.longest ? in.longest - 1 : 0) * uint32_t(ge);
     if (bound > std::numeric_limits<int32_t>::max())
         throw std::invalid_argument("gapblock score can overflow int32");
+    if (score_bound) *score_bound=bound;
     return in;
+}
+
+inline int32_t feature_offset(const PairedFeatureOffsets& f,size_t i,size_t j) {
+    if (f.weight==0 || f.scale==0) return 0;
+    const auto& q=f.query_codes[i];const auto& r=f.reference_codes[j];
+    uint64_t sum=0;
+    for (size_t k=0;k<q.size();k+=2)
+        sum+=std::max(f.costs[q[k]][r[k]],f.costs[q[k+1]][r[k+1]]);
+    return int32_t(round_even(f.weight*double(sum)/double(q.size()/2))*f.scale);
 }
 
 template<bool Factored = true>
 inline int32_t group_offset(const GapInput& in, size_t i, size_t j) {
     int32_t offset = in.group_distances.empty() ? 0 : in.group_distances[in.query_groups[i]][in.reference_groups[j]];
-    if constexpr (Factored) if (in.features) {
-        const auto& f = *in.features;
-        if (f.weight == 0 || f.scale == 0) return offset;
-        const auto& q = f.query_codes[i];
-        const auto& r = f.reference_codes[j];
-        uint64_t sum = 0;
-        for (size_t k = 0; k < q.size(); k += 2)
-            sum += std::max(f.costs[q[k]][r[k]], f.costs[q[k + 1]][r[k + 1]]);
-        offset += int32_t(round_even(f.weight * double(sum) / double(q.size() / 2)) * f.scale);
-    }
+    if constexpr (Factored) if (in.features) offset+=feature_offset(*in.features,i,j);
     return offset;
 }
 
@@ -669,6 +672,9 @@ struct GroupedCountBatch::Impl {
     int threads = 0;
     bool exclude = false;
     std::mutex mutex;
+    std::optional<std::vector<int32_t>> beta_prior;
+    std::vector<PairedFeatureOffsets> extra_a,extra_b;
+    uint64_t extra_bound_a=0,extra_bound_b=0;
     std::optional<SubstitutionMatrix> similarity;
     AlignMode mode = AlignMode::Global;
     int32_t scale = 1;
@@ -676,9 +682,10 @@ struct GroupedCountBatch::Impl {
     std::vector<int64_t> qdiag_a, rdiag_a, qdiag_b, rdiag_b;
 
     void prepare_affine(const GroupedGeometry& geometry, const GapInput& lane,
-            std::vector<int64_t>& qdiag, std::vector<int64_t>& rdiag) {
+            std::vector<int64_t>& qdiag, std::vector<int64_t>& rdiag,
+            const std::vector<int32_t>& lane_prior,uint64_t extra_bound) {
         if (!geometry.weights.empty() || !geometry.query_weights.empty() ||
-                !geometry.reference_weights.empty() || !prior.empty())
+                !geometry.reference_weights.empty() || !lane_prior.empty())
             throw std::invalid_argument("affine alignment does not accept position weights or gap prior");
         uint64_t max_q=0, max_r=0;
         auto diagonals = [&](const auto& sequences, auto& output, uint64_t& longest) {
@@ -711,9 +718,9 @@ struct GroupedCountBatch::Impl {
                 throw std::invalid_argument("alignment trims exceed sequence length");
             max_r=std::max(max_r,uint64_t(sequence.size()-left-right));
         }
-        uint64_t additive=0;
+        uint64_t additive=extra_bound;
         for (const auto& row:lane.group_distances)
-            for (auto value:row) additive=std::max(additive,uint64_t(value));
+            for (auto value:row) additive=std::max(additive,extra_bound+uint64_t(value));
         if (lane.features) {
             const auto& features=*lane.features;
             int32_t cost=0;
@@ -743,7 +750,14 @@ struct GroupedCountBatch::Impl {
             group_offset<Factored>(lane,i,j);
     }
 
-    template<bool Factored, bool Withheld=false, bool Quantized=false, bool Affine=false> GroupedCountChunk run(size_t start, size_t stop) {
+    template<bool Additional> int64_t extra_offset(const std::vector<PairedFeatureOffsets>& terms,
+            size_t i,size_t j) const {
+        int64_t offset=0;
+        if constexpr (Additional) for (const auto& term:terms) offset+=feature_offset(term,i,j);
+        return offset;
+    }
+
+    template<bool Factored, bool Withheld=false, bool Quantized=false, bool Affine=false, bool Additional=false> GroupedCountChunk run(size_t start, size_t stop) {
         GroupedCountChunk out;
         out.start = start; out.stop = stop;
         const size_t rows = stop-start, K = cuts.size();
@@ -760,6 +774,7 @@ struct GroupedCountBatch::Impl {
         out.sizes = make_buffer({rows,channels});
         out.exact_counts = make_buffer({rows,targets});
         const auto longest = b ? std::max(a.longest,b->longest) : a.longest;
+        const auto& other_prior=beta_prior ? *beta_prior : prior;
         parallel_for(rows,threads,[&] {
                 if constexpr (Affine) {
                     detail::PairwiseScratch scratch;
@@ -804,23 +819,27 @@ struct GroupedCountBatch::Impl {
                     }
                     if (exclusive_peptide>=0) ++sizes[1+2*targets+size_t(exclusive_peptide)];
                     if (!K) continue;
-                    const int64_t offset = int64_t(group_offset<Factored>(a,i,j)) +
-                        (b ? int64_t(group_offset<Factored>(*b,i,j)) : 0);
+                    const int64_t extra_alpha=extra_offset<Additional>(extra_a,i,j);
+                    const int64_t extra_beta=b ? extra_offset<Additional>(extra_b,i,j) : 0;
+                    const int64_t offset = int64_t(group_offset<Factored>(a,i,j))+extra_alpha +
+                        (b ? int64_t(group_offset<Factored>(*b,i,j))+extra_beta : 0);
                     if (offset>cuts.back()) continue;
                     int64_t score;
                     if constexpr (Affine) score=affine_cell<Factored>(a,i,j,qdiag_a,rdiag_a,scratch);
                     else score=score_cell<Factored>(a,i,j,go,ge,prior,scratch.data());
+                    score+=extra_alpha;
                     if constexpr (Quantized) {
-                        const int64_t additive=group_offset<Factored>(a,i,j);
+                        const int64_t additive=group_offset<Factored>(a,i,j)+extra_alpha;
                         score=additive+(score-additive)/quantum_a*quantum_a;
                     }
                     if (b) {
                         if (score>cuts.back()) continue;
                         int64_t other;
                         if constexpr (Affine) other=affine_cell<Factored>(*b,i,j,qdiag_b,rdiag_b,scratch);
-                        else other=score_cell<Factored>(*b,i,j,go,ge,prior,scratch.data());
+                        else other=score_cell<Factored>(*b,i,j,go,ge,other_prior,scratch.data());
+                        other+=extra_beta;
                         if constexpr (Quantized) {
-                            const int64_t additive=group_offset<Factored>(*b,i,j);
+                            const int64_t additive=group_offset<Factored>(*b,i,j)+extra_beta;
                             other=additive+(other-additive)/quantum_b*quantum_b;
                         }
                         score+=other;
@@ -842,16 +861,16 @@ struct GroupedCountBatch::Impl {
             });
         return out;
     }
-    template<bool Affine> GroupedCountChunk dispatch(size_t start,size_t stop) {
+    template<bool Affine,bool Additional> GroupedCountChunk dispatch(size_t start,size_t stop) {
         const bool features=a.features || (b && b->features);
         const bool quantized=quantum_a!=1 || quantum_b!=1;
         return quantized ?
             (withheld ?
-                (features ? run<true,true,true,Affine>(start,stop) : run<false,true,true,Affine>(start,stop)) :
-                (features ? run<true,false,true,Affine>(start,stop) : run<false,false,true,Affine>(start,stop))) :
+                (features ? run<true,true,true,Affine,Additional>(start,stop) : run<false,true,true,Affine,Additional>(start,stop)) :
+                (features ? run<true,false,true,Affine,Additional>(start,stop) : run<false,false,true,Affine,Additional>(start,stop))) :
             (withheld ?
-                (features ? run<true,true,false,Affine>(start,stop) : run<false,true,false,Affine>(start,stop)) :
-                (features ? run<true,false,false,Affine>(start,stop) : run<false,false,false,Affine>(start,stop)));
+                (features ? run<true,true,false,Affine,Additional>(start,stop) : run<false,true,false,Affine,Additional>(start,stop)) :
+                (features ? run<true,false,false,Affine,Additional>(start,stop) : run<false,false,false,Affine,Additional>(start,stop)));
     }
 };
 
@@ -931,21 +950,43 @@ GroupedCountBatch::GroupedCountBatch(const std::vector<std::string>& qa, const s
         throw std::invalid_argument("reference peptide memberships require query withheld peptide IDs");
     in.withheld=std::move(withheld);
     in.peptide_offsets=std::move(peptide_offsets);in.peptide_ids=std::move(peptide_ids);
-    in.a=prepare(qa,ra,alphabet,matrix,go,ge,prior,width,threads,alpha.weights,
+    const auto& alpha_prior=alpha.gap_prior ? *alpha.gap_prior : prior;
+    const auto& beta_prior=beta && beta->gap_prior ? *beta->gap_prior : prior;
+    uint64_t bound_a=0,bound_b=0;
+    in.a=prepare(qa,ra,alphabet,matrix,go,ge,alpha_prior,width,threads,alpha.weights,
         alpha.query_groups,alpha.reference_groups,alpha.group_distances,
-        alpha.query_weights,alpha.reference_weights,alpha.features);
+        alpha.query_weights,alpha.reference_weights,alpha.features,&bound_a);
     if (beta) {
         if (qa.size()!=qb.size() || ra.size()!=rb.size())
             throw std::invalid_argument("paired query/reference axes must agree");
-        in.b=prepare(qb,rb,alphabet,matrix,go,ge,prior,width,threads,beta->weights,
+        in.b=prepare(qb,rb,alphabet,matrix,go,ge,beta_prior,width,threads,beta->weights,
             beta->query_groups,beta->reference_groups,beta->group_distances,
-            beta->query_weights,beta->reference_weights,beta->features);
+            beta->query_weights,beta->reference_weights,beta->features,&bound_b);
     } else if (!qb.empty() || !rb.empty()) throw std::invalid_argument("paired axes require beta geometry");
     if (threads<0 || unsigned(threads)>available_cpus())
         throw std::invalid_argument("worker count exceeds the available CPU budget");
     in.cuts=std::move(cuts); in.offsets=std::move(offsets); in.labels=std::move(labels);
     in.target_peptides=std::move(target_peptides); in.exclusive=std::move(exclusive);
-    in.qgenes=std::move(qgenes);in.rgenes=std::move(rgenes);in.prior=std::move(prior);
+    in.qgenes=std::move(qgenes);in.rgenes=std::move(rgenes);
+    in.prior=alpha.gap_prior ? *alpha.gap_prior : std::move(prior);
+    if (beta && (beta->gap_prior || alpha.gap_prior))
+        in.beta_prior=beta->gap_prior ? *beta->gap_prior : prior;
+    auto additional=[&](const auto& terms,size_t nq,size_t nr,uint64_t base_bound) {
+        uint64_t bound=0;
+        for (const auto& term:terms) {
+            const uint64_t next=validate_feature(term,nq,nr);
+            if (next>uint64_t(INT32_MAX)-base_bound-bound)
+                throw std::overflow_error("additional factored offsets can overflow int32");
+            bound+=next;
+        }
+        return bound;
+    };
+    in.extra_bound_a=additional(alpha.additional_features,qa.size(),ra.size(),bound_a);
+    in.extra_a=alpha.additional_features;
+    if (beta) {
+        in.extra_bound_b=additional(beta->additional_features,qb.size(),rb.size(),bound_b);
+        in.extra_b=beta->additional_features;
+    }
     in.channels=1+2*in.targets+in.peptides;in.chunk_size=chunk_size;
     in.go=go;in.ge=ge;in.threads=threads;in.exclude=exclude;
     if (alpha.alignment_scale<1 || (alpha.alignment_mode!="gapblock" &&
@@ -963,8 +1004,8 @@ GroupedCountBatch::GroupedCountBatch(const std::vector<std::string>& qa, const s
         in.similarity=*matrix;
         in.mode=alpha.alignment_mode=="local" ? AlignMode::Local : AlignMode::Global;
         in.scale=alpha.alignment_scale;in.left=alpha.trim_left;in.right=alpha.trim_right;
-        in.prepare_affine(alpha,in.a,in.qdiag_a,in.rdiag_a);
-        if (beta) in.prepare_affine(*beta,*in.b,in.qdiag_b,in.rdiag_b);
+        in.prepare_affine(alpha,in.a,in.qdiag_a,in.rdiag_a,in.prior,in.extra_bound_a);
+        if (beta) in.prepare_affine(*beta,*in.b,in.qdiag_b,in.rdiag_b,in.beta_prior ? *in.beta_prior : in.prior,in.extra_bound_b);
     }
 }
 std::optional<GroupedCountChunk> GroupedCountBatch::next() {
@@ -972,7 +1013,10 @@ std::optional<GroupedCountChunk> GroupedCountBatch::next() {
     std::lock_guard<std::mutex> lock(in.mutex);
     if (in.cursor==in.a.q.size()) return std::nullopt;
     const size_t stop=in.cursor+std::min(in.chunk_size,in.a.q.size()-in.cursor);
-    auto out=in.similarity ? in.dispatch<true>(in.cursor,stop) : in.dispatch<false>(in.cursor,stop);
+    const bool extra=!in.extra_a.empty() || !in.extra_b.empty();
+    auto out=in.similarity ?
+        (extra ? in.dispatch<true,true>(in.cursor,stop) : in.dispatch<true,false>(in.cursor,stop)) :
+        (extra ? in.dispatch<false,true>(in.cursor,stop) : in.dispatch<false,false>(in.cursor,stop));
     in.cursor=stop;
     return out;
 }

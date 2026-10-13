@@ -842,6 +842,8 @@ NB_MODULE(_core, m) {
         .def_ro("exact_counts",&GroupedCountChunk::exact_counts);
     nb::class_<GroupedGeometry>(m,"_GroupedGeometry")
         .def(nb::init<>()).def_rw("weights",&GroupedGeometry::weights)
+        .def_rw("additional_features",&GroupedGeometry::additional_features)
+        .def_rw("gap_prior",&GroupedGeometry::gap_prior)
         .def_rw("alignment_mode",&GroupedGeometry::alignment_mode)
         .def_rw("alignment_scale",&GroupedGeometry::alignment_scale)
         .def_rw("trim_left",&GroupedGeometry::trim_left)
@@ -903,6 +905,8 @@ NB_MODULE(_core, m) {
        "Generic grouped shared-threshold curves using existing gapblock scoring, feature_offsets, "
        "paired sum and full-key exact exclusion. Optional query_withheld_peptide_ids removes full "
        "reference peptide CSR memberships before counting and recomputes survivor exclusivity. "
+       "Geometry additional_features sums independently rounded factored offsets; optional geometry "
+       "gap_prior overrides the shared prior per lane (public gap_prior_alpha/gap_prior_beta). "
        "Geometry alignment_mode selects gapblock/global/local; alignment_scale and trim_left/trim_right "
        "apply to affine diagonal-sum distances before offsets. Geometry score_quantum floors each raw alignment independently before additive offsets "
        "and paired summation; positive int32, default1 leaves scores unchanged. "
