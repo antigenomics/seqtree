@@ -432,3 +432,37 @@ references once with shared encoded inputs and per-worker alignment scratch;
 output occupies O(Q) storage without sparse hit objects or a dense matrix.
 The bounded minimum is not an unbounded nearest result. No statistical model
 or cutoff recommendation is introduced.
+
+Factored paired-feature offsets
+-------------------------------
+
+``PairedFeatureOffsets(query_codes, reference_codes, costs, weight=1.0, scale=1)``
+represents an additive offset without a query-by-reference penalty table. Each
+code row contains ``[head_0, tail_0, ..., head_(D-1), tail_(D-1)]`` for a positive,
+shared depth ``D``. Integer codes index the query rows/reference columns of the
+shared nonnegative rectangular ``costs`` table. The offset is::
+
+    scale * round_even(weight * sum(max(costs[q_head_i][r_head_i],
+                                       costs[q_tail_i][r_tail_i])) / D)
+
+``round_even`` rounds to nearest integer with ties to even. Binary64 multiplication
+by ``weight`` precedes division by ``D``; ``scale`` multiplies after rounding.
+Weight must be finite and nonnegative, scale a nonnegative integer. Code rows,
+axes, costs and combined int32 score bounds are checked before worker execution.
+Both empty axes are accepted with empty code rows; nonempty axes require positive
+depth. Zero weight or scale supplies a zero offset with the same validation.
+The descriptor owns its inputs and exposes no mutable Python fields; one batch
+copy remains shared and immutable while the GIL is released.
+
+``score_matrix``, ``count_batch`` (including ``linear_mass=True``), ``ball_batch``
+and ``group_audit_batch`` accept ``feature_offsets=None``. The offset adds to any
+existing ``group_distances`` penalty. The audit component excludes both additive
+offsets. ``paired_sum_count_batch`` accepts ``feature_offsets_alpha=None`` and
+``feature_offsets_beta=None`` independently. Exact exclusion still uses full
+encoded sequence identity, including both lanes for linked rows. Omission
+preserves the existing scorer. Storage is O((Q+R)*D+C), where ``C`` is the number
+of code-pair costs; no Q-by-R offset allocation is made.
+
+Native capability can be checked by importing ``PairedFeatureOffsets`` from
+``seqtree._core`` and checking the native reducer docstring for ``feature_offsets``.
+The Python wrapper alone does not prove that an installed extension supports it.

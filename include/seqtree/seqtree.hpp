@@ -3,6 +3,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <tuple>
@@ -228,6 +229,20 @@ std::vector<int32_t> align_dist_matrix(const std::vector<std::string>& queries,
 // Both axes are required; these rows cannot combine with length profiles.
 // Optional group IDs index a nonnegative rectangular penalty table added per pair.
 // Exact exclusion remains encoded junction identity, independent of these groups.
+// Factored nonnegative offsets: paired feature codes, one shared code cost table.
+// Round weight * sum(max(head cost, tail cost)) / depth to nearest, ties even,
+// then multiply by scale. Input descriptors are copied into immutable batch state.
+struct PairedFeatureOffsets {
+    std::vector<std::vector<int32_t>> query_codes, reference_codes, costs;
+    double weight;
+    int32_t scale;
+    PairedFeatureOffsets(std::vector<std::vector<int32_t>> q,
+                         std::vector<std::vector<int32_t>> r,
+                         std::vector<std::vector<int32_t>> c, double w = 1.0, int32_t s = 1)
+        : query_codes(std::move(q)), reference_codes(std::move(r)), costs(std::move(c)),
+          weight(w), scale(s) {}
+};
+
 std::vector<int32_t> gapblock_matrix(const std::vector<std::string>& queries,
                                      const std::vector<std::string>& refs, Alphabet,
                                      const SubstitutionMatrix* matrix, int32_t gap_open,
@@ -238,7 +253,8 @@ std::vector<int32_t> gapblock_matrix(const std::vector<std::string>& queries,
                                      const std::vector<int32_t>& reference_groups = {},
                                      const std::vector<std::vector<int32_t>>& group_distances = {},
         const std::vector<std::vector<int32_t>>& query_weights = {},
-        const std::vector<std::vector<int32_t>>& reference_weights = {});
+        const std::vector<std::vector<int32_t>>& reference_weights = {},
+        const std::optional<PairedFeatureOffsets>& feature_offsets = std::nullopt);
 
 // Exhaustive ball rows in reference order; hit edit fields are unset (zero).
 std::vector<std::vector<Hit>> gapblock_ball_batch(const std::vector<std::string>& queries,
@@ -250,7 +266,8 @@ std::vector<std::vector<Hit>> gapblock_ball_batch(const std::vector<std::string>
         const std::vector<int32_t>& reference_groups = {},
         const std::vector<std::vector<int32_t>>& group_distances = {},
         const std::vector<std::vector<int32_t>>& query_weights = {},
-        const std::vector<std::vector<int32_t>>& reference_weights = {});
+        const std::vector<std::vector<int32_t>>& reference_weights = {},
+        const std::optional<PairedFeatureOffsets>& feature_offsets = std::nullopt);
 
 // Exhaustive bounded reductions using the same gapblock cell. Top-k ties use
 // (penalty, ref_id); paired penalty is max(lane scores). Exact exclusion uses
@@ -267,7 +284,8 @@ gapblock_group_audit_batch(const std::vector<std::string>& queries,
         const std::vector<int32_t>& reference_groups = {},
         const std::vector<std::vector<int32_t>>& group_distances = {},
         const std::vector<std::vector<int32_t>>& query_weights = {},
-        const std::vector<std::vector<int32_t>>& reference_weights = {});
+        const std::vector<std::vector<int32_t>>& reference_weights = {},
+        const std::optional<PairedFeatureOffsets>& feature_offsets = std::nullopt);
 
 std::vector<std::vector<Hit>> gapblock_topk_batch(const std::vector<std::string>& queries,
         const std::vector<std::string>& refs, uint32_t k, Alphabet alphabet,
@@ -287,7 +305,8 @@ std::vector<std::vector<uint64_t>> gapblock_count_batch(const std::vector<std::s
         const std::vector<int32_t>& reference_groups = {},
         const std::vector<std::vector<int32_t>>& group_distances = {},
         const std::vector<std::vector<int32_t>>& query_weights = {},
-        const std::vector<std::vector<int32_t>>& reference_weights = {});
+        const std::vector<std::vector<int32_t>>& reference_weights = {},
+        const std::optional<PairedFeatureOffsets>& feature_offsets = std::nullopt);
 std::pair<std::vector<std::vector<uint64_t>>, std::vector<std::vector<uint64_t>>> gapblock_count_mass_batch(const std::vector<std::string>& queries,
         const std::vector<std::string>& refs, const std::vector<std::vector<int32_t>>& thresholds,
         Alphabet alphabet, const SubstitutionMatrix* matrix, int32_t go, int32_t ge,
@@ -297,7 +316,8 @@ std::pair<std::vector<std::vector<uint64_t>>, std::vector<std::vector<uint64_t>>
         const std::vector<int32_t>& reference_groups = {},
         const std::vector<std::vector<int32_t>>& group_distances = {},
         const std::vector<std::vector<int32_t>>& query_weights = {},
-        const std::vector<std::vector<int32_t>>& reference_weights = {});
+        const std::vector<std::vector<int32_t>>& reference_weights = {},
+        const std::optional<PairedFeatureOffsets>& feature_offsets = std::nullopt);
 std::vector<std::vector<uint64_t>> gapblock_paired_count_batch(
         const std::vector<std::string>& qa, const std::vector<std::string>& qb,
         const std::vector<std::string>& ra, const std::vector<std::string>& rb,
@@ -319,7 +339,9 @@ std::pair<std::vector<std::vector<uint64_t>>, std::vector<std::vector<uint64_t>>
         const std::vector<std::vector<int32_t>>& query_weights_alpha = {},
         const std::vector<std::vector<int32_t>>& query_weights_beta = {},
         const std::vector<std::vector<int32_t>>& reference_weights_alpha = {},
-        const std::vector<std::vector<int32_t>>& reference_weights_beta = {});
+        const std::vector<std::vector<int32_t>>& reference_weights_beta = {},
+        const std::optional<PairedFeatureOffsets>& feature_offsets_alpha = std::nullopt,
+        const std::optional<PairedFeatureOffsets>& feature_offsets_beta = std::nullopt);
 
 // ---------------------------------------------------------------------------------------
 // Plain string edit distances on raw characters, unit costs. Deliberately alphabet-agnostic:
