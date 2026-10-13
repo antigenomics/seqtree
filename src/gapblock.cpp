@@ -664,11 +664,12 @@ struct GroupedCountBatch::Impl {
     std::optional<std::vector<int32_t>> withheld;
     size_t targets = 0, peptides = 0, channels = 0, chunk_size = 0, cursor = 0;
     int32_t go = 0, ge = 0;
+    int32_t quantum_a = 1, quantum_b = 1;
     int threads = 0;
     bool exclude = false;
     std::mutex mutex;
 
-    template<bool Factored, bool Withheld=false> GroupedCountChunk run(size_t start, size_t stop) {
+    template<bool Factored, bool Withheld=false, bool Quantized=false> GroupedCountChunk run(size_t start, size_t stop) {
         GroupedCountChunk out;
         out.start = start; out.stop = stop;
         const size_t rows = stop-start, K = cuts.size();
@@ -728,9 +729,18 @@ struct GroupedCountBatch::Impl {
                         (b ? int64_t(group_offset<Factored>(*b,i,j)) : 0);
                     if (offset>cuts.back()) continue;
                     int64_t score = score_cell<Factored>(a,i,j,go,ge,prior,scratch.data());
+                    if constexpr (Quantized) {
+                        const int64_t additive=group_offset<Factored>(a,i,j);
+                        score=additive+(score-additive)/quantum_a*quantum_a;
+                    }
                     if (b) {
                         if (score>cuts.back()) continue;
-                        score+=int64_t(score_cell<Factored>(*b,i,j,go,ge,prior,scratch.data()));
+                        int64_t other=score_cell<Factored>(*b,i,j,go,ge,prior,scratch.data());
+                        if constexpr (Quantized) {
+                            const int64_t additive=group_offset<Factored>(*b,i,j);
+                            other=additive+(other-additive)/quantum_b*quantum_b;
+                        }
+                        score+=other;
                     }
                     const auto found=std::lower_bound(cuts.begin(),cuts.end(),score);
                     if (found==cuts.end()) continue;
@@ -763,6 +773,10 @@ GroupedCountBatch::GroupedCountBatch(const std::vector<std::string>& qa, const s
         std::vector<uint32_t> peptide_offsets, std::vector<int32_t> peptide_ids)
         : impl_(std::make_shared<Impl>()) {
     auto& in=*impl_;
+    if (alpha.score_quantum<1 || (beta && beta->score_quantum<1))
+        throw std::invalid_argument("score quantum must be positive");
+    in.quantum_a=alpha.score_quantum;
+    in.quantum_b=beta ? beta->score_quantum : 1;
     if (!chunk_size) throw std::invalid_argument("chunk_size must be positive");
     if (!std::is_sorted(cuts.begin(),cuts.end()) || std::adjacent_find(cuts.begin(),cuts.end())!=cuts.end())
         throw std::invalid_argument("grouped thresholds must be strictly increasing");
@@ -847,9 +861,14 @@ std::optional<GroupedCountChunk> GroupedCountBatch::next() {
     if (in.cursor==in.a.q.size()) return std::nullopt;
     const size_t stop=in.cursor+std::min(in.chunk_size,in.a.q.size()-in.cursor);
     const bool features=in.a.features || (in.b && in.b->features);
-    auto out=in.withheld ?
-        (features ? in.run<true,true>(in.cursor,stop) : in.run<false,true>(in.cursor,stop)) :
-        (features ? in.run<true>(in.cursor,stop) : in.run<false>(in.cursor,stop));
+    const bool quantized=in.quantum_a!=1 || in.quantum_b!=1;
+    auto out=quantized ?
+        (in.withheld ?
+            (features ? in.run<true,true,true>(in.cursor,stop) : in.run<false,true,true>(in.cursor,stop)) :
+            (features ? in.run<true,false,true>(in.cursor,stop) : in.run<false,false,true>(in.cursor,stop))) :
+        (in.withheld ?
+            (features ? in.run<true,true>(in.cursor,stop) : in.run<false,true>(in.cursor,stop)) :
+            (features ? in.run<true>(in.cursor,stop) : in.run<false>(in.cursor,stop)));
     in.cursor=stop;
     return out;
 }

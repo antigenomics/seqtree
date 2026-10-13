@@ -847,7 +847,9 @@ NB_MODULE(_core, m) {
         .def_rw("group_distances",&GroupedGeometry::group_distances)
         .def_rw("query_weights",&GroupedGeometry::query_weights)
         .def_rw("reference_weights",&GroupedGeometry::reference_weights)
-        .def_rw("features",&GroupedGeometry::features);
+        .def_rw("features",&GroupedGeometry::features)
+        .def_rw("score_quantum",&GroupedGeometry::score_quantum,
+                "Positive alignment quantum; floor raw alignment before additive offsets.");
     nb::class_<GroupedCountBatch>(m,"GroupedCountBatch",
         "One prepared grouped scoring population, yielding owned bounded buffers; no NumPy dependency.")
         .def_prop_ro("query_count",&GroupedCountBatch::query_count)
@@ -897,6 +899,8 @@ NB_MODULE(_core, m) {
        "Generic grouped shared-threshold curves using existing gapblock scoring, feature_offsets, "
        "paired sum and full-key exact exclusion. Optional query_withheld_peptide_ids removes full "
        "reference peptide CSR memberships before counting and recomputes survivor exclusivity. "
+       "Geometry score_quantum floors each raw alignment independently before additive offsets "
+       "and paired summation; positive int32, default1 leaves scores unchanged. "
        "Validation once, GIL released for preparation/chunks.");
     m.def("gapblock_count_batch", [](const std::vector<std::string>& queries, const std::vector<std::string>& refs, const std::vector<std::vector<int32_t>>& thresholds, const std::string& alphabet, const std::optional<SubstitutionMatrix>& matrix, int32_t go, int32_t ge, const std::vector<int32_t>& prior, uint32_t width, int threads, bool exclude_exact, const std::vector<std::vector<int32_t>>& weights, const std::vector<int32_t>& query_groups, const std::vector<int32_t>& reference_groups, const std::vector<std::vector<int32_t>>& group_distances, const std::vector<std::vector<int32_t>>& query_weights, const std::vector<std::vector<int32_t>>& reference_weights, const std::optional<PairedFeatureOffsets>& feature_offsets, bool shared_thresholds) {
         const auto alph = parse_alphabet(alphabet);

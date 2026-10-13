@@ -894,8 +894,13 @@ def _withheld_metadata(q, query_withheld_peptide_ids, reference_peptide_offsets,
 
 
 def _grouped_geometry(q, r, weights, query_groups, reference_groups, distances,
-                      query_weights, reference_weights, features):
+                      query_weights, reference_weights, features, score_quantum=1):
+    quantum = _batch_integer(score_quantum, "score quantum", 1)
     geometry = _GroupedGeometry()
+    if quantum != 1:
+        if not hasattr(geometry, "score_quantum"):
+            raise RuntimeError("alignment quantization requires native score_quantum support")
+        geometry.score_quantum = quantum
     geometry.weights = _position_weights(weights, q, r)
     geometry.query_groups, geometry.reference_groups, geometry.group_distances = _group_options(
         query_groups, reference_groups, distances, q, r)
@@ -912,8 +917,13 @@ def grouped_count_batch(queries, refs, thresholds, *, reference_target_offsets,
         position_weights_by_length=None, query_group_ids=None, reference_group_ids=None,
         group_distances=None, query_position_weights=None, reference_position_weights=None,
         feature_offsets=None, query_withheld_peptide_ids=None,
-        reference_peptide_offsets=None, reference_peptide_ids=None):
+        reference_peptide_offsets=None, reference_peptide_ids=None, score_quantum=1):
     """Yield bounded label curves from one immutable prepared scoring population.
+
+    ``score_quantum`` is a positive int32. Floor the raw alignment score to a
+    multiple of this quantum before adding group/feature offsets. Default1 leaves
+    every score unchanged. Paired lanes floor independently before their sum.
+    This option applies only to grouped APIs.
 
     Cutoffs are one strictly increasing flat integer list. References are a caller's
     deduplicated search-key axis; CSR offsets/IDs assign each key to zero or more
@@ -944,7 +954,7 @@ def grouped_count_batch(queries, refs, thresholds, *, reference_target_offsets,
         query_gene_ids, reference_gene_ids, chunk_size)
     go, ge, cube, width, threads = _batch_options((q, r), matrix, gap_open, gap_extend, gap_prior, threads)
     geometry = _grouped_geometry(q, r, position_weights_by_length, query_group_ids,
-        reference_group_ids, group_distances, query_position_weights, reference_position_weights, feature_offsets)
+        reference_group_ids, group_distances, query_position_weights, reference_position_weights, feature_offsets, score_quantum)
     withheld = _withheld_metadata(q, query_withheld_peptide_ids,
                                  reference_peptide_offsets, reference_peptide_ids)
     return _gapblock_grouped_count_batch(q, r, *metadata, alphabet, matrix, go, ge, cube, width,
@@ -965,7 +975,7 @@ def grouped_paired_sum_count_batch(queries_a, queries_b, refs_a, refs_b, thresho
         query_position_weights_alpha=None, query_position_weights_beta=None,
         reference_position_weights_alpha=None, reference_position_weights_beta=None,
         feature_offsets_alpha=None, feature_offsets_beta=None,
-        query_withheld_peptide_ids=None, reference_peptide_offsets=None, reference_peptide_ids=None):
+        query_withheld_peptide_ids=None, reference_peptide_offsets=None, reference_peptide_ids=None, score_quantum_alpha=1, score_quantum_beta=1):
     """Grouped buffers under existing linked sum geometry; see grouped_count_batch.
 
     Composite full-key exclusion requires both lanes equal. Canonical paired gene
@@ -982,10 +992,10 @@ def grouped_paired_sum_count_batch(queries_a, queries_b, refs_a, refs_b, thresho
     go, ge, cube, width, threads = _batch_options((qa, qb, ra, rb), matrix, gap_open, gap_extend, gap_prior, threads)
     alpha = _grouped_geometry(qa, ra, position_weights_by_length_alpha, query_group_ids_alpha,
         reference_group_ids_alpha, group_distances_alpha, query_position_weights_alpha,
-        reference_position_weights_alpha, feature_offsets_alpha)
+        reference_position_weights_alpha, feature_offsets_alpha, score_quantum_alpha)
     beta = _grouped_geometry(qb, rb, position_weights_by_length_beta, query_group_ids_beta,
         reference_group_ids_beta, group_distances_beta, query_position_weights_beta,
-        reference_position_weights_beta, feature_offsets_beta)
+        reference_position_weights_beta, feature_offsets_beta, score_quantum_beta)
     withheld = _withheld_metadata(qa, query_withheld_peptide_ids,
                                  reference_peptide_offsets, reference_peptide_ids)
     return _gapblock_grouped_count_batch(qa, ra, *metadata, alphabet, matrix, go, ge, cube, width,
