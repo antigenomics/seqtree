@@ -306,7 +306,7 @@ std::vector<std::vector<uint64_t>> gapblock_count_batch(const std::vector<std::s
         const std::vector<std::vector<int32_t>>& group_distances = {},
         const std::vector<std::vector<int32_t>>& query_weights = {},
         const std::vector<std::vector<int32_t>>& reference_weights = {},
-        const std::optional<PairedFeatureOffsets>& feature_offsets = std::nullopt);
+        const std::optional<PairedFeatureOffsets>& feature_offsets = std::nullopt, bool shared_thresholds = false);
 std::pair<std::vector<std::vector<uint64_t>>, std::vector<std::vector<uint64_t>>> gapblock_count_mass_batch(const std::vector<std::string>& queries,
         const std::vector<std::string>& refs, const std::vector<std::vector<int32_t>>& thresholds,
         Alphabet alphabet, const SubstitutionMatrix* matrix, int32_t go, int32_t ge,
@@ -317,7 +317,7 @@ std::pair<std::vector<std::vector<uint64_t>>, std::vector<std::vector<uint64_t>>
         const std::vector<std::vector<int32_t>>& group_distances = {},
         const std::vector<std::vector<int32_t>>& query_weights = {},
         const std::vector<std::vector<int32_t>>& reference_weights = {},
-        const std::optional<PairedFeatureOffsets>& feature_offsets = std::nullopt);
+        const std::optional<PairedFeatureOffsets>& feature_offsets = std::nullopt, bool shared_thresholds = false);
 std::vector<std::vector<uint64_t>> gapblock_paired_count_batch(
         const std::vector<std::string>& qa, const std::vector<std::string>& qb,
         const std::vector<std::string>& ra, const std::vector<std::string>& rb,
@@ -341,7 +341,7 @@ std::pair<std::vector<std::vector<uint64_t>>, std::vector<std::vector<uint64_t>>
         const std::vector<std::vector<int32_t>>& reference_weights_alpha = {},
         const std::vector<std::vector<int32_t>>& reference_weights_beta = {},
         const std::optional<PairedFeatureOffsets>& feature_offsets_alpha = std::nullopt,
-        const std::optional<PairedFeatureOffsets>& feature_offsets_beta = std::nullopt);
+        const std::optional<PairedFeatureOffsets>& feature_offsets_beta = std::nullopt, bool shared_thresholds = false);
 
 // ---------------------------------------------------------------------------------------
 // Plain string edit distances on raw characters, unit costs. Deliberately alphabet-agnostic:

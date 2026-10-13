@@ -466,3 +466,21 @@ of code-pair costs; no Q-by-R offset allocation is made.
 Native capability can be checked by importing ``PairedFeatureOffsets`` from
 ``seqtree._core`` and checking the native reducer docstring for ``feature_offsets``.
 The Python wrapper alone does not prove that an installed extension supports it.
+
+Shared batch cutoffs
+--------------------
+
+``count_batch`` (including ``linear_mass=True``) and ``paired_sum_count_batch``
+accept ``shared_thresholds=False``. With ``True``, ``thresholds`` is one flat
+integer cutoff list for the whole query batch. Python validates that list once;
+the native reducer owns and sorts one immutable cutoff vector shared by all
+workers. Outputs retain their usual query-by-cutoff shape, cutoff order,
+duplicate cutoffs, boundary ties, negative-cutoff behavior and exact exclusion.
+There is no cross-call cache. An empty cutoff list produces an empty row per
+query; empty query axes produce empty outputs. Default ``False`` preserves the
+existing per-query row API. The native entry point represents shared cutoffs as
+exactly one row, including for empty query axes, and checks that shape before
+workers. Int32 cutoff bounds and uint64 mass overflow validation remain intact.
+
+Native capability is exposed by ``shared_thresholds`` in the reducer docstrings;
+check both the Python signature and the installed native extension.

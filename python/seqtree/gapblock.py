@@ -670,7 +670,11 @@ def _sequence_weights(query_weights, reference_weights, by_length, queries, refs
     return validate(query_weights, queries), validate(reference_weights, refs)
 
 
-def _threshold_rows(thresholds, n_queries):
+def _threshold_rows(thresholds, n_queries, shared_thresholds=False):
+    if not isinstance(shared_thresholds, bool):
+        raise TypeError("shared_thresholds must be a boolean")
+    if shared_thresholds:
+        return [[_batch_integer(value, "threshold", -(1 << 31)) for value in thresholds]]
     rows = [list(row) for row in thresholds]
     if len(rows) != n_queries:
         raise ValueError("thresholds must have one row per query")
@@ -704,13 +708,15 @@ def topk_batch(queries, refs, k=10, matrix=None, gap_open=None, gap_extend=1,
 def count_batch(queries, refs, thresholds, matrix=None, gap_open=None, gap_extend=1,
                 gap_prior=None, alphabet="aa", threads=0, exclude_exact=False, position_weights_by_length=None,
                 query_group_ids=None, reference_group_ids=None, group_distances=None, linear_mass=False,
-                query_position_weights=None, reference_position_weights=None, feature_offsets=None):
+                query_position_weights=None, reference_position_weights=None, feature_offsets=None, shared_thresholds=False):
     """Count all reference scores <= each query's requested integer thresholds.
 
     Optional positional weights and additive group distances match :func:`score_matrix`.
     Exact exclusion remains full encoded identity, irrespective of group distance.
     ``thresholds`` has one row per query; rows may be empty, unsorted or contain
-    duplicates. Return integer counts in their original order, including ALL
+    duplicates. With ``shared_thresholds=True``, supply one flat cutoff list;
+    it is validated and sorted once for the entire batch. Return integer counts
+    in their original order, including ALL
     score ties. Negative cutoffs count zero. Same scorer/exclusion as
     :func:`topk_batch`; one native batch with O(Q*S) output, no dense score matrix.
     Worker scratch is O(max_sequence_length + maximum_threshold_row_length).
@@ -724,13 +730,13 @@ def count_batch(queries, refs, thresholds, matrix=None, gap_open=None, gap_exten
     if not isinstance(linear_mass, bool):
         raise TypeError("linear_mass must be a boolean")
     q, r = list(queries), list(refs)
-    thresholds = _threshold_rows(thresholds, len(q))
+    thresholds = _threshold_rows(thresholds, len(q), shared_thresholds)
     go, ge, cube, width, threads = _batch_options((q, r), matrix, gap_open, gap_extend, gap_prior, threads)
     reduction = _gapblock_count_mass_batch if linear_mass else _gapblock_count_batch
     return reduction(q, r, thresholds, alphabet, matrix, go, ge, cube, width, threads, exclude_exact,
                                  _position_weights(position_weights_by_length, q, r),
                                  *_group_options(query_group_ids, reference_group_ids, group_distances, q, r),
-                            *_sequence_weights(query_position_weights, reference_position_weights, position_weights_by_length, q, r), feature_offsets)
+                            *_sequence_weights(query_position_weights, reference_position_weights, position_weights_by_length, q, r), feature_offsets, shared_thresholds)
 
 
 def group_audit_batch(queries, refs, thresholds, matrix=None, gap_open=None, gap_extend=1,
@@ -826,7 +832,7 @@ def paired_sum_count_batch(queries_a, queries_b, refs_a, refs_b, thresholds, mat
                            group_distances_alpha=None, group_distances_beta=None,
                            query_position_weights_alpha=None, query_position_weights_beta=None,
                            reference_position_weights_alpha=None, reference_position_weights_beta=None,
-                           feature_offsets_alpha=None, feature_offsets_beta=None):
+                           feature_offsets_alpha=None, feature_offsets_beta=None, shared_thresholds=False):
     """Return (counts, linear masses) for linked rows under summed lane distances.
 
     Shared matrix/gap costs/prior and separate full-coordinate lane weights and
@@ -836,12 +842,13 @@ def paired_sum_count_batch(queries_a, queries_b, refs_a, refs_b, thresholds, mat
     duplicate reference observations and input threshold order. Exact exclusion
     removes a row only when both encoded full strings match. One GIL-released
     native traversal, O(Q*S) outputs and O(max_length + max_threshold_row) worker
-    scratch; no matrix/edges. The existing paired-max API is unchanged.
+    scratch; no matrix/edges. ``shared_thresholds=True`` accepts one flat cutoff
+    list validated and sorted once for all queries. The paired-max API is unchanged.
     """
     qa, qb, ra, rb = map(list, (queries_a, queries_b, refs_a, refs_b))
     if len(qa) != len(qb) or len(ra) != len(rb):
         raise ValueError("paired query/reference axes must agree")
-    thresholds = _threshold_rows(thresholds, len(qa))
+    thresholds = _threshold_rows(thresholds, len(qa), shared_thresholds)
     go, ge, cube, width, threads = _batch_options((qa, qb, ra, rb), matrix, gap_open, gap_extend, gap_prior, threads)
     ag = _group_options(query_group_ids_alpha, reference_group_ids_alpha, group_distances_alpha, qa, ra)
     bg = _group_options(query_group_ids_beta, reference_group_ids_beta, group_distances_beta, qb, rb)
@@ -852,7 +859,7 @@ def paired_sum_count_batch(queries_a, queries_b, refs_a, refs_b, thresholds, mat
         _position_weights(position_weights_by_length_alpha, qa, ra),
         _position_weights(position_weights_by_length_beta, qb, rb),
         ag[0], bg[0], ag[1], bg[1], ag[2], bg[2],
-        aw[0], bw[0], aw[1], bw[1], feature_offsets_alpha, feature_offsets_beta)
+        aw[0], bw[0], aw[1], bw[1], feature_offsets_alpha, feature_offsets_beta, shared_thresholds)
 
 
 class GapBlockIndex:

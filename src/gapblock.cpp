@@ -390,11 +390,88 @@ std::vector<std::vector<uint64_t>> counted_impl(const GapInput& a, const GapInpu
     return out;
 }
 
+template<bool Factored>
+std::vector<std::vector<uint64_t>> counted_shared_impl(const GapInput& a, const GapInput* b,
+                  const std::vector<std::vector<int32_t>>& thresholds, int32_t go, int32_t ge,
+                  const std::vector<int32_t>& prior, int threads, bool exclude_exact,
+                  std::vector<std::vector<uint64_t>>* masses = nullptr, bool sum_pair_distance = false) {
+    if (thresholds.size() != 1)
+        throw std::invalid_argument("shared thresholds must contain exactly one row");
+    if (b && (b->q.size() != a.q.size() || b->r.size() != a.r.size()))
+        throw std::invalid_argument("paired query/reference axes must agree");
+    if (sum_pair_distance && !b)
+        throw std::invalid_argument("sum distance requires two linked views");
+    std::vector<std::vector<uint64_t>> out(a.q.size());
+    if (masses) {
+        masses->resize(a.q.size());
+        if (std::any_of(a.pen.begin(), a.pen.end(), [](int32_t cost) { return cost < 0; }) ||
+            (b && std::any_of(b->pen.begin(), b->pen.end(), [](int32_t cost) { return cost < 0; })))
+            throw std::invalid_argument("linear mass requires nonnegative scores");
+        // Every score admitted to a row is <= its largest positive threshold.
+        // Bound both score sums and threshold*count before workers start.
+        for (const auto& row : thresholds) for (auto threshold : row)
+            if (threshold > 0 && a.r.size() > std::numeric_limits<uint64_t>::max() / uint64_t(threshold))
+                throw std::overflow_error("gapblock linear mass exceeds uint64");
+    }
+    auto sort_row = [](auto& sorted, const auto& row) {
+        sorted.reserve(row.size());
+        for (size_t t = 0; t < row.size(); ++t) sorted.emplace_back(row[t], t);
+        std::sort(sorted.begin(), sorted.end());
+    };
+    std::vector<std::pair<int32_t, size_t>> shared_sorted;
+    sort_row(shared_sorted, thresholds.front());
+    const auto longest = b ? std::max(a.longest, b->longest) : a.longest;
+    parallel_for(a.q.size(), threads, [&] { return std::vector<int32_t>(size_t(longest) + 1); },
+        [&](size_t i, std::vector<int32_t>& scratch) {
+            const auto& sorted = shared_sorted;
+            std::vector<uint64_t> bins(sorted.size());
+            std::vector<uint64_t> score_bins(masses ? sorted.size() : 0);
+            out[i].resize(sorted.size());
+            if (masses) (*masses)[i].resize(sorted.size());
+            if (sorted.empty()) return;
+            for (size_t j = 0; j < a.r.size(); ++j) {
+                if (exclude_exact && a.q[i] == a.r[j] && (!b || b->q[i] == b->r[j])) continue;
+                const int64_t offset = int64_t(group_offset<Factored>(a, i, j)) +
+                    (sum_pair_distance ? int64_t(group_offset<Factored>(*b, i, j)) : 0);
+                if (offset > sorted.back().first) continue;
+                int64_t score = score_cell<Factored>(a, i, j, go, ge, prior, scratch.data());
+                if (sum_pair_distance) {
+                    if (score > sorted.back().first) continue;
+                    score += int64_t(score_cell<Factored>(*b, i, j, go, ge, prior, scratch.data()));
+                } else if (b) {
+                    score = std::max<int64_t>(score, score_cell<Factored>(*b, i, j, go, ge, prior, scratch.data()));
+                }
+                const auto pos = std::lower_bound(sorted.begin(), sorted.end(), score,
+                    [](const auto& threshold, int64_t value) { return threshold.first < value; });
+                if (pos != sorted.end()) {
+                    const auto bin = size_t(pos - sorted.begin());
+                    ++bins[bin];
+                    if (masses) score_bins[bin] += uint64_t(score);
+                }
+            }
+            uint64_t cumulative = 0, score_sum = 0;
+            for (size_t t = 0; t < sorted.size(); ++t) {
+                cumulative += bins[t];
+                out[i][sorted[t].second] = cumulative;
+                if (masses) {
+                    score_sum += score_bins[t];
+                    (*masses)[i][sorted[t].second] = uint64_t(std::max(sorted[t].first, 0)) * cumulative - score_sum;
+                }
+            }
+        });
+    return out;
+}
+
 // Dispatch once per batch: absent features retain the original hot loop.
 std::vector<std::vector<uint64_t>> counted(const GapInput& a, const GapInput* b,
                   const std::vector<std::vector<int32_t>>& thresholds, int32_t go, int32_t ge,
                   const std::vector<int32_t>& prior, int threads, bool exclude_exact,
-                  std::vector<std::vector<uint64_t>>* masses = nullptr, bool sum_pair_distance = false) {
+                  std::vector<std::vector<uint64_t>>* masses = nullptr, bool sum_pair_distance = false, bool shared_thresholds = false) {
+    if (shared_thresholds) {
+        if (!a.features && (!b || !b->features))
+            return counted_shared_impl<false>(a, b, thresholds, go, ge, prior, threads, exclude_exact, masses, sum_pair_distance);
+        return counted_shared_impl<true>(a, b, thresholds, go, ge, prior, threads, exclude_exact, masses, sum_pair_distance);
+    }
     if (!a.features && (!b || !b->features))
         return counted_impl<false>(a, b, thresholds, go, ge, prior, threads, exclude_exact, masses, sum_pair_distance);
     return counted_impl<true>(a, b, thresholds, go, ge, prior, threads, exclude_exact, masses, sum_pair_distance);
@@ -520,9 +597,9 @@ std::vector<std::vector<uint64_t>> gapblock_count_batch(const std::vector<std::s
         const std::vector<std::vector<int32_t>>& weights,
         const std::vector<int32_t>& query_groups, const std::vector<int32_t>& reference_groups,
         const std::vector<std::vector<int32_t>>& group_distances, const std::vector<std::vector<int32_t>>& query_weights, const std::vector<std::vector<int32_t>>& reference_weights,
-        const std::optional<PairedFeatureOffsets>& feature_offsets) {
+        const std::optional<PairedFeatureOffsets>& feature_offsets, bool shared_thresholds) {
     const auto a = prepare(queries, refs, alphabet, matrix, go, ge, prior, width, threads, weights, query_groups, reference_groups, group_distances, query_weights, reference_weights, feature_offsets);
-    return counted(a, nullptr, thresholds, go, ge, prior, threads, exclude_exact);
+    return counted(a, nullptr, thresholds, go, ge, prior, threads, exclude_exact, nullptr, false, shared_thresholds);
 }
 
 std::pair<std::vector<std::vector<uint64_t>>, std::vector<std::vector<uint64_t>>> gapblock_count_mass_batch(const std::vector<std::string>& queries,
@@ -532,10 +609,10 @@ std::pair<std::vector<std::vector<uint64_t>>, std::vector<std::vector<uint64_t>>
         const std::vector<std::vector<int32_t>>& weights,
         const std::vector<int32_t>& query_groups, const std::vector<int32_t>& reference_groups,
         const std::vector<std::vector<int32_t>>& group_distances, const std::vector<std::vector<int32_t>>& query_weights, const std::vector<std::vector<int32_t>>& reference_weights,
-        const std::optional<PairedFeatureOffsets>& feature_offsets) {
+        const std::optional<PairedFeatureOffsets>& feature_offsets, bool shared_thresholds) {
     const auto a = prepare(queries, refs, alphabet, matrix, go, ge, prior, width, threads, weights, query_groups, reference_groups, group_distances, query_weights, reference_weights, feature_offsets);
     std::vector<std::vector<uint64_t>> masses;
-    auto counts = counted(a, nullptr, thresholds, go, ge, prior, threads, exclude_exact, &masses);
+    auto counts = counted(a, nullptr, thresholds, go, ge, prior, threads, exclude_exact, &masses, false, shared_thresholds);
     return {std::move(counts), std::move(masses)};
 }
 
@@ -567,13 +644,13 @@ std::pair<std::vector<std::vector<uint64_t>>, std::vector<std::vector<uint64_t>>
         const std::vector<std::vector<int32_t>>& reference_weights_alpha,
         const std::vector<std::vector<int32_t>>& reference_weights_beta,
         const std::optional<PairedFeatureOffsets>& feature_offsets_alpha,
-        const std::optional<PairedFeatureOffsets>& feature_offsets_beta) {
+        const std::optional<PairedFeatureOffsets>& feature_offsets_beta, bool shared_thresholds) {
     const auto a = prepare(qa, ra, alphabet, matrix, go, ge, prior, width, threads,
                            weights_alpha, query_groups_alpha, reference_groups_alpha, group_distances_alpha, query_weights_alpha, reference_weights_alpha, feature_offsets_alpha);
     const auto b = prepare(qb, rb, alphabet, matrix, go, ge, prior, width, threads,
                            weights_beta, query_groups_beta, reference_groups_beta, group_distances_beta, query_weights_beta, reference_weights_beta, feature_offsets_beta);
     std::vector<std::vector<uint64_t>> masses;
-    auto counts = counted(a, &b, thresholds, go, ge, prior, threads, exclude_exact, &masses, true);
+    auto counts = counted(a, &b, thresholds, go, ge, prior, threads, exclude_exact, &masses, true, shared_thresholds);
     return {std::move(counts), std::move(masses)};
 }
 
