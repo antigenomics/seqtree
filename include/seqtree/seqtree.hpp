@@ -387,7 +387,10 @@ public:
         const SubstitutionMatrix* matrix, int32_t go, int32_t ge, std::vector<int32_t> prior,
         uint32_t width, int threads, bool exclude_exact, const GroupedGeometry& alpha,
         const std::optional<GroupedGeometry>& beta = std::nullopt,
-        const std::vector<std::string>& qb = {}, const std::vector<std::string>& rb = {});
+        const std::vector<std::string>& qb = {}, const std::vector<std::string>& rb = {},
+        std::optional<std::vector<int32_t>> query_withheld_peptides = std::nullopt,
+        std::vector<uint32_t> reference_peptide_offsets = {},
+        std::vector<int32_t> reference_peptide_ids = {});
     std::optional<GroupedCountChunk> next();
     size_t query_count() const;
     size_t reference_count() const;

@@ -878,6 +878,21 @@ def _grouped_metadata(q, r, thresholds, reference_target_offsets, reference_targ
     return cuts, offsets, labels, peptides, exclusive, qgenes, rgenes, chunk_size
 
 
+def _withheld_metadata(q, query_withheld_peptide_ids, reference_peptide_offsets, reference_peptide_ids):
+    if query_withheld_peptide_ids is None:
+        if reference_peptide_offsets is not None or reference_peptide_ids is not None:
+            raise ValueError("reference peptide memberships require query withheld peptide IDs")
+        return None, [], []
+    if reference_peptide_offsets is None or reference_peptide_ids is None:
+        raise ValueError("withheld peptide IDs require full reference peptide CSR")
+    withheld = [_batch_integer(v, "withheld peptide ID", -1) for v in query_withheld_peptide_ids]
+    offsets = [_batch_integer(v, "peptide offset", upper=(1 << 32)-1) for v in reference_peptide_offsets]
+    peptides = [_batch_integer(v, "reference peptide ID") for v in reference_peptide_ids]
+    if len(withheld) != len(q):
+        raise ValueError("withheld peptide IDs must match query axis")
+    return withheld, offsets, peptides
+
+
 def _grouped_geometry(q, r, weights, query_groups, reference_groups, distances,
                       query_weights, reference_weights, features):
     geometry = _GroupedGeometry()
@@ -896,7 +911,8 @@ def grouped_count_batch(queries, refs, thresholds, *, reference_target_offsets,
         gap_extend=1, gap_prior=None, alphabet="aa", threads=0, exclude_exact=False,
         position_weights_by_length=None, query_group_ids=None, reference_group_ids=None,
         group_distances=None, query_position_weights=None, reference_position_weights=None,
-        feature_offsets=None):
+        feature_offsets=None, query_withheld_peptide_ids=None,
+        reference_peptide_offsets=None, reference_peptide_ids=None):
     """Yield bounded label curves from one immutable prepared scoring population.
 
     Cutoffs are one strictly increasing flat integer list. References are a caller's
@@ -909,7 +925,16 @@ def grouped_count_batch(queries, refs, thresholds, *, reference_target_offsets,
     exact_counts[C,T], with start/stop query offsets. numpy.asarray is zero-copy;
     no NumPy import/dependency is required. Exact counts retain raw multiplicity;
     exclude_exact punctures every curve and population size by full sequence identity.
-    Encoding/geometry validation occurs once; each query/reference is scored once
+    Optional query_withheld_peptide_ids is one ID/query (-1 means none) and
+    requires full reference_peptide_offsets/reference_peptide_ids CSR. Each sorted
+    unique row includes all raw peptide labels, including sparse/unselected IDs in
+    the target_peptide_ids namespace. Extra IDs beyond output peptide channels are
+    valid. Selected target parents and static exclusives must agree with full CSR.
+    Withholding removes every membership of that peptide, drops keys with no
+    survivors, and recomputes exclusive surviving peptides before exact exclusion.
+    Raw exact counts include only surviving targets. Full CSR without query IDs is
+    rejected; None preserves the existing traversal. Encoding/geometry validation
+    occurs once; each query/reference is scored once
     under the existing kernel, with GIL-released bounded workers. Memory is bounded
     by chunk_size, labels and cutoffs, never Q*labels. Retained chunks own their data.
     """
@@ -920,8 +945,12 @@ def grouped_count_batch(queries, refs, thresholds, *, reference_target_offsets,
     go, ge, cube, width, threads = _batch_options((q, r), matrix, gap_open, gap_extend, gap_prior, threads)
     geometry = _grouped_geometry(q, r, position_weights_by_length, query_group_ids,
         reference_group_ids, group_distances, query_position_weights, reference_position_weights, feature_offsets)
+    withheld = _withheld_metadata(q, query_withheld_peptide_ids,
+                                 reference_peptide_offsets, reference_peptide_ids)
     return _gapblock_grouped_count_batch(q, r, *metadata, alphabet, matrix, go, ge, cube, width,
-                                       threads, exclude_exact, geometry)
+                                       threads, exclude_exact, geometry,
+                                       query_withheld_peptide_ids=withheld[0],
+                                       reference_peptide_offsets=withheld[1],reference_peptide_ids=withheld[2])
 
 
 def grouped_paired_sum_count_batch(queries_a, queries_b, refs_a, refs_b, thresholds, *,
@@ -935,7 +964,8 @@ def grouped_paired_sum_count_batch(queries_a, queries_b, refs_a, refs_b, thresho
         group_distances_alpha=None, group_distances_beta=None,
         query_position_weights_alpha=None, query_position_weights_beta=None,
         reference_position_weights_alpha=None, reference_position_weights_beta=None,
-        feature_offsets_alpha=None, feature_offsets_beta=None):
+        feature_offsets_alpha=None, feature_offsets_beta=None,
+        query_withheld_peptide_ids=None, reference_peptide_offsets=None, reference_peptide_ids=None):
     """Grouped buffers under existing linked sum geometry; see grouped_count_batch.
 
     Composite full-key exclusion requires both lanes equal. Canonical paired gene
@@ -956,8 +986,12 @@ def grouped_paired_sum_count_batch(queries_a, queries_b, refs_a, refs_b, thresho
     beta = _grouped_geometry(qb, rb, position_weights_by_length_beta, query_group_ids_beta,
         reference_group_ids_beta, group_distances_beta, query_position_weights_beta,
         reference_position_weights_beta, feature_offsets_beta)
+    withheld = _withheld_metadata(qa, query_withheld_peptide_ids,
+                                 reference_peptide_offsets, reference_peptide_ids)
     return _gapblock_grouped_count_batch(qa, ra, *metadata, alphabet, matrix, go, ge, cube, width,
-                                       threads, exclude_exact, alpha, beta, qb, rb)
+                                       threads, exclude_exact, alpha, beta, qb, rb,
+                                       query_withheld_peptide_ids=withheld[0],
+                                       reference_peptide_offsets=withheld[1],reference_peptide_ids=withheld[2])
 
 
 class GapBlockIndex:

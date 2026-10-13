@@ -659,14 +659,16 @@ struct GroupedCountBatch::Impl {
     GapInput a;
     std::optional<GapInput> b;
     std::vector<int32_t> cuts, prior, target_peptides, exclusive, qgenes, rgenes;
-    std::vector<uint32_t> offsets, labels;
+    std::vector<uint32_t> offsets, labels, peptide_offsets;
+    std::vector<int32_t> peptide_ids;
+    std::optional<std::vector<int32_t>> withheld;
     size_t targets = 0, peptides = 0, channels = 0, chunk_size = 0, cursor = 0;
     int32_t go = 0, ge = 0;
     int threads = 0;
     bool exclude = false;
     std::mutex mutex;
 
-    template<bool Factored> GroupedCountChunk run(size_t start, size_t stop) {
+    template<bool Factored, bool Withheld=false> GroupedCountChunk run(size_t start, size_t stop) {
         GroupedCountChunk out;
         out.start = start; out.stop = stop;
         const size_t rows = stop-start, K = cuts.size();
@@ -690,17 +692,37 @@ struct GroupedCountBatch::Impl {
                 auto* hist = K ? out.counts.data.data()+row*channels*K : nullptr;
                 auto* exact = targets ? out.exact_counts.data.data()+row*targets : nullptr;
                 for (size_t j=0;j<a.r.size();++j) {
+                    int32_t exclusive_peptide=exclusive[j], withheld_peptide=-1;
+                    if constexpr (Withheld) {
+                        withheld_peptide=(*withheld)[i];
+                        const auto begin=peptide_ids.begin()+peptide_offsets[j];
+                        const auto end=peptide_ids.begin()+peptide_offsets[j+1];
+                        const bool removed=std::binary_search(begin,end,withheld_peptide);
+                        const size_t surviving=size_t(end-begin)-size_t(removed);
+                        if (!surviving) continue;
+                        exclusive_peptide=-1;
+                        if (surviving==1) {
+                            const int32_t peptide=*begin==withheld_peptide ? *(begin+1) : *begin;
+                            if (size_t(peptide)<peptides) exclusive_peptide=peptide;
+                        }
+                    }
                     const bool identical = a.q[i]==a.r[j] && (!b || b->q[i]==b->r[j]);
                     const bool same_gene = qgenes[i]==rgenes[j];
                     if (identical)
-                        for (size_t p=offsets[j];p<offsets[j+1];++p) ++exact[labels[p]];
+                        for (size_t p=offsets[j];p<offsets[j+1];++p) {
+                            if constexpr (Withheld)
+                                if (target_peptides[labels[p]]==withheld_peptide) continue;
+                            ++exact[labels[p]];
+                        }
                     if (exclude && identical) continue;
                     ++sizes[0];
                     for (size_t p=offsets[j];p<offsets[j+1];++p) {
+                        if constexpr (Withheld)
+                            if (target_peptides[labels[p]]==withheld_peptide) continue;
                         ++sizes[1+labels[p]];
                         if (same_gene) ++sizes[1+targets+labels[p]];
                     }
-                    if (exclusive[j]>=0) ++sizes[1+2*targets+size_t(exclusive[j])];
+                    if (exclusive_peptide>=0) ++sizes[1+2*targets+size_t(exclusive_peptide)];
                     if (!K) continue;
                     const int64_t offset = int64_t(group_offset<Factored>(a,i,j)) +
                         (b ? int64_t(group_offset<Factored>(*b,i,j)) : 0);
@@ -715,10 +737,12 @@ struct GroupedCountBatch::Impl {
                     const size_t bin=size_t(found-cuts.begin());
                     ++hist[bin];
                     for (size_t p=offsets[j];p<offsets[j+1];++p) {
+                        if constexpr (Withheld)
+                            if (target_peptides[labels[p]]==withheld_peptide) continue;
                         ++hist[(1+labels[p])*K+bin];
                         if (same_gene) ++hist[(1+targets+labels[p])*K+bin];
                     }
-                    if (exclusive[j]>=0) ++hist[(1+2*targets+size_t(exclusive[j]))*K+bin];
+                    if (exclusive_peptide>=0) ++hist[(1+2*targets+size_t(exclusive_peptide))*K+bin];
                 }
                 for (size_t channel=0;channel<channels;++channel)
                     for (size_t t=1;t<K;++t) hist[channel*K+t]+=hist[channel*K+t-1];
@@ -734,7 +758,10 @@ GroupedCountBatch::GroupedCountBatch(const std::vector<std::string>& qa, const s
         Alphabet alphabet, const SubstitutionMatrix* matrix, int32_t go, int32_t ge,
         std::vector<int32_t> prior, uint32_t width, int threads, bool exclude,
         const GroupedGeometry& alpha, const std::optional<GroupedGeometry>& beta,
-        const std::vector<std::string>& qb, const std::vector<std::string>& rb) : impl_(std::make_shared<Impl>()) {
+        const std::vector<std::string>& qb, const std::vector<std::string>& rb,
+        std::optional<std::vector<int32_t>> withheld,
+        std::vector<uint32_t> peptide_offsets, std::vector<int32_t> peptide_ids)
+        : impl_(std::make_shared<Impl>()) {
     auto& in=*impl_;
     if (!chunk_size) throw std::invalid_argument("chunk_size must be positive");
     if (!std::is_sorted(cuts.begin(),cuts.end()) || std::adjacent_find(cuts.begin(),cuts.end())!=cuts.end())
@@ -769,6 +796,33 @@ GroupedCountBatch::GroupedCountBatch(const std::vector<std::string>& qa, const s
             previous=label;
         }
     }
+    if (withheld) {
+        if (withheld->size()!=qa.size() ||
+            std::any_of(withheld->begin(),withheld->end(),[](auto x){return x<-1;}))
+            throw std::invalid_argument("withheld peptide IDs must match queries and be >= -1");
+        if (peptide_ids.size()>std::numeric_limits<uint32_t>::max())
+            throw std::overflow_error("reference peptide memberships exceed uint32");
+        if (peptide_offsets.size()!=ra.size()+1 || peptide_offsets.front()!=0 ||
+            peptide_offsets.back()!=peptide_ids.size() ||
+            !std::is_sorted(peptide_offsets.begin(),peptide_offsets.end()))
+            throw std::invalid_argument("reference peptide offsets must form valid CSR");
+        for (size_t j=0;j<ra.size();++j) {
+            const auto begin=peptide_ids.begin()+peptide_offsets[j];
+            const auto end=peptide_ids.begin()+peptide_offsets[j+1];
+            if (std::any_of(begin,end,[](auto x){return x<0;}) ||
+                !std::is_sorted(begin,end) || std::adjacent_find(begin,end)!=end)
+                throw std::invalid_argument("reference peptide IDs must be sorted, unique and nonnegative");
+            for (size_t p=offsets[j];p<offsets[j+1];++p)
+                if (!std::binary_search(begin,end,target_peptides[labels[p]]))
+                    throw std::invalid_argument("reference peptide memberships omit selected target parent");
+            const int32_t expected=end-begin==1 && size_t(*begin)<in.peptides ? *begin : -1;
+            if (exclusive[j]!=expected)
+                throw std::invalid_argument("exclusive peptide contradicts full reference peptide membership");
+        }
+    } else if (!peptide_offsets.empty() || !peptide_ids.empty())
+        throw std::invalid_argument("reference peptide memberships require query withheld peptide IDs");
+    in.withheld=std::move(withheld);
+    in.peptide_offsets=std::move(peptide_offsets);in.peptide_ids=std::move(peptide_ids);
     in.a=prepare(qa,ra,alphabet,matrix,go,ge,prior,width,threads,alpha.weights,
         alpha.query_groups,alpha.reference_groups,alpha.group_distances,
         alpha.query_weights,alpha.reference_weights,alpha.features);
@@ -792,7 +846,10 @@ std::optional<GroupedCountChunk> GroupedCountBatch::next() {
     std::lock_guard<std::mutex> lock(in.mutex);
     if (in.cursor==in.a.q.size()) return std::nullopt;
     const size_t stop=in.cursor+std::min(in.chunk_size,in.a.q.size()-in.cursor);
-    auto out=(in.a.features || (in.b && in.b->features)) ? in.run<true>(in.cursor,stop) : in.run<false>(in.cursor,stop);
+    const bool features=in.a.features || (in.b && in.b->features);
+    auto out=in.withheld ?
+        (features ? in.run<true,true>(in.cursor,stop) : in.run<false,true>(in.cursor,stop)) :
+        (features ? in.run<true>(in.cursor,stop) : in.run<false>(in.cursor,stop));
     in.cursor=stop;
     return out;
 }

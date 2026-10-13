@@ -869,7 +869,9 @@ NB_MODULE(_core, m) {
         const std::string& alphabet,const std::optional<SubstitutionMatrix>& matrix,
         int32_t go,int32_t ge,std::vector<int32_t> prior,uint32_t width,int threads,
         bool exclude,const GroupedGeometry& alpha,const std::optional<GroupedGeometry>& beta,
-        const std::vector<std::string>& qb,const std::vector<std::string>& rb) {
+        const std::vector<std::string>& qb,const std::vector<std::string>& rb,
+        std::optional<std::vector<int32_t>> withheld,
+        std::vector<uint32_t> peptide_offsets,std::vector<int32_t> peptide_ids) {
         const auto alph=parse_alphabet(alphabet);
         // Snapshot mutable Python geometry before releasing the GIL. Native
         // iteration only reads its own prepared state, never a Python object.
@@ -879,7 +881,8 @@ NB_MODULE(_core, m) {
         return GroupedCountBatch(q,r,std::move(cuts),std::move(offsets),std::move(labels),
             std::move(target_peptides),std::move(exclusive),std::move(qgenes),std::move(rgenes),
             chunk_size,alph,matrix ? &*matrix : nullptr,go,ge,std::move(prior),width,threads,
-            exclude,owned_alpha,owned_beta,qb,rb);
+            exclude,owned_alpha,owned_beta,qb,rb,std::move(withheld),
+            std::move(peptide_offsets),std::move(peptide_ids));
     },nb::arg("queries"),nb::arg("refs"),nb::arg("thresholds"),
        nb::arg("reference_target_offsets"),nb::arg("reference_target_ids"),
        nb::arg("target_peptide_ids"),nb::arg("reference_exclusive_peptide_ids"),
@@ -888,8 +891,13 @@ NB_MODULE(_core, m) {
        nb::arg("prior"),nb::arg("prior_width"),nb::arg("threads"),nb::arg("exclude_exact"),
        nb::arg("alpha"),nb::arg("beta")=std::nullopt,
        nb::arg("queries_beta")=std::vector<std::string>{},nb::arg("refs_beta")=std::vector<std::string>{},
+       nb::arg("query_withheld_peptide_ids")=std::nullopt,
+       nb::arg("reference_peptide_offsets")=std::vector<uint32_t>{},
+       nb::arg("reference_peptide_ids")=std::vector<int32_t>{},
        "Generic grouped shared-threshold curves using existing gapblock scoring, feature_offsets, "
-       "paired sum and full-key exact exclusion. Validation once, GIL released for preparation/chunks.");
+       "paired sum and full-key exact exclusion. Optional query_withheld_peptide_ids removes full "
+       "reference peptide CSR memberships before counting and recomputes survivor exclusivity. "
+       "Validation once, GIL released for preparation/chunks.");
     m.def("gapblock_count_batch", [](const std::vector<std::string>& queries, const std::vector<std::string>& refs, const std::vector<std::vector<int32_t>>& thresholds, const std::string& alphabet, const std::optional<SubstitutionMatrix>& matrix, int32_t go, int32_t ge, const std::vector<int32_t>& prior, uint32_t width, int threads, bool exclude_exact, const std::vector<std::vector<int32_t>>& weights, const std::vector<int32_t>& query_groups, const std::vector<int32_t>& reference_groups, const std::vector<std::vector<int32_t>>& group_distances, const std::vector<std::vector<int32_t>>& query_weights, const std::vector<std::vector<int32_t>>& reference_weights, const std::optional<PairedFeatureOffsets>& feature_offsets, bool shared_thresholds) {
         const auto alph = parse_alphabet(alphabet);
         nb::gil_scoped_release release;
