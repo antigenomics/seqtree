@@ -1,5 +1,6 @@
 #include "seqtree/seqtree.hpp"
 #include "seqtree/parallel.hpp"
+#include "pairwise_detail.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -668,8 +669,81 @@ struct GroupedCountBatch::Impl {
     int threads = 0;
     bool exclude = false;
     std::mutex mutex;
+    std::optional<SubstitutionMatrix> similarity;
+    AlignMode mode = AlignMode::Global;
+    int32_t scale = 1;
+    uint32_t left = 0, right = 0;
+    std::vector<int64_t> qdiag_a, rdiag_a, qdiag_b, rdiag_b;
 
-    template<bool Factored, bool Withheld=false, bool Quantized=false> GroupedCountChunk run(size_t start, size_t stop) {
+    void prepare_affine(const GroupedGeometry& geometry, const GapInput& lane,
+            std::vector<int64_t>& qdiag, std::vector<int64_t>& rdiag) {
+        if (!geometry.weights.empty() || !geometry.query_weights.empty() ||
+                !geometry.reference_weights.empty() || !prior.empty())
+            throw std::invalid_argument("affine alignment does not accept position weights or gap prior");
+        uint64_t max_q=0, max_r=0;
+        auto diagonals = [&](const auto& sequences, auto& output, uint64_t& longest) {
+            output.reserve(sequences.size());
+            for (const auto& sequence : sequences) {
+                if (uint64_t(left)+right>sequence.size())
+                    throw std::invalid_argument("alignment trims exceed sequence length");
+                const size_t length=sequence.size()-left-right;
+                longest=std::max(longest,uint64_t(length));
+                int64_t diagonal=0;
+                for (size_t k=left;k<sequence.size()-right;++k)
+                    diagonal+=similarity->similarity(sequence[k],sequence[k]);
+                output.push_back(diagonal);
+            }
+        };
+        // Bound before summation/DP: |similarity| and gap magnitudes cover every
+        // consumed residue; diagonal sum minus twice DP is <=3*(m+n)*max_cost.
+        uint64_t maximum=std::max(go,ge);
+        for (uint8_t x=0;x<lane.A;++x) for (uint8_t y=0;y<lane.A;++y) {
+            const int64_t value=similarity->similarity(x,y);
+            maximum=std::max(maximum,uint64_t(value<0 ? -value : value));
+        }
+        for (const auto& sequence:lane.q) {
+            if (uint64_t(left)+right>sequence.size())
+                throw std::invalid_argument("alignment trims exceed sequence length");
+            max_q=std::max(max_q,uint64_t(sequence.size()-left-right));
+        }
+        for (const auto& sequence:lane.r) {
+            if (uint64_t(left)+right>sequence.size())
+                throw std::invalid_argument("alignment trims exceed sequence length");
+            max_r=std::max(max_r,uint64_t(sequence.size()-left-right));
+        }
+        uint64_t additive=0;
+        for (const auto& row:lane.group_distances)
+            for (auto value:row) additive=std::max(additive,uint64_t(value));
+        if (lane.features) {
+            const auto& features=*lane.features;
+            int32_t cost=0;
+            for (const auto& row:features.costs) for (auto value:row) cost=std::max(cost,value);
+            const size_t depth=(!features.query_codes.empty() ? features.query_codes.front().size() :
+                (!features.reference_codes.empty() ? features.reference_codes.front().size() : 0))/2;
+            if (depth && features.weight && features.scale)
+                additive+=uint64_t(round_even(features.weight*double(uint64_t(cost)*depth)/double(depth))*features.scale);
+        }
+        const uint64_t limit=(uint64_t(INT32_MAX)-additive)/uint32_t(scale);
+        if (maximum && max_q+max_r>limit/(3*maximum))
+            throw std::overflow_error("affine grouped distance can overflow int32");
+        diagonals(lane.q,qdiag,max_q); diagonals(lane.r,rdiag,max_r);
+    }
+
+    template<bool Factored>
+    int64_t affine_cell(const GapInput& lane, size_t i, size_t j,
+            const std::vector<int64_t>& qdiag, const std::vector<int64_t>& rdiag,
+            detail::PairwiseScratch& scratch) const {
+        const auto& q=lane.q[i]; const auto& r=lane.r[j];
+        // data() can be null for an empty vector; avoid pointer arithmetic then.
+        const auto* qp=q.empty() ? q.data() : q.data()+left;
+        const auto* rp=r.empty() ? r.data() : r.data()+left;
+        const int64_t sim=detail::align_score_encoded(qp,q.size()-left-right,
+            rp,r.size()-left-right,*similarity,mode,go,ge,scratch);
+        return std::max(int64_t(0),qdiag[i]+rdiag[j]-2*sim)*scale+
+            group_offset<Factored>(lane,i,j);
+    }
+
+    template<bool Factored, bool Withheld=false, bool Quantized=false, bool Affine=false> GroupedCountChunk run(size_t start, size_t stop) {
         GroupedCountChunk out;
         out.start = start; out.stop = stop;
         const size_t rows = stop-start, K = cuts.size();
@@ -686,8 +760,13 @@ struct GroupedCountBatch::Impl {
         out.sizes = make_buffer({rows,channels});
         out.exact_counts = make_buffer({rows,targets});
         const auto longest = b ? std::max(a.longest,b->longest) : a.longest;
-        parallel_for(rows,threads,[&] {return std::vector<int32_t>(size_t(longest)+1);},
-            [&](size_t row, std::vector<int32_t>& scratch) {
+        parallel_for(rows,threads,[&] {
+                if constexpr (Affine) {
+                    detail::PairwiseScratch scratch;
+                    for (auto& row:scratch) row.reserve(size_t(longest)+1);
+                    return scratch;
+                } else return std::vector<int32_t>(size_t(longest)+1);
+            }, [&](size_t row, auto& scratch) {
                 const size_t i = start+row;
                 auto* sizes = out.sizes.data.data()+row*channels;
                 auto* hist = K ? out.counts.data.data()+row*channels*K : nullptr;
@@ -728,14 +807,18 @@ struct GroupedCountBatch::Impl {
                     const int64_t offset = int64_t(group_offset<Factored>(a,i,j)) +
                         (b ? int64_t(group_offset<Factored>(*b,i,j)) : 0);
                     if (offset>cuts.back()) continue;
-                    int64_t score = score_cell<Factored>(a,i,j,go,ge,prior,scratch.data());
+                    int64_t score;
+                    if constexpr (Affine) score=affine_cell<Factored>(a,i,j,qdiag_a,rdiag_a,scratch);
+                    else score=score_cell<Factored>(a,i,j,go,ge,prior,scratch.data());
                     if constexpr (Quantized) {
                         const int64_t additive=group_offset<Factored>(a,i,j);
                         score=additive+(score-additive)/quantum_a*quantum_a;
                     }
                     if (b) {
                         if (score>cuts.back()) continue;
-                        int64_t other=score_cell<Factored>(*b,i,j,go,ge,prior,scratch.data());
+                        int64_t other;
+                        if constexpr (Affine) other=affine_cell<Factored>(*b,i,j,qdiag_b,rdiag_b,scratch);
+                        else other=score_cell<Factored>(*b,i,j,go,ge,prior,scratch.data());
                         if constexpr (Quantized) {
                             const int64_t additive=group_offset<Factored>(*b,i,j);
                             other=additive+(other-additive)/quantum_b*quantum_b;
@@ -758,6 +841,17 @@ struct GroupedCountBatch::Impl {
                     for (size_t t=1;t<K;++t) hist[channel*K+t]+=hist[channel*K+t-1];
             });
         return out;
+    }
+    template<bool Affine> GroupedCountChunk dispatch(size_t start,size_t stop) {
+        const bool features=a.features || (b && b->features);
+        const bool quantized=quantum_a!=1 || quantum_b!=1;
+        return quantized ?
+            (withheld ?
+                (features ? run<true,true,true,Affine>(start,stop) : run<false,true,true,Affine>(start,stop)) :
+                (features ? run<true,false,true,Affine>(start,stop) : run<false,false,true,Affine>(start,stop))) :
+            (withheld ?
+                (features ? run<true,true,false,Affine>(start,stop) : run<false,true,false,Affine>(start,stop)) :
+                (features ? run<true,false,false,Affine>(start,stop) : run<false,false,false,Affine>(start,stop)));
     }
 };
 
@@ -854,21 +948,31 @@ GroupedCountBatch::GroupedCountBatch(const std::vector<std::string>& qa, const s
     in.qgenes=std::move(qgenes);in.rgenes=std::move(rgenes);in.prior=std::move(prior);
     in.channels=1+2*in.targets+in.peptides;in.chunk_size=chunk_size;
     in.go=go;in.ge=ge;in.threads=threads;in.exclude=exclude;
+    if (alpha.alignment_scale<1 || (alpha.alignment_mode!="gapblock" &&
+            alpha.alignment_mode!="global" && alpha.alignment_mode!="local"))
+        throw std::invalid_argument("invalid grouped alignment mode or scale");
+    if (beta && (beta->alignment_mode!=alpha.alignment_mode ||
+            beta->alignment_scale!=alpha.alignment_scale || beta->trim_left!=alpha.trim_left ||
+            beta->trim_right!=alpha.trim_right))
+        throw std::invalid_argument("paired alignment options must agree");
+    if (alpha.alignment_mode=="gapblock") {
+        if (alpha.alignment_scale!=1 || alpha.trim_left || alpha.trim_right)
+            throw std::invalid_argument("alignment scale/trims require global or local mode");
+    } else {
+        if (!matrix) throw std::invalid_argument("affine alignment requires a similarity matrix");
+        in.similarity=*matrix;
+        in.mode=alpha.alignment_mode=="local" ? AlignMode::Local : AlignMode::Global;
+        in.scale=alpha.alignment_scale;in.left=alpha.trim_left;in.right=alpha.trim_right;
+        in.prepare_affine(alpha,in.a,in.qdiag_a,in.rdiag_a);
+        if (beta) in.prepare_affine(*beta,*in.b,in.qdiag_b,in.rdiag_b);
+    }
 }
 std::optional<GroupedCountChunk> GroupedCountBatch::next() {
     auto& in=*impl_;
     std::lock_guard<std::mutex> lock(in.mutex);
     if (in.cursor==in.a.q.size()) return std::nullopt;
     const size_t stop=in.cursor+std::min(in.chunk_size,in.a.q.size()-in.cursor);
-    const bool features=in.a.features || (in.b && in.b->features);
-    const bool quantized=in.quantum_a!=1 || in.quantum_b!=1;
-    auto out=quantized ?
-        (in.withheld ?
-            (features ? in.run<true,true,true>(in.cursor,stop) : in.run<false,true,true>(in.cursor,stop)) :
-            (features ? in.run<true,false,true>(in.cursor,stop) : in.run<false,false,true>(in.cursor,stop))) :
-        (in.withheld ?
-            (features ? in.run<true,true>(in.cursor,stop) : in.run<false,true>(in.cursor,stop)) :
-            (features ? in.run<true>(in.cursor,stop) : in.run<false>(in.cursor,stop)));
+    auto out=in.similarity ? in.dispatch<true>(in.cursor,stop) : in.dispatch<false>(in.cursor,stop);
     in.cursor=stop;
     return out;
 }

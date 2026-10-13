@@ -15,6 +15,7 @@
 
 #include "seqtree/seqtree.hpp"
 #include "seqtree/parallel.hpp"
+#include "pairwise_detail.hpp"
 
 #include <algorithm>
 #include <cstdint>
@@ -73,15 +74,19 @@ inline Score gap_run(int64_t L, int32_t open, int32_t extend) {
 
 // Optimal score, two rows per state. O(n) memory, no traceback.
 Score score_encoded(const uint8_t* q, size_t m, const uint8_t* r, size_t n,
-                    const SubstitutionMatrix& mat, AlignMode mode, int32_t go, int32_t ge) {
+                    const SubstitutionMatrix& mat, AlignMode mode, int32_t go, int32_t ge,
+                    detail::PairwiseScratch* scratch = nullptr) {
     const bool local = (mode == AlignMode::Local);
     if (m == 0 || n == 0) {
         if (local) return 0;
         return -gap_run(int64_t(m ? m : n), go, ge);
     }
 
-    std::vector<Score> Mp(n + 1), Xp(n + 1), Yp(n + 1);
-    std::vector<Score> Mc(n + 1), Xc(n + 1), Yc(n + 1);
+    detail::PairwiseScratch owned;
+    auto& rows = scratch ? *scratch : owned;
+    for (auto& row : rows) row.resize(n + 1);
+    auto& Mp=rows[0]; auto& Xp=rows[1]; auto& Yp=rows[2];
+    auto& Mc=rows[3]; auto& Xc=rows[4]; auto& Yc=rows[5];
 
     // Row 0. Global: the only way to consume ref[0..j) is a leading gap (state Y). Local: an
     // alignment may start anywhere, which the 0 floor on M expresses; the gap states cannot be
@@ -126,6 +131,12 @@ Score score_encoded(const uint8_t* q, size_t m, const uint8_t* r, size_t n,
 enum : uint8_t { kM = 0, kX = 1, kY = 2, kStop = 3 };
 
 }  // namespace
+
+int64_t detail::align_score_encoded(const uint8_t* q, size_t m, const uint8_t* r, size_t n,
+        const SubstitutionMatrix& mat, AlignMode mode, int32_t go, int32_t ge,
+        PairwiseScratch& scratch) {
+    return score_encoded(q,m,r,n,mat,mode,go,ge,&scratch);
+}
 
 int32_t align_score(std::string_view query, std::string_view ref, const SubstitutionMatrix& mat,
                     Alphabet alphabet, AlignMode mode, int32_t gap_open, int32_t gap_extend) {

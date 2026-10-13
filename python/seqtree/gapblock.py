@@ -893,6 +893,31 @@ def _withheld_metadata(q, query_withheld_peptide_ids, reference_peptide_offsets,
     return withheld, offsets, peptides
 
 
+def _alignment_options(geometry, q, r, mode, scale, left, right, matrix, prior,
+                       *weights):
+    if mode not in ("gapblock", "global", "local"):
+        raise ValueError("alignment_mode must be gapblock, global or local")
+    scale = _batch_integer(scale, "alignment scale", 1)
+    left = _batch_integer(left, "trim_left")
+    right = _batch_integer(right, "trim_right")
+    if mode == "gapblock":
+        if scale != 1 or left or right:
+            raise ValueError("alignment scale/trims require global or local mode")
+        return
+    if matrix is None:
+        raise ValueError("affine alignment requires a similarity matrix")
+    if prior is not None or any(w is not None for w in weights):
+        raise ValueError("affine alignment does not accept position weights or gap prior")
+    if any(left + right > len(sequence) for axis in (q, r) for sequence in axis):
+        raise ValueError("alignment trims exceed sequence length")
+    if not hasattr(geometry, "alignment_mode"):
+        raise RuntimeError("affine grouped scoring requires native alignment_mode support")
+    geometry.alignment_mode = mode
+    geometry.alignment_scale = scale
+    geometry.trim_left = left
+    geometry.trim_right = right
+
+
 def _grouped_geometry(q, r, weights, query_groups, reference_groups, distances,
                       query_weights, reference_weights, features, score_quantum=1):
     quantum = _batch_integer(score_quantum, "score quantum", 1)
@@ -917,8 +942,19 @@ def grouped_count_batch(queries, refs, thresholds, *, reference_target_offsets,
         position_weights_by_length=None, query_group_ids=None, reference_group_ids=None,
         group_distances=None, query_position_weights=None, reference_position_weights=None,
         feature_offsets=None, query_withheld_peptide_ids=None,
-        reference_peptide_offsets=None, reference_peptide_ids=None, score_quantum=1):
+        reference_peptide_offsets=None, reference_peptide_ids=None, score_quantum=1,
+        alignment_mode="gapblock", alignment_scale=1, trim_left=0, trim_right=0):
     """Yield bounded label curves from one immutable prepared scoring population.
+
+    ``alignment_mode`` defaults to gapblock. Global/local reuse the existing affine
+    similarity recurrence and require a raw similarity matrix. For trimmed sequences
+    q/r, junction distance is alignment_scale * max(0, sum(diag(q)) + sum(diag(r))
+    - 2*similarity(q,r)), using raw diagonal sums rather than self-alignment scores.
+    Nonnegative trim_left/trim_right remove residues for scoring only; exact
+    exclusion and offsets retain full input identities. Gap costs are raw similarity
+    magnitudes in these modes. Position weights and gap_prior are rejected.
+    Paired lanes compute distances independently before summation. Scratch rows are
+    reused per worker; no dense query/reference score matrix is produced.
 
     ``score_quantum`` is a positive int32. Floor the raw alignment score to a
     multiple of this quantum before adding group/feature offsets. Default1 leaves
@@ -955,6 +991,8 @@ def grouped_count_batch(queries, refs, thresholds, *, reference_target_offsets,
     go, ge, cube, width, threads = _batch_options((q, r), matrix, gap_open, gap_extend, gap_prior, threads)
     geometry = _grouped_geometry(q, r, position_weights_by_length, query_group_ids,
         reference_group_ids, group_distances, query_position_weights, reference_position_weights, feature_offsets, score_quantum)
+    _alignment_options(geometry, q, r, alignment_mode, alignment_scale, trim_left, trim_right,
+        matrix, gap_prior, position_weights_by_length, query_position_weights, reference_position_weights)
     withheld = _withheld_metadata(q, query_withheld_peptide_ids,
                                  reference_peptide_offsets, reference_peptide_ids)
     return _gapblock_grouped_count_batch(q, r, *metadata, alphabet, matrix, go, ge, cube, width,
@@ -975,7 +1013,8 @@ def grouped_paired_sum_count_batch(queries_a, queries_b, refs_a, refs_b, thresho
         query_position_weights_alpha=None, query_position_weights_beta=None,
         reference_position_weights_alpha=None, reference_position_weights_beta=None,
         feature_offsets_alpha=None, feature_offsets_beta=None,
-        query_withheld_peptide_ids=None, reference_peptide_offsets=None, reference_peptide_ids=None, score_quantum_alpha=1, score_quantum_beta=1):
+        query_withheld_peptide_ids=None, reference_peptide_offsets=None, reference_peptide_ids=None, score_quantum_alpha=1, score_quantum_beta=1,
+        alignment_mode="gapblock", alignment_scale=1, trim_left=0, trim_right=0):
     """Grouped buffers under existing linked sum geometry; see grouped_count_batch.
 
     Composite full-key exclusion requires both lanes equal. Canonical paired gene
@@ -996,6 +1035,12 @@ def grouped_paired_sum_count_batch(queries_a, queries_b, refs_a, refs_b, thresho
     beta = _grouped_geometry(qb, rb, position_weights_by_length_beta, query_group_ids_beta,
         reference_group_ids_beta, group_distances_beta, query_position_weights_beta,
         reference_position_weights_beta, feature_offsets_beta, score_quantum_beta)
+    _alignment_options(alpha, qa, ra, alignment_mode, alignment_scale, trim_left, trim_right,
+        matrix, gap_prior, position_weights_by_length_alpha, query_position_weights_alpha,
+        reference_position_weights_alpha)
+    _alignment_options(beta, qb, rb, alignment_mode, alignment_scale, trim_left, trim_right,
+        matrix, gap_prior, position_weights_by_length_beta, query_position_weights_beta,
+        reference_position_weights_beta)
     withheld = _withheld_metadata(qa, query_withheld_peptide_ids,
                                  reference_peptide_offsets, reference_peptide_ids)
     return _gapblock_grouped_count_batch(qa, ra, *metadata, alphabet, matrix, go, ge, cube, width,
