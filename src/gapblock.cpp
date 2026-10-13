@@ -246,9 +246,10 @@ GapInput prepare(const std::vector<std::string>& queries, const std::vector<std:
     return in;
 }
 
+template<bool Factored = true>
 inline int32_t group_offset(const GapInput& in, size_t i, size_t j) {
     int32_t offset = in.group_distances.empty() ? 0 : in.group_distances[in.query_groups[i]][in.reference_groups[j]];
-    if (in.features) {
+    if constexpr (Factored) if (in.features) {
         const auto& f = *in.features;
         if (f.weight == 0 || f.scale == 0) return offset;
         const auto& q = f.query_codes[i];
@@ -261,12 +262,13 @@ inline int32_t group_offset(const GapInput& in, size_t i, size_t j) {
     return offset;
 }
 
+template<bool Factored = true>
 int32_t score_cell(const GapInput& in, size_t i, size_t j, int32_t go, int32_t ge,
                    const std::vector<int32_t>& prior, int32_t* scratch) {
     const uint32_t m = uint32_t(in.q[i].size()), n = uint32_t(in.r[j].size());
     const uint32_t M = std::max(m, n), d = m > n ? m - n : n - m;
     const int32_t* prow = prior.empty() ? nullptr : prior.data() + (size_t(M) * in.W1 + d) * in.W1;
-    return group_offset(in, i, j) + cell(in.q[i].data(), m, in.r[j].data(), n, in.pen.data(), in.A, go, ge, prow, scratch, in.weights.empty() || !M ? nullptr : in.weights[M].data(),
+    return group_offset<Factored>(in, i, j) + cell(in.q[i].data(), m, in.r[j].data(), n, in.pen.data(), in.A, go, ge, prow, scratch, in.weights.empty() || !M ? nullptr : in.weights[M].data(),
         in.query_weights.empty() ? nullptr : in.query_weights[i].data(),
         in.reference_weights.empty() ? nullptr : in.reference_weights[j].data());
 }
@@ -320,7 +322,8 @@ std::vector<std::vector<Ranked>> ranked(const GapInput& a, const GapInput* b, ui
     return out;
 }
 
-std::vector<std::vector<uint64_t>> counted(const GapInput& a, const GapInput* b,
+template<bool Factored>
+std::vector<std::vector<uint64_t>> counted_impl(const GapInput& a, const GapInput* b,
                   const std::vector<std::vector<int32_t>>& thresholds, int32_t go, int32_t ge,
                   const std::vector<int32_t>& prior, int threads, bool exclude_exact,
                   std::vector<std::vector<uint64_t>>* masses = nullptr, bool sum_pair_distance = false) {
@@ -356,15 +359,15 @@ std::vector<std::vector<uint64_t>> counted(const GapInput& a, const GapInput* b,
             if (sorted.empty()) return;
             for (size_t j = 0; j < a.r.size(); ++j) {
                 if (exclude_exact && a.q[i] == a.r[j] && (!b || b->q[i] == b->r[j])) continue;
-                const int64_t offset = int64_t(group_offset(a, i, j)) +
-                    (sum_pair_distance ? int64_t(group_offset(*b, i, j)) : 0);
+                const int64_t offset = int64_t(group_offset<Factored>(a, i, j)) +
+                    (sum_pair_distance ? int64_t(group_offset<Factored>(*b, i, j)) : 0);
                 if (offset > sorted.back().first) continue;
-                int64_t score = score_cell(a, i, j, go, ge, prior, scratch.data());
+                int64_t score = score_cell<Factored>(a, i, j, go, ge, prior, scratch.data());
                 if (sum_pair_distance) {
                     if (score > sorted.back().first) continue;
-                    score += int64_t(score_cell(*b, i, j, go, ge, prior, scratch.data()));
+                    score += int64_t(score_cell<Factored>(*b, i, j, go, ge, prior, scratch.data()));
                 } else if (b) {
-                    score = std::max<int64_t>(score, score_cell(*b, i, j, go, ge, prior, scratch.data()));
+                    score = std::max<int64_t>(score, score_cell<Factored>(*b, i, j, go, ge, prior, scratch.data()));
                 }
                 const auto pos = std::lower_bound(sorted.begin(), sorted.end(), score,
                     [](const auto& threshold, int64_t value) { return threshold.first < value; });
@@ -385,6 +388,16 @@ std::vector<std::vector<uint64_t>> counted(const GapInput& a, const GapInput* b,
             }
         });
     return out;
+}
+
+// Dispatch once per batch: absent features retain the original hot loop.
+std::vector<std::vector<uint64_t>> counted(const GapInput& a, const GapInput* b,
+                  const std::vector<std::vector<int32_t>>& thresholds, int32_t go, int32_t ge,
+                  const std::vector<int32_t>& prior, int threads, bool exclude_exact,
+                  std::vector<std::vector<uint64_t>>* masses = nullptr, bool sum_pair_distance = false) {
+    if (!a.features && (!b || !b->features))
+        return counted_impl<false>(a, b, thresholds, go, ge, prior, threads, exclude_exact, masses, sum_pair_distance);
+    return counted_impl<true>(a, b, thresholds, go, ge, prior, threads, exclude_exact, masses, sum_pair_distance);
 }
 
 }  // namespace
