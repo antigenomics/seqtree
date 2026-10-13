@@ -363,4 +363,39 @@ std::vector<int32_t> hamming_matrix(const std::vector<std::string>& a,
 std::vector<int32_t> levenshtein_matrix(const std::vector<std::string>& a,
                                         const std::vector<std::string>& b, int threads = 0);
 
+// Generic label histograms over one prepared native query/reference population.
+struct GroupedGeometry {
+    std::vector<std::vector<int32_t>> weights, group_distances, query_weights, reference_weights;
+    std::vector<int32_t> query_groups, reference_groups;
+    std::optional<PairedFeatureOffsets> features;
+};
+struct CountBuffer {
+    std::vector<uint32_t> data;
+    std::vector<size_t> shape;
+};
+struct GroupedCountChunk {
+    size_t start = 0, stop = 0;
+    CountBuffer counts, sizes, exact_counts;
+};
+class GroupedCountBatch {
+public:
+    GroupedCountBatch(const std::vector<std::string>& qa, const std::vector<std::string>& ra,
+        std::vector<int32_t> thresholds, std::vector<uint32_t> target_offsets,
+        std::vector<uint32_t> target_ids, std::vector<int32_t> target_peptides,
+        std::vector<int32_t> exclusive_peptides, std::vector<int32_t> query_genes,
+        std::vector<int32_t> reference_genes, size_t chunk_size, Alphabet alphabet,
+        const SubstitutionMatrix* matrix, int32_t go, int32_t ge, std::vector<int32_t> prior,
+        uint32_t width, int threads, bool exclude_exact, const GroupedGeometry& alpha,
+        const std::optional<GroupedGeometry>& beta = std::nullopt,
+        const std::vector<std::string>& qb = {}, const std::vector<std::string>& rb = {});
+    std::optional<GroupedCountChunk> next();
+    size_t query_count() const;
+    size_t reference_count() const;
+    size_t target_count() const;
+    size_t peptide_count() const;
+private:
+    struct Impl;
+    std::shared_ptr<Impl> impl_;
+};
+
 }  // namespace seqtree

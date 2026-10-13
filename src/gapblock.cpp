@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <mutex>
 #include <stdexcept>
 #include <tuple>
 
@@ -653,5 +654,151 @@ std::pair<std::vector<std::vector<uint64_t>>, std::vector<std::vector<uint64_t>>
     auto counts = counted(a, &b, thresholds, go, ge, prior, threads, exclude_exact, &masses, true, shared_thresholds);
     return {std::move(counts), std::move(masses)};
 }
+
+struct GroupedCountBatch::Impl {
+    GapInput a;
+    std::optional<GapInput> b;
+    std::vector<int32_t> cuts, prior, target_peptides, exclusive, qgenes, rgenes;
+    std::vector<uint32_t> offsets, labels;
+    size_t targets = 0, peptides = 0, channels = 0, chunk_size = 0, cursor = 0;
+    int32_t go = 0, ge = 0;
+    int threads = 0;
+    bool exclude = false;
+    std::mutex mutex;
+
+    template<bool Factored> GroupedCountChunk run(size_t start, size_t stop) {
+        GroupedCountChunk out;
+        out.start = start; out.stop = stop;
+        const size_t rows = stop-start, K = cuts.size();
+        auto make_buffer = [](std::vector<size_t> shape) {
+            size_t cells = 1;
+            for (size_t axis : shape) {
+                if (axis && cells > size_t(PTRDIFF_MAX)/sizeof(uint32_t)/axis)
+                    throw std::overflow_error("grouped count buffer exceeds addressable memory");
+                cells *= axis;
+            }
+            return CountBuffer{std::vector<uint32_t>(cells),std::move(shape)};
+        };
+        out.counts = make_buffer({rows,channels,K});
+        out.sizes = make_buffer({rows,channels});
+        out.exact_counts = make_buffer({rows,targets});
+        const auto longest = b ? std::max(a.longest,b->longest) : a.longest;
+        parallel_for(rows,threads,[&] {return std::vector<int32_t>(size_t(longest)+1);},
+            [&](size_t row, std::vector<int32_t>& scratch) {
+                const size_t i = start+row;
+                auto* sizes = out.sizes.data.data()+row*channels;
+                auto* hist = K ? out.counts.data.data()+row*channels*K : nullptr;
+                auto* exact = targets ? out.exact_counts.data.data()+row*targets : nullptr;
+                for (size_t j=0;j<a.r.size();++j) {
+                    const bool identical = a.q[i]==a.r[j] && (!b || b->q[i]==b->r[j]);
+                    const bool same_gene = qgenes[i]==rgenes[j];
+                    if (identical)
+                        for (size_t p=offsets[j];p<offsets[j+1];++p) ++exact[labels[p]];
+                    if (exclude && identical) continue;
+                    ++sizes[0];
+                    for (size_t p=offsets[j];p<offsets[j+1];++p) {
+                        ++sizes[1+labels[p]];
+                        if (same_gene) ++sizes[1+targets+labels[p]];
+                    }
+                    if (exclusive[j]>=0) ++sizes[1+2*targets+size_t(exclusive[j])];
+                    if (!K) continue;
+                    const int64_t offset = int64_t(group_offset<Factored>(a,i,j)) +
+                        (b ? int64_t(group_offset<Factored>(*b,i,j)) : 0);
+                    if (offset>cuts.back()) continue;
+                    int64_t score = score_cell<Factored>(a,i,j,go,ge,prior,scratch.data());
+                    if (b) {
+                        if (score>cuts.back()) continue;
+                        score+=int64_t(score_cell<Factored>(*b,i,j,go,ge,prior,scratch.data()));
+                    }
+                    const auto found=std::lower_bound(cuts.begin(),cuts.end(),score);
+                    if (found==cuts.end()) continue;
+                    const size_t bin=size_t(found-cuts.begin());
+                    ++hist[bin];
+                    for (size_t p=offsets[j];p<offsets[j+1];++p) {
+                        ++hist[(1+labels[p])*K+bin];
+                        if (same_gene) ++hist[(1+targets+labels[p])*K+bin];
+                    }
+                    if (exclusive[j]>=0) ++hist[(1+2*targets+size_t(exclusive[j]))*K+bin];
+                }
+                for (size_t channel=0;channel<channels;++channel)
+                    for (size_t t=1;t<K;++t) hist[channel*K+t]+=hist[channel*K+t-1];
+            });
+        return out;
+    }
+};
+
+GroupedCountBatch::GroupedCountBatch(const std::vector<std::string>& qa, const std::vector<std::string>& ra,
+        std::vector<int32_t> cuts, std::vector<uint32_t> offsets, std::vector<uint32_t> labels,
+        std::vector<int32_t> target_peptides, std::vector<int32_t> exclusive,
+        std::vector<int32_t> qgenes, std::vector<int32_t> rgenes, size_t chunk_size,
+        Alphabet alphabet, const SubstitutionMatrix* matrix, int32_t go, int32_t ge,
+        std::vector<int32_t> prior, uint32_t width, int threads, bool exclude,
+        const GroupedGeometry& alpha, const std::optional<GroupedGeometry>& beta,
+        const std::vector<std::string>& qb, const std::vector<std::string>& rb) : impl_(std::make_shared<Impl>()) {
+    auto& in=*impl_;
+    if (!chunk_size) throw std::invalid_argument("chunk_size must be positive");
+    if (!std::is_sorted(cuts.begin(),cuts.end()) || std::adjacent_find(cuts.begin(),cuts.end())!=cuts.end())
+        throw std::invalid_argument("grouped thresholds must be strictly increasing");
+    if (ra.size()>std::numeric_limits<uint32_t>::max())
+        throw std::overflow_error("grouped reference count exceeds uint32");
+    if (offsets.size()!=ra.size()+1 || offsets.front()!=0 || offsets.back()!=labels.size() ||
+            !std::is_sorted(offsets.begin(),offsets.end()))
+        throw std::invalid_argument("reference target offsets must form valid CSR");
+    if (exclusive.size()!=ra.size() || qgenes.size()!=qa.size() || rgenes.size()!=ra.size())
+        throw std::invalid_argument("grouped metadata axes must match queries/references");
+    if (std::any_of(qgenes.begin(),qgenes.end(),[](auto x){return x<0;}) ||
+        std::any_of(rgenes.begin(),rgenes.end(),[](auto x){return x<0;}))
+        throw std::invalid_argument("gene IDs must be nonnegative");
+    for (auto peptide:target_peptides) {
+        if (peptide<0) throw std::invalid_argument("target peptide IDs must be nonnegative");
+        in.peptides=std::max(in.peptides,size_t(peptide)+1);
+    }
+    in.targets=target_peptides.size();
+    for (size_t j=0;j<ra.size();++j) {
+        if (exclusive[j]<-1 || (exclusive[j]>=0 && size_t(exclusive[j])>=in.peptides))
+            throw std::invalid_argument("exclusive peptide ID outside peptide axis");
+        // Empty memberships and -1 exclusive IDs are valid: an included target
+        // can share a reference with an unselected label in the whole population.
+        uint32_t previous=0;
+        for (size_t p=offsets[j];p<offsets[j+1];++p) {
+            const auto label=labels[p];
+            if (label>=in.targets || (p>offsets[j] && label<=previous))
+                throw std::invalid_argument("reference target IDs must be sorted, unique and in range");
+            if (exclusive[j]>=0 && target_peptides[label]!=exclusive[j])
+                throw std::invalid_argument("exclusive peptide contradicts reference target membership");
+            previous=label;
+        }
+    }
+    in.a=prepare(qa,ra,alphabet,matrix,go,ge,prior,width,threads,alpha.weights,
+        alpha.query_groups,alpha.reference_groups,alpha.group_distances,
+        alpha.query_weights,alpha.reference_weights,alpha.features);
+    if (beta) {
+        if (qa.size()!=qb.size() || ra.size()!=rb.size())
+            throw std::invalid_argument("paired query/reference axes must agree");
+        in.b=prepare(qb,rb,alphabet,matrix,go,ge,prior,width,threads,beta->weights,
+            beta->query_groups,beta->reference_groups,beta->group_distances,
+            beta->query_weights,beta->reference_weights,beta->features);
+    } else if (!qb.empty() || !rb.empty()) throw std::invalid_argument("paired axes require beta geometry");
+    if (threads<0 || unsigned(threads)>available_cpus())
+        throw std::invalid_argument("worker count exceeds the available CPU budget");
+    in.cuts=std::move(cuts); in.offsets=std::move(offsets); in.labels=std::move(labels);
+    in.target_peptides=std::move(target_peptides); in.exclusive=std::move(exclusive);
+    in.qgenes=std::move(qgenes);in.rgenes=std::move(rgenes);in.prior=std::move(prior);
+    in.channels=1+2*in.targets+in.peptides;in.chunk_size=chunk_size;
+    in.go=go;in.ge=ge;in.threads=threads;in.exclude=exclude;
+}
+std::optional<GroupedCountChunk> GroupedCountBatch::next() {
+    auto& in=*impl_;
+    std::lock_guard<std::mutex> lock(in.mutex);
+    if (in.cursor==in.a.q.size()) return std::nullopt;
+    const size_t stop=in.cursor+std::min(in.chunk_size,in.a.q.size()-in.cursor);
+    auto out=(in.a.features || (in.b && in.b->features)) ? in.run<true>(in.cursor,stop) : in.run<false>(in.cursor,stop);
+    in.cursor=stop;
+    return out;
+}
+size_t GroupedCountBatch::query_count() const {return impl_->a.q.size();}
+size_t GroupedCountBatch::reference_count() const {return impl_->a.r.size();}
+size_t GroupedCountBatch::target_count() const {return impl_->targets;}
+size_t GroupedCountBatch::peptide_count() const {return impl_->peptides;}
 
 }  // namespace seqtree

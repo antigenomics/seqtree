@@ -284,6 +284,24 @@ PyType_Slot kScoreMatrixSlots[] = {
     { 0, nullptr }
 };
 
+int count_buffer_getbuffer(PyObject* obj, Py_buffer* view, int flags) {
+    if (flags & PyBUF_WRITABLE) {
+        PyErr_SetString(PyExc_BufferError,"grouped count buffers are read-only");
+        return -1;
+    }
+    const auto* buffer=nb::inst_ptr<CountBuffer>(obj);
+    std::vector<Py_ssize_t> shape(buffer->shape.begin(),buffer->shape.end()),strides(shape.size());
+    Py_ssize_t stride=sizeof(uint32_t);
+    for (size_t d=shape.size();d-- >0;) {strides[d]=stride;stride*=shape[d];}
+    fill_view(obj,view,flags,const_cast<uint32_t*>(buffer->data.data()),int(shape.size()),
+        shape.data(),strides.data(),sizeof(uint32_t),"I");
+    return 0;
+}
+PyType_Slot kCountBufferSlots[] = {
+    {Py_bf_getbuffer,(void*)count_buffer_getbuffer},
+    {Py_bf_releasebuffer,(void*)release_view},{0,nullptr}
+};
+
 // A read-only 1-D typed window onto memory a TextResult owns. Same reasoning as ScoreMatrix:
 // seqtree has no runtime dependencies, so the way out is the buffer protocol, not an ndarray.
 // `owner` is a strong reference to the TextResult, so a view outlives the dict it came from.
@@ -816,6 +834,62 @@ NB_MODULE(_core, m) {
         return gapblock_topk_batch(queries, refs, k, alph, matrix ? &*matrix : nullptr, go, ge, prior, width, threads, exclude_exact);
     }, nb::arg("queries"), nb::arg("refs"), nb::arg("k"), nb::arg("alphabet")="aa", nb::arg("matrix")=std::nullopt, nb::arg("gap_open")=1, nb::arg("gap_extend")=1, nb::arg("prior")=std::vector<int32_t>{}, nb::arg("prior_width")=0, nb::arg("threads")=0, nb::arg("exclude_exact")=false, "Bounded exhaustive gapblock reduction, GIL released.");
 
+    nb::class_<CountBuffer>(m,"CountBuffer",nb::type_slots(kCountBufferSlots),
+        "Read-only uint32 C-contiguous buffer; numpy.asarray and memoryview wrap without copying.");
+    nb::class_<GroupedCountChunk>(m,"GroupedCountChunk")
+        .def_ro("start",&GroupedCountChunk::start).def_ro("stop",&GroupedCountChunk::stop)
+        .def_ro("counts",&GroupedCountChunk::counts).def_ro("sizes",&GroupedCountChunk::sizes)
+        .def_ro("exact_counts",&GroupedCountChunk::exact_counts);
+    nb::class_<GroupedGeometry>(m,"_GroupedGeometry")
+        .def(nb::init<>()).def_rw("weights",&GroupedGeometry::weights)
+        .def_rw("query_groups",&GroupedGeometry::query_groups)
+        .def_rw("reference_groups",&GroupedGeometry::reference_groups)
+        .def_rw("group_distances",&GroupedGeometry::group_distances)
+        .def_rw("query_weights",&GroupedGeometry::query_weights)
+        .def_rw("reference_weights",&GroupedGeometry::reference_weights)
+        .def_rw("features",&GroupedGeometry::features);
+    nb::class_<GroupedCountBatch>(m,"GroupedCountBatch",
+        "One prepared grouped scoring population, yielding owned bounded buffers; no NumPy dependency.")
+        .def_prop_ro("query_count",&GroupedCountBatch::query_count)
+        .def_prop_ro("reference_count",&GroupedCountBatch::reference_count)
+        .def_prop_ro("target_count",&GroupedCountBatch::target_count)
+        .def_prop_ro("peptide_count",&GroupedCountBatch::peptide_count)
+        .def("__iter__",[](GroupedCountBatch& batch)->GroupedCountBatch& {return batch;},nb::rv_policy::reference_internal)
+        .def("__next__",[](GroupedCountBatch& batch) {
+            std::optional<GroupedCountChunk> chunk;
+            {nb::gil_scoped_release release;chunk=batch.next();}
+            if (!chunk) throw nb::stop_iteration();
+            return std::move(*chunk);
+        });
+    m.def("gapblock_grouped_count_batch",[](const std::vector<std::string>& q,
+        const std::vector<std::string>& r, std::vector<int32_t> cuts,
+        std::vector<uint32_t> offsets,std::vector<uint32_t> labels,
+        std::vector<int32_t> target_peptides,std::vector<int32_t> exclusive,
+        std::vector<int32_t> qgenes,std::vector<int32_t> rgenes,size_t chunk_size,
+        const std::string& alphabet,const std::optional<SubstitutionMatrix>& matrix,
+        int32_t go,int32_t ge,std::vector<int32_t> prior,uint32_t width,int threads,
+        bool exclude,const GroupedGeometry& alpha,const std::optional<GroupedGeometry>& beta,
+        const std::vector<std::string>& qb,const std::vector<std::string>& rb) {
+        const auto alph=parse_alphabet(alphabet);
+        // Snapshot mutable Python geometry before releasing the GIL. Native
+        // iteration only reads its own prepared state, never a Python object.
+        const auto owned_alpha=alpha;
+        const auto owned_beta=beta;
+        nb::gil_scoped_release release;
+        return GroupedCountBatch(q,r,std::move(cuts),std::move(offsets),std::move(labels),
+            std::move(target_peptides),std::move(exclusive),std::move(qgenes),std::move(rgenes),
+            chunk_size,alph,matrix ? &*matrix : nullptr,go,ge,std::move(prior),width,threads,
+            exclude,owned_alpha,owned_beta,qb,rb);
+    },nb::arg("queries"),nb::arg("refs"),nb::arg("thresholds"),
+       nb::arg("reference_target_offsets"),nb::arg("reference_target_ids"),
+       nb::arg("target_peptide_ids"),nb::arg("reference_exclusive_peptide_ids"),
+       nb::arg("query_gene_ids"),nb::arg("reference_gene_ids"),nb::arg("chunk_size"),
+       nb::arg("alphabet"),nb::arg("matrix"),nb::arg("gap_open"),nb::arg("gap_extend"),
+       nb::arg("prior"),nb::arg("prior_width"),nb::arg("threads"),nb::arg("exclude_exact"),
+       nb::arg("alpha"),nb::arg("beta")=std::nullopt,
+       nb::arg("queries_beta")=std::vector<std::string>{},nb::arg("refs_beta")=std::vector<std::string>{},
+       "Generic grouped shared-threshold curves using existing gapblock scoring, feature_offsets, "
+       "paired sum and full-key exact exclusion. Validation once, GIL released for preparation/chunks.");
     m.def("gapblock_count_batch", [](const std::vector<std::string>& queries, const std::vector<std::string>& refs, const std::vector<std::vector<int32_t>>& thresholds, const std::string& alphabet, const std::optional<SubstitutionMatrix>& matrix, int32_t go, int32_t ge, const std::vector<int32_t>& prior, uint32_t width, int threads, bool exclude_exact, const std::vector<std::vector<int32_t>>& weights, const std::vector<int32_t>& query_groups, const std::vector<int32_t>& reference_groups, const std::vector<std::vector<int32_t>>& group_distances, const std::vector<std::vector<int32_t>>& query_weights, const std::vector<std::vector<int32_t>>& reference_weights, const std::optional<PairedFeatureOffsets>& feature_offsets, bool shared_thresholds) {
         const auto alph = parse_alphabet(alphabet);
         nb::gil_scoped_release release;

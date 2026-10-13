@@ -484,3 +484,61 @@ workers. Int32 cutoff bounds and uint64 mass overflow validation remain intact.
 
 Native capability is exposed by ``shared_thresholds`` in the reducer docstrings;
 check both the Python signature and the installed native extension.
+
+Grouped label populations
+-------------------------
+
+``grouped_count_batch`` and ``grouped_paired_sum_count_batch`` prepare one immutable
+query/reference scoring population and return a native iterator over contiguous
+query chunks. The geometry is exactly the existing count/summed-pair geometry,
+including positional weights, additive group distances and factored feature
+offsets. Each query/reference key is scored once, then its single cutoff bin
+contributes to every attached target label. No statistical reducer or domain data
+is added. Default count APIs are unchanged.
+
+Required label metadata is generic integer coding:
+
+* ``reference_target_offsets`` and ``reference_target_ids`` form CSR rows for
+  the reference axis; each row contains sorted unique target IDs.
+* ``target_peptide_ids`` assigns each target to a parent label (peptide downstream).
+* ``reference_exclusive_peptide_ids`` is the parent label a reference belongs to
+  exclusively, or -1 for shared/unselected labels. Compute it from all original
+  labels, before restricting requested targets. Empty target memberships are valid;
+  an exclusive ID may be provided even when that reference has no selected target
+  membership. Included memberships must agree with any supplied exclusive ID.
+* ``query_gene_ids`` and ``reference_gene_ids`` code a separate canonical identity
+  axis for same-identity target subsets. This equality does not alter allele/group
+  costs. For linked pairs, encode a tuple of the two identities into one common ID.
+
+Thresholds are one strictly increasing int32 list, shared across the population;
+negative or empty cutoffs are supported. Every chunk owns read-only uint32 buffers,
+with no NumPy dependency or nested Python count lists. ``numpy.asarray(buffer)``
+and ``memoryview(buffer)`` expose the same allocation without copying. For ``C``
+chunk rows, ``T`` targets, ``P`` parent labels and ``K`` cutoffs:
+
+* ``chunk.start`` / ``chunk.stop`` identify its original query interval.
+* ``chunk.counts`` has shape ``(C, 1+2*T+P, K)``. Channels are whole population,
+  targets, same-identity targets, exclusive parent populations, in that order.
+* ``chunk.sizes`` has shape ``(C, 1+2*T+P)`` in the same channel order.
+* ``chunk.exact_counts`` has shape ``(C, T)`` and always reports raw full-key exact
+  multiplicity, including when exact references are excluded from other outputs.
+
+With ``exclude_exact=True``, every curve and corresponding population size is
+punctured by the full encoded query key, irrespective of additive groups/identities.
+For paired sum geometry both full sequences must match. Subtracting an exclusive
+parent channel from the whole channel therefore yields the exact complement,
+including references carrying shared labels. Count overflow is excluded explicitly
+by requiring at most uint32-max reference rows; addressable buffer sizes and all
+metadata axes/ranges are validated. Empty query axes yield no chunks; empty
+reference axes yield zero curves and sizes with ordinary shapes.
+
+``chunk_size=64`` controls output memory: O(C*(1+2*T+P)*(K+1)+C*T), plus O(Q+R)
+encoded inputs, CSR memberships and geometry tables. Worker scratch is only
+O(maximum sequence length); histogram bins live directly in disjoint chunk rows.
+Keep only the current chunk for bounded memory. A retained buffer owns its chunk
+and safely outlives the iterator. Workers use the existing CPU-budget scaffold;
+preparation and each native chunk release the GIL. No persisted computed cache,
+per-query Python search loop, global Q-by-label allocation or new distance formula
+is introduced. Native capability is ``gapblock_grouped_count_batch`` plus
+``GroupedCountBatch``/``GroupedCountChunk`` in ``seqtree._core``; the constructor
+and chunk methods document the buffer/feature support.

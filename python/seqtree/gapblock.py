@@ -51,10 +51,12 @@ from ._core import gapblock_paired_topk_batch as _gapblock_paired_topk_batch
 from ._core import gapblock_paired_count_batch as _gapblock_paired_count_batch
 from ._core import gapblock_paired_sum_count_batch as _gapblock_paired_sum_count_batch
 
+from ._core import gapblock_grouped_count_batch as _gapblock_grouped_count_batch, _GroupedGeometry
+
 __all__ = [
     "gapblock_score", "score_matrix", "ball_batch", "group_audit_batch", "topk_batch", "count_batch", "paired_topk_batch", "paired_count_batch", "paired_sum_count_batch", "deletion_variants", "central_prior", "profile_prior",
     "frame_prior", "positions_prior", "embed_in_frame", "gap_cost", "GapBlockIndex", "ScoreMatrix",
-    "IslandProfile", "PairedFeatureOffsets",
+    "IslandProfile", "PairedFeatureOffsets", "grouped_count_batch", "grouped_paired_sum_count_batch",
 ]
 
 #: A prior value large enough that no layout carrying it can ever win, yet small enough that
@@ -860,6 +862,102 @@ def paired_sum_count_batch(queries_a, queries_b, refs_a, refs_b, thresholds, mat
         _position_weights(position_weights_by_length_beta, qb, rb),
         ag[0], bg[0], ag[1], bg[1], ag[2], bg[2],
         aw[0], bw[0], aw[1], bw[1], feature_offsets_alpha, feature_offsets_beta, shared_thresholds)
+
+
+def _grouped_metadata(q, r, thresholds, reference_target_offsets, reference_target_ids,
+                      target_peptide_ids, reference_exclusive_peptide_ids,
+                      query_gene_ids, reference_gene_ids, chunk_size):
+    cuts = [_batch_integer(v, "threshold", -(1 << 31)) for v in thresholds]
+    offsets = [_batch_integer(v, "target offset", upper=(1 << 32)-1) for v in reference_target_offsets]
+    labels = [_batch_integer(v, "target ID", upper=(1 << 32)-1) for v in reference_target_ids]
+    peptides = [_batch_integer(v, "peptide ID") for v in target_peptide_ids]
+    exclusive = [_batch_integer(v, "exclusive peptide ID", -1) for v in reference_exclusive_peptide_ids]
+    qgenes = [_batch_integer(v, "query gene ID") for v in query_gene_ids]
+    rgenes = [_batch_integer(v, "reference gene ID") for v in reference_gene_ids]
+    chunk_size = _batch_integer(chunk_size, "chunk_size", 1)
+    return cuts, offsets, labels, peptides, exclusive, qgenes, rgenes, chunk_size
+
+
+def _grouped_geometry(q, r, weights, query_groups, reference_groups, distances,
+                      query_weights, reference_weights, features):
+    geometry = _GroupedGeometry()
+    geometry.weights = _position_weights(weights, q, r)
+    geometry.query_groups, geometry.reference_groups, geometry.group_distances = _group_options(
+        query_groups, reference_groups, distances, q, r)
+    geometry.query_weights, geometry.reference_weights = _sequence_weights(
+        query_weights, reference_weights, weights, q, r)
+    geometry.features = features
+    return geometry
+
+
+def grouped_count_batch(queries, refs, thresholds, *, reference_target_offsets,
+        reference_target_ids, target_peptide_ids, reference_exclusive_peptide_ids,
+        query_gene_ids, reference_gene_ids, chunk_size=64, matrix=None, gap_open=None,
+        gap_extend=1, gap_prior=None, alphabet="aa", threads=0, exclude_exact=False,
+        position_weights_by_length=None, query_group_ids=None, reference_group_ids=None,
+        group_distances=None, query_position_weights=None, reference_position_weights=None,
+        feature_offsets=None):
+    """Yield bounded label curves from one immutable prepared scoring population.
+
+    Cutoffs are one strictly increasing flat integer list. References are a caller's
+    deduplicated search-key axis; CSR offsets/IDs assign each key to zero or more
+    target IDs. Per-reference exclusive peptide IDs come from the full label set,
+    with -1 for shared/unselected labels; target_peptide_ids maps each target.
+    Canonical gene IDs define the auxiliary same-gene subset independently of
+    allele costs. Channels are whole, targets, same-gene targets, exclusive peptides.
+    Each chunk owns read-only uint32 buffers: counts[C,1+2*T+P,K], sizes[C,1+2*T+P],
+    exact_counts[C,T], with start/stop query offsets. numpy.asarray is zero-copy;
+    no NumPy import/dependency is required. Exact counts retain raw multiplicity;
+    exclude_exact punctures every curve and population size by full sequence identity.
+    Encoding/geometry validation occurs once; each query/reference is scored once
+    under the existing kernel, with GIL-released bounded workers. Memory is bounded
+    by chunk_size, labels and cutoffs, never Q*labels. Retained chunks own their data.
+    """
+    q, r = list(queries), list(refs)
+    metadata = _grouped_metadata(q, r, thresholds, reference_target_offsets,
+        reference_target_ids, target_peptide_ids, reference_exclusive_peptide_ids,
+        query_gene_ids, reference_gene_ids, chunk_size)
+    go, ge, cube, width, threads = _batch_options((q, r), matrix, gap_open, gap_extend, gap_prior, threads)
+    geometry = _grouped_geometry(q, r, position_weights_by_length, query_group_ids,
+        reference_group_ids, group_distances, query_position_weights, reference_position_weights, feature_offsets)
+    return _gapblock_grouped_count_batch(q, r, *metadata, alphabet, matrix, go, ge, cube, width,
+                                       threads, exclude_exact, geometry)
+
+
+def grouped_paired_sum_count_batch(queries_a, queries_b, refs_a, refs_b, thresholds, *,
+        reference_target_offsets, reference_target_ids, target_peptide_ids,
+        reference_exclusive_peptide_ids, query_gene_ids, reference_gene_ids,
+        chunk_size=64, matrix=None, gap_open=None, gap_extend=1, gap_prior=None,
+        alphabet="aa", threads=0, exclude_exact=False,
+        position_weights_by_length_alpha=None, position_weights_by_length_beta=None,
+        query_group_ids_alpha=None, query_group_ids_beta=None,
+        reference_group_ids_alpha=None, reference_group_ids_beta=None,
+        group_distances_alpha=None, group_distances_beta=None,
+        query_position_weights_alpha=None, query_position_weights_beta=None,
+        reference_position_weights_alpha=None, reference_position_weights_beta=None,
+        feature_offsets_alpha=None, feature_offsets_beta=None):
+    """Grouped buffers under existing linked sum geometry; see grouped_count_batch.
+
+    Composite full-key exclusion requires both lanes equal. Canonical paired gene
+    identities are caller-encoded tuple IDs, with equality requiring both genes.
+    Shared matrix/prior and lane-specific weights/group/feature offsets retain the
+    paired_sum_count_batch geometry. Counts, sizes and raw exact counts use uint32.
+    """
+    qa, qb, ra, rb = map(list, (queries_a, queries_b, refs_a, refs_b))
+    if len(qa) != len(qb) or len(ra) != len(rb):
+        raise ValueError("paired query/reference axes must agree")
+    metadata = _grouped_metadata(qa, ra, thresholds, reference_target_offsets,
+        reference_target_ids, target_peptide_ids, reference_exclusive_peptide_ids,
+        query_gene_ids, reference_gene_ids, chunk_size)
+    go, ge, cube, width, threads = _batch_options((qa, qb, ra, rb), matrix, gap_open, gap_extend, gap_prior, threads)
+    alpha = _grouped_geometry(qa, ra, position_weights_by_length_alpha, query_group_ids_alpha,
+        reference_group_ids_alpha, group_distances_alpha, query_position_weights_alpha,
+        reference_position_weights_alpha, feature_offsets_alpha)
+    beta = _grouped_geometry(qb, rb, position_weights_by_length_beta, query_group_ids_beta,
+        reference_group_ids_beta, group_distances_beta, query_position_weights_beta,
+        reference_position_weights_beta, feature_offsets_beta)
+    return _gapblock_grouped_count_batch(qa, ra, *metadata, alphabet, matrix, go, ge, cube, width,
+                                       threads, exclude_exact, alpha, beta, qb, rb)
 
 
 class GapBlockIndex:
