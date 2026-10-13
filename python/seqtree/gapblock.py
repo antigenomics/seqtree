@@ -40,7 +40,7 @@ import collections
 import math
 from collections.abc import Callable, Iterable, Sequence
 
-from ._core import Index, ScoreMatrix, SearchParams, SubstitutionMatrix
+from ._core import Index, ScoreMatrix, SearchParams, SubstitutionMatrix, PairedFeatureOffsets
 from ._core import gapblock_matrix as _gapblock_matrix
 from ._core import gapblock_topk_batch as _gapblock_topk_batch
 from ._core import gapblock_count_batch as _gapblock_count_batch
@@ -51,10 +51,12 @@ from ._core import gapblock_paired_topk_batch as _gapblock_paired_topk_batch
 from ._core import gapblock_paired_count_batch as _gapblock_paired_count_batch
 from ._core import gapblock_paired_sum_count_batch as _gapblock_paired_sum_count_batch
 
+from ._core import gapblock_grouped_count_batch as _gapblock_grouped_count_batch, _GroupedGeometry
+
 __all__ = [
     "gapblock_score", "score_matrix", "ball_batch", "group_audit_batch", "topk_batch", "count_batch", "paired_topk_batch", "paired_count_batch", "paired_sum_count_batch", "deletion_variants", "central_prior", "profile_prior",
     "frame_prior", "positions_prior", "embed_in_frame", "gap_cost", "GapBlockIndex", "ScoreMatrix",
-    "IslandProfile",
+    "IslandProfile", "PairedFeatureOffsets", "grouped_count_batch", "grouped_paired_sum_count_batch",
 ]
 
 #: A prior value large enough that no layout carrying it can ever win, yet small enough that
@@ -528,7 +530,7 @@ def score_matrix(
     threads: int = 0,
     position_weights_by_length=None,
     query_group_ids=None, reference_group_ids=None, group_distances=None,
-    query_position_weights=None, reference_position_weights=None,
+    query_position_weights=None, reference_position_weights=None, feature_offsets=None,
 ) -> ScoreMatrix:
     """Gap-block penalty of every query against every reference, in C++ with the GIL released.
 
@@ -552,6 +554,8 @@ def score_matrix(
         reference_group_ids: Optional integer IDs, one per reference.
         group_distances: Nonempty rectangular nonnegative integer penalty table.
             Added to each pair score in the same units; no symmetry/zero diagonal imposed.
+        feature_offsets: Optional :class:`PairedFeatureOffsets` descriptor. Adds
+            paired-code costs averaged at shared depth, ties-even rounded, then scaled.
         matrix: Substitution penalties; ``None`` means unit cost.
         gap_open: Block-opening cost. Defaults to ``2 * matrix.scale()``. See the module note:
             leaving this at 1 with a real matrix makes gaps ~14x cheaper than substitutions.
@@ -587,7 +591,7 @@ def score_matrix(
     return _gapblock_matrix(q, r, alphabet, matrix, gap_open, gap_extend, cube, width, threads,
                             _position_weights(position_weights_by_length, q, r),
                             *_group_options(query_group_ids, reference_group_ids, group_distances, q, r),
-                            *_sequence_weights(query_position_weights, reference_position_weights, position_weights_by_length, q, r))
+                            *_sequence_weights(query_position_weights, reference_position_weights, position_weights_by_length, q, r), feature_offsets)
 
 
 def _batch_integer(value, name, lower=0, upper=(1 << 31) - 1):
@@ -668,7 +672,11 @@ def _sequence_weights(query_weights, reference_weights, by_length, queries, refs
     return validate(query_weights, queries), validate(reference_weights, refs)
 
 
-def _threshold_rows(thresholds, n_queries):
+def _threshold_rows(thresholds, n_queries, shared_thresholds=False):
+    if not isinstance(shared_thresholds, bool):
+        raise TypeError("shared_thresholds must be a boolean")
+    if shared_thresholds:
+        return [[_batch_integer(value, "threshold", -(1 << 31)) for value in thresholds]]
     rows = [list(row) for row in thresholds]
     if len(rows) != n_queries:
         raise ValueError("thresholds must have one row per query")
@@ -702,13 +710,15 @@ def topk_batch(queries, refs, k=10, matrix=None, gap_open=None, gap_extend=1,
 def count_batch(queries, refs, thresholds, matrix=None, gap_open=None, gap_extend=1,
                 gap_prior=None, alphabet="aa", threads=0, exclude_exact=False, position_weights_by_length=None,
                 query_group_ids=None, reference_group_ids=None, group_distances=None, linear_mass=False,
-                query_position_weights=None, reference_position_weights=None):
+                query_position_weights=None, reference_position_weights=None, feature_offsets=None, shared_thresholds=False):
     """Count all reference scores <= each query's requested integer thresholds.
 
     Optional positional weights and additive group distances match :func:`score_matrix`.
     Exact exclusion remains full encoded identity, irrespective of group distance.
     ``thresholds`` has one row per query; rows may be empty, unsorted or contain
-    duplicates. Return integer counts in their original order, including ALL
+    duplicates. With ``shared_thresholds=True``, supply one flat cutoff list;
+    it is validated and sorted once for the entire batch. Return integer counts
+    in their original order, including ALL
     score ties. Negative cutoffs count zero. Same scorer/exclusion as
     :func:`topk_batch`; one native batch with O(Q*S) output, no dense score matrix.
     Worker scratch is O(max_sequence_length + maximum_threshold_row_length).
@@ -722,20 +732,20 @@ def count_batch(queries, refs, thresholds, matrix=None, gap_open=None, gap_exten
     if not isinstance(linear_mass, bool):
         raise TypeError("linear_mass must be a boolean")
     q, r = list(queries), list(refs)
-    thresholds = _threshold_rows(thresholds, len(q))
+    thresholds = _threshold_rows(thresholds, len(q), shared_thresholds)
     go, ge, cube, width, threads = _batch_options((q, r), matrix, gap_open, gap_extend, gap_prior, threads)
     reduction = _gapblock_count_mass_batch if linear_mass else _gapblock_count_batch
     return reduction(q, r, thresholds, alphabet, matrix, go, ge, cube, width, threads, exclude_exact,
                                  _position_weights(position_weights_by_length, q, r),
                                  *_group_options(query_group_ids, reference_group_ids, group_distances, q, r),
-                            *_sequence_weights(query_position_weights, reference_position_weights, position_weights_by_length, q, r))
+                            *_sequence_weights(query_position_weights, reference_position_weights, position_weights_by_length, q, r), feature_offsets, shared_thresholds)
 
 
 def group_audit_batch(queries, refs, thresholds, matrix=None, gap_open=None, gap_extend=1,
                gap_prior=None, alphabet="aa", threads=0, exclude_exact=False,
                position_weights_by_length=None,
                query_group_ids=None, reference_group_ids=None, group_distances=None,
-               query_position_weights=None, reference_position_weights=None):
+               query_position_weights=None, reference_position_weights=None, feature_offsets=None):
     """Stream component-ball count, full-score count and bounded nearest in one batch.
 
     Geometry/offset options match ball_batch. Component excludes the nonnegative
@@ -752,14 +762,14 @@ def group_audit_batch(queries, refs, thresholds, matrix=None, gap_open=None, gap
     return _gapblock_group_audit_batch(q, r, thresholds, alphabet, matrix, go, ge, cube, width,
                                threads, exclude_exact, _position_weights(position_weights_by_length, q, r),
                             *_group_options(query_group_ids, reference_group_ids, group_distances, q, r),
-                            *_sequence_weights(query_position_weights, reference_position_weights, position_weights_by_length, q, r))
+                            *_sequence_weights(query_position_weights, reference_position_weights, position_weights_by_length, q, r), feature_offsets)
 
 
 def ball_batch(queries, refs, thresholds, matrix=None, gap_open=None, gap_extend=1,
                gap_prior=None, alphabet="aa", threads=0, exclude_exact=False,
                position_weights_by_length=None,
                query_group_ids=None, reference_group_ids=None, group_distances=None,
-               query_position_weights=None, reference_position_weights=None):
+               query_position_weights=None, reference_position_weights=None, feature_offsets=None):
     """Exhaustive bounded ball rows, reference order, unset edit fields; no Q*N matrix.
 
     One integer cutoff per query. Negative cutoffs yield empty rows. Optional integer
@@ -776,7 +786,7 @@ def ball_batch(queries, refs, thresholds, matrix=None, gap_open=None, gap_extend
     return _gapblock_ball_batch(q, r, thresholds, alphabet, matrix, go, ge, cube, width,
                                threads, exclude_exact, _position_weights(position_weights_by_length, q, r),
                             *_group_options(query_group_ids, reference_group_ids, group_distances, q, r),
-                            *_sequence_weights(query_position_weights, reference_position_weights, position_weights_by_length, q, r))
+                            *_sequence_weights(query_position_weights, reference_position_weights, position_weights_by_length, q, r), feature_offsets)
 
 
 def paired_topk_batch(queries_a, queries_b, refs_a, refs_b, k=10, matrix=None,
@@ -823,7 +833,8 @@ def paired_sum_count_batch(queries_a, queries_b, refs_a, refs_b, thresholds, mat
                            reference_group_ids_alpha=None, reference_group_ids_beta=None,
                            group_distances_alpha=None, group_distances_beta=None,
                            query_position_weights_alpha=None, query_position_weights_beta=None,
-                           reference_position_weights_alpha=None, reference_position_weights_beta=None):
+                           reference_position_weights_alpha=None, reference_position_weights_beta=None,
+                           feature_offsets_alpha=None, feature_offsets_beta=None, shared_thresholds=False):
     """Return (counts, linear masses) for linked rows under summed lane distances.
 
     Shared matrix/gap costs/prior and separate full-coordinate lane weights and
@@ -833,12 +844,13 @@ def paired_sum_count_batch(queries_a, queries_b, refs_a, refs_b, thresholds, mat
     duplicate reference observations and input threshold order. Exact exclusion
     removes a row only when both encoded full strings match. One GIL-released
     native traversal, O(Q*S) outputs and O(max_length + max_threshold_row) worker
-    scratch; no matrix/edges. The existing paired-max API is unchanged.
+    scratch; no matrix/edges. ``shared_thresholds=True`` accepts one flat cutoff
+    list validated and sorted once for all queries. The paired-max API is unchanged.
     """
     qa, qb, ra, rb = map(list, (queries_a, queries_b, refs_a, refs_b))
     if len(qa) != len(qb) or len(ra) != len(rb):
         raise ValueError("paired query/reference axes must agree")
-    thresholds = _threshold_rows(thresholds, len(qa))
+    thresholds = _threshold_rows(thresholds, len(qa), shared_thresholds)
     go, ge, cube, width, threads = _batch_options((qa, qb, ra, rb), matrix, gap_open, gap_extend, gap_prior, threads)
     ag = _group_options(query_group_ids_alpha, reference_group_ids_alpha, group_distances_alpha, qa, ra)
     bg = _group_options(query_group_ids_beta, reference_group_ids_beta, group_distances_beta, qb, rb)
@@ -849,7 +861,226 @@ def paired_sum_count_batch(queries_a, queries_b, refs_a, refs_b, thresholds, mat
         _position_weights(position_weights_by_length_alpha, qa, ra),
         _position_weights(position_weights_by_length_beta, qb, rb),
         ag[0], bg[0], ag[1], bg[1], ag[2], bg[2],
-        aw[0], bw[0], aw[1], bw[1])
+        aw[0], bw[0], aw[1], bw[1], feature_offsets_alpha, feature_offsets_beta, shared_thresholds)
+
+
+def _grouped_metadata(q, r, thresholds, reference_target_offsets, reference_target_ids,
+                      target_peptide_ids, reference_exclusive_peptide_ids,
+                      query_gene_ids, reference_gene_ids, chunk_size):
+    cuts = [_batch_integer(v, "threshold", -(1 << 31)) for v in thresholds]
+    offsets = [_batch_integer(v, "target offset", upper=(1 << 32)-1) for v in reference_target_offsets]
+    labels = [_batch_integer(v, "target ID", upper=(1 << 32)-1) for v in reference_target_ids]
+    peptides = [_batch_integer(v, "peptide ID") for v in target_peptide_ids]
+    exclusive = [_batch_integer(v, "exclusive peptide ID", -1) for v in reference_exclusive_peptide_ids]
+    qgenes = [_batch_integer(v, "query gene ID") for v in query_gene_ids]
+    rgenes = [_batch_integer(v, "reference gene ID") for v in reference_gene_ids]
+    chunk_size = _batch_integer(chunk_size, "chunk_size", 1)
+    return cuts, offsets, labels, peptides, exclusive, qgenes, rgenes, chunk_size
+
+
+def _withheld_metadata(q, query_withheld_peptide_ids, reference_peptide_offsets, reference_peptide_ids):
+    if query_withheld_peptide_ids is None:
+        if reference_peptide_offsets is not None or reference_peptide_ids is not None:
+            raise ValueError("reference peptide memberships require query withheld peptide IDs")
+        return None, [], []
+    if reference_peptide_offsets is None or reference_peptide_ids is None:
+        raise ValueError("withheld peptide IDs require full reference peptide CSR")
+    withheld = [_batch_integer(v, "withheld peptide ID", -1) for v in query_withheld_peptide_ids]
+    offsets = [_batch_integer(v, "peptide offset", upper=(1 << 32)-1) for v in reference_peptide_offsets]
+    peptides = [_batch_integer(v, "reference peptide ID") for v in reference_peptide_ids]
+    if len(withheld) != len(q):
+        raise ValueError("withheld peptide IDs must match query axis")
+    return withheld, offsets, peptides
+
+
+def _additional_geometry(geometry, features):
+    if features is None:
+        return
+    terms = list(features)
+    if any(not isinstance(term, PairedFeatureOffsets) for term in terms):
+        raise ValueError("additional_feature_offsets must contain PairedFeatureOffsets")
+    if terms:
+        if not hasattr(geometry, "additional_features"):
+            raise RuntimeError("additional factored offsets require native additional_features support")
+        geometry.additional_features = terms
+
+
+def _lane_prior(geometry, prior, width):
+    if prior is not None:
+        if not hasattr(geometry, "gap_prior"):
+            raise RuntimeError("lane priors require native grouped gap_prior support")
+        geometry.gap_prior = _prior_cube(prior, width)
+
+
+def _alignment_options(geometry, q, r, mode, scale, left, right, matrix, prior,
+                       *weights):
+    if mode not in ("gapblock", "global", "local"):
+        raise ValueError("alignment_mode must be gapblock, global or local")
+    scale = _batch_integer(scale, "alignment scale", 1)
+    left = _batch_integer(left, "trim_left")
+    right = _batch_integer(right, "trim_right")
+    if mode == "gapblock":
+        if scale != 1 or left or right:
+            raise ValueError("alignment scale/trims require global or local mode")
+        return
+    if matrix is None:
+        raise ValueError("affine alignment requires a similarity matrix")
+    if prior is not None or any(w is not None for w in weights):
+        raise ValueError("affine alignment does not accept position weights or gap prior")
+    if any(left + right > len(sequence) for axis in (q, r) for sequence in axis):
+        raise ValueError("alignment trims exceed sequence length")
+    if not hasattr(geometry, "alignment_mode"):
+        raise RuntimeError("affine grouped scoring requires native alignment_mode support")
+    geometry.alignment_mode = mode
+    geometry.alignment_scale = scale
+    geometry.trim_left = left
+    geometry.trim_right = right
+
+
+def _grouped_geometry(q, r, weights, query_groups, reference_groups, distances,
+                      query_weights, reference_weights, features, score_quantum=1):
+    quantum = _batch_integer(score_quantum, "score quantum", 1)
+    geometry = _GroupedGeometry()
+    if quantum != 1:
+        if not hasattr(geometry, "score_quantum"):
+            raise RuntimeError("alignment quantization requires native score_quantum support")
+        geometry.score_quantum = quantum
+    geometry.weights = _position_weights(weights, q, r)
+    geometry.query_groups, geometry.reference_groups, geometry.group_distances = _group_options(
+        query_groups, reference_groups, distances, q, r)
+    geometry.query_weights, geometry.reference_weights = _sequence_weights(
+        query_weights, reference_weights, weights, q, r)
+    geometry.features = features
+    return geometry
+
+
+def grouped_count_batch(queries, refs, thresholds, *, reference_target_offsets,
+        reference_target_ids, target_peptide_ids, reference_exclusive_peptide_ids,
+        query_gene_ids, reference_gene_ids, chunk_size=64, matrix=None, gap_open=None,
+        gap_extend=1, gap_prior=None, alphabet="aa", threads=0, exclude_exact=False,
+        position_weights_by_length=None, query_group_ids=None, reference_group_ids=None,
+        group_distances=None, query_position_weights=None, reference_position_weights=None,
+        feature_offsets=None, query_withheld_peptide_ids=None,
+        reference_peptide_offsets=None, reference_peptide_ids=None, score_quantum=1,
+        alignment_mode="gapblock", alignment_scale=1, trim_left=0, trim_right=0,
+        additional_feature_offsets=None):
+    """Yield bounded label curves from one immutable prepared scoring population.
+
+    ``alignment_mode`` defaults to gapblock. Global/local reuse the existing affine
+    similarity recurrence and require a raw similarity matrix. For trimmed sequences
+    q/r, junction distance is alignment_scale * max(0, sum(diag(q)) + sum(diag(r))
+    - 2*similarity(q,r)), using raw diagonal sums rather than self-alignment scores.
+    Nonnegative trim_left/trim_right remove residues for scoring only; exact
+    exclusion and offsets retain full input identities. Gap costs are raw similarity
+    magnitudes in these modes. Position weights and gap_prior are rejected.
+    Paired lanes compute distances independently before summation. Scratch rows are
+    reused per worker; no dense query/reference score matrix is produced.
+
+    ``additional_feature_offsets`` is an optional iterable of PairedFeatureOffsets.
+    Every term is independently ties-even rounded/scaled, then added to the primary
+    feature and group offsets. All descriptors are snapshotted/validated once.
+    Combined score/offset bounds must fit int32 per lane. In the paired API, use
+    additional_feature_offsets_alpha/beta; gap_prior_alpha/beta independently
+    override the shared gap_prior. None inherits the shared prior for that lane.
+
+    ``score_quantum`` is a positive int32. Floor the raw alignment score to a
+    multiple of this quantum before adding group/feature offsets. Default1 leaves
+    every score unchanged. Paired lanes floor independently before their sum.
+    This option applies only to grouped APIs.
+
+    Cutoffs are one strictly increasing flat integer list. References are a caller's
+    deduplicated search-key axis; CSR offsets/IDs assign each key to zero or more
+    target IDs. Per-reference exclusive peptide IDs come from the full label set,
+    with -1 for shared/unselected labels; target_peptide_ids maps each target.
+    Canonical gene IDs define the auxiliary same-gene subset independently of
+    allele costs. Channels are whole, targets, same-gene targets, exclusive peptides.
+    Each chunk owns read-only uint32 buffers: counts[C,1+2*T+P,K], sizes[C,1+2*T+P],
+    exact_counts[C,T], with start/stop query offsets. numpy.asarray is zero-copy;
+    no NumPy import/dependency is required. Exact counts retain raw multiplicity;
+    exclude_exact punctures every curve and population size by full sequence identity.
+    Optional query_withheld_peptide_ids is one ID/query (-1 means none) and
+    requires full reference_peptide_offsets/reference_peptide_ids CSR. Each sorted
+    unique row includes all raw peptide labels, including sparse/unselected IDs in
+    the target_peptide_ids namespace. Extra IDs beyond output peptide channels are
+    valid. Selected target parents and static exclusives must agree with full CSR.
+    Withholding removes every membership of that peptide, drops keys with no
+    survivors, and recomputes exclusive surviving peptides before exact exclusion.
+    Raw exact counts include only surviving targets. Full CSR without query IDs is
+    rejected; None preserves the existing traversal. Encoding/geometry validation
+    occurs once; each query/reference is scored once
+    under the existing kernel, with GIL-released bounded workers. Memory is bounded
+    by chunk_size, labels and cutoffs, never Q*labels. Retained chunks own their data.
+    """
+    q, r = list(queries), list(refs)
+    metadata = _grouped_metadata(q, r, thresholds, reference_target_offsets,
+        reference_target_ids, target_peptide_ids, reference_exclusive_peptide_ids,
+        query_gene_ids, reference_gene_ids, chunk_size)
+    go, ge, cube, width, threads = _batch_options((q, r), matrix, gap_open, gap_extend, gap_prior, threads)
+    geometry = _grouped_geometry(q, r, position_weights_by_length, query_group_ids,
+        reference_group_ids, group_distances, query_position_weights, reference_position_weights, feature_offsets, score_quantum)
+    _additional_geometry(geometry, additional_feature_offsets)
+    _alignment_options(geometry, q, r, alignment_mode, alignment_scale, trim_left, trim_right,
+        matrix, gap_prior, position_weights_by_length, query_position_weights, reference_position_weights)
+    withheld = _withheld_metadata(q, query_withheld_peptide_ids,
+                                 reference_peptide_offsets, reference_peptide_ids)
+    return _gapblock_grouped_count_batch(q, r, *metadata, alphabet, matrix, go, ge, cube, width,
+                                       threads, exclude_exact, geometry,
+                                       query_withheld_peptide_ids=withheld[0],
+                                       reference_peptide_offsets=withheld[1],reference_peptide_ids=withheld[2])
+
+
+def grouped_paired_sum_count_batch(queries_a, queries_b, refs_a, refs_b, thresholds, *,
+        reference_target_offsets, reference_target_ids, target_peptide_ids,
+        reference_exclusive_peptide_ids, query_gene_ids, reference_gene_ids,
+        chunk_size=64, matrix=None, gap_open=None, gap_extend=1, gap_prior=None,
+        alphabet="aa", threads=0, exclude_exact=False,
+        position_weights_by_length_alpha=None, position_weights_by_length_beta=None,
+        query_group_ids_alpha=None, query_group_ids_beta=None,
+        reference_group_ids_alpha=None, reference_group_ids_beta=None,
+        group_distances_alpha=None, group_distances_beta=None,
+        query_position_weights_alpha=None, query_position_weights_beta=None,
+        reference_position_weights_alpha=None, reference_position_weights_beta=None,
+        feature_offsets_alpha=None, feature_offsets_beta=None,
+        query_withheld_peptide_ids=None, reference_peptide_offsets=None, reference_peptide_ids=None, score_quantum_alpha=1, score_quantum_beta=1,
+        alignment_mode="gapblock", alignment_scale=1, trim_left=0, trim_right=0,
+        additional_feature_offsets_alpha=None, additional_feature_offsets_beta=None,
+        gap_prior_alpha=None, gap_prior_beta=None):
+    """Grouped buffers under existing linked sum geometry; see grouped_count_batch.
+
+    Composite full-key exclusion requires both lanes equal. Canonical paired gene
+    identities are caller-encoded tuple IDs, with equality requiring both genes.
+    Shared matrix/prior and lane-specific weights/group/feature offsets retain the
+    paired_sum_count_batch geometry. Counts, sizes and raw exact counts use uint32.
+    """
+    qa, qb, ra, rb = map(list, (queries_a, queries_b, refs_a, refs_b))
+    if len(qa) != len(qb) or len(ra) != len(rb):
+        raise ValueError("paired query/reference axes must agree")
+    metadata = _grouped_metadata(qa, ra, thresholds, reference_target_offsets,
+        reference_target_ids, target_peptide_ids, reference_exclusive_peptide_ids,
+        query_gene_ids, reference_gene_ids, chunk_size)
+    go, ge, cube, width, threads = _batch_options((qa, qb, ra, rb), matrix, gap_open, gap_extend, gap_prior, threads)
+    alpha = _grouped_geometry(qa, ra, position_weights_by_length_alpha, query_group_ids_alpha,
+        reference_group_ids_alpha, group_distances_alpha, query_position_weights_alpha,
+        reference_position_weights_alpha, feature_offsets_alpha, score_quantum_alpha)
+    beta = _grouped_geometry(qb, rb, position_weights_by_length_beta, query_group_ids_beta,
+        reference_group_ids_beta, group_distances_beta, query_position_weights_beta,
+        reference_position_weights_beta, feature_offsets_beta, score_quantum_beta)
+    _additional_geometry(alpha, additional_feature_offsets_alpha)
+    _additional_geometry(beta, additional_feature_offsets_beta)
+    _lane_prior(alpha, gap_prior_alpha, width)
+    _lane_prior(beta, gap_prior_beta, width)
+    _alignment_options(alpha, qa, ra, alignment_mode, alignment_scale, trim_left, trim_right,
+        matrix, gap_prior if gap_prior_alpha is None else gap_prior_alpha, position_weights_by_length_alpha, query_position_weights_alpha,
+        reference_position_weights_alpha)
+    _alignment_options(beta, qb, rb, alignment_mode, alignment_scale, trim_left, trim_right,
+        matrix, gap_prior if gap_prior_beta is None else gap_prior_beta, position_weights_by_length_beta, query_position_weights_beta,
+        reference_position_weights_beta)
+    withheld = _withheld_metadata(qa, query_withheld_peptide_ids,
+                                 reference_peptide_offsets, reference_peptide_ids)
+    return _gapblock_grouped_count_batch(qa, ra, *metadata, alphabet, matrix, go, ge, cube, width,
+                                       threads, exclude_exact, alpha, beta, qb, rb,
+                                       query_withheld_peptide_ids=withheld[0],
+                                       reference_peptide_offsets=withheld[1],reference_peptide_ids=withheld[2])
 
 
 class GapBlockIndex:

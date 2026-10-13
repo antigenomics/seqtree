@@ -1,4 +1,5 @@
 #include "doctest.h"
+#include "count_unit.hpp"
 #include "seqtree/seqtree.hpp"
 
 #include <map>
@@ -85,4 +86,57 @@ TEST_CASE("single-character references") {
     p.max_substitutions = 1;
     auto m = run(*idx, "A", p);
     CHECK(m.size() == 3);  // every length-1 ref is within one substitution
+}
+
+TEST_CASE("grouped gapblock population buffers and full-key puncture") {
+    seqtree::GroupedGeometry geometry;
+    seqtree::GroupedCountBatch batch({"AAA","AAC"},{"AAA","ACA"},{0,2},
+        {0,2,3},{0,1,1},{0,1},{-1,1},{0,1},{1,0},1,
+        seqtree::Alphabet::AminoAcid,nullptr,1,1,{},0,1,true,geometry);
+    auto first=batch.next();
+    REQUIRE(first.has_value());
+    CHECK(first->start==0);
+    CHECK(first->stop==1);
+    CHECK(first->counts.shape==std::vector<size_t>{1,7,2});
+    CHECK(first->counts.data[0]==0);
+    CHECK(first->counts.data[1]==1);
+    CHECK(first->sizes.data[0]==1);
+    CHECK(first->exact_counts.data==std::vector<uint32_t>{1,1});
+    REQUIRE(batch.next().has_value());
+    CHECK_FALSE(batch.next().has_value());
+    CHECK_THROWS_AS(seqtree::GroupedCountBatch({"AAA"},{"AAA"},{0,0},
+        {0,1},{0},{0},{0},{0},{0},1,seqtree::Alphabet::AminoAcid,nullptr,1,1,{},0,1,false,geometry),std::invalid_argument);
+}
+
+// The bounded Myers rejection must preserve every within-cap distance.
+TEST_CASE("bounded unit bitvector distance preserves all short binary distances") {
+    Codec codec(Alphabet::AminoAcid);
+    std::vector<std::string> strings{ "" };
+    for (unsigned n=1;n<=6;++n) for(unsigned mask=0;mask<(1u<<n);++mask) {
+        std::string s(n,'A');
+        for(unsigned i=0;i<n;++i) if(mask&(1u<<i)) s[i]='C';
+        strings.push_back(s);
+    }
+    for (const auto& q:strings) {
+        if(q.empty()) continue;
+        count_unit::Pattern pattern(q,codec);
+        for(const auto& r:strings) {
+            std::vector<int> row(q.size()+1);
+            for(size_t i=0;i<row.size();++i) row[i]=int(i);
+            for(size_t j=0;j<r.size();++j) {
+                int diagonal=row[0]; row[0]=int(j+1);
+                for(size_t i=1;i<row.size();++i) {
+                    int old=row[i];
+                    row[i]=std::min({old+1,row[i-1]+1,diagonal+int(q[i-1]!=r[j])});
+                    diagonal=old;
+                }
+            }
+            for(int cap=1;cap<=5;++cap)
+                CHECK(pattern.distance(r,cap)==std::min(row.back(),cap+1));
+        }
+    }
+    count_unit::Pattern long_pattern(std::string(63,'A'),codec);
+    CHECK(long_pattern.distance(std::string(63,'A'),3)==0);
+    CHECK(long_pattern.distance(std::string(63,'C'),3)==4);
+    CHECK(long_pattern.distance(std::string(65,'A'),3)==2);
 }

@@ -284,6 +284,24 @@ PyType_Slot kScoreMatrixSlots[] = {
     { 0, nullptr }
 };
 
+int count_buffer_getbuffer(PyObject* obj, Py_buffer* view, int flags) {
+    if (flags & PyBUF_WRITABLE) {
+        PyErr_SetString(PyExc_BufferError,"grouped count buffers are read-only");
+        return -1;
+    }
+    const auto* buffer=nb::inst_ptr<CountBuffer>(obj);
+    std::vector<Py_ssize_t> shape(buffer->shape.begin(),buffer->shape.end()),strides(shape.size());
+    Py_ssize_t stride=sizeof(uint32_t);
+    for (size_t d=shape.size();d-- >0;) {strides[d]=stride;stride*=shape[d];}
+    fill_view(obj,view,flags,const_cast<uint32_t*>(buffer->data.data()),int(shape.size()),
+        shape.data(),strides.data(),sizeof(uint32_t),"I");
+    return 0;
+}
+PyType_Slot kCountBufferSlots[] = {
+    {Py_bf_getbuffer,(void*)count_buffer_getbuffer},
+    {Py_bf_releasebuffer,(void*)release_view},{0,nullptr}
+};
+
 // A read-only 1-D typed window onto memory a TextResult owns. Same reasoning as ScoreMatrix:
 // seqtree has no runtime dependencies, so the way out is the buffer protocol, not an ndarray.
 // `owner` is a strong reference to the TextResult, so a view outlives the dict it came from.
@@ -361,7 +379,7 @@ ScoreMatrix py_gapblock_matrix(const std::vector<std::string>& queries,
                                const std::optional<SubstitutionMatrix>& matrix, int32_t gap_open,
                                int32_t gap_extend, const std::vector<int32_t>& prior,
                                uint32_t prior_width, int threads,
-                               const std::vector<std::vector<int32_t>>& weights, const std::vector<int32_t>& query_groups, const std::vector<int32_t>& reference_groups, const std::vector<std::vector<int32_t>>& group_distances, const std::vector<std::vector<int32_t>>& query_weights, const std::vector<std::vector<int32_t>>& reference_weights) {
+                               const std::vector<std::vector<int32_t>>& weights, const std::vector<int32_t>& query_groups, const std::vector<int32_t>& reference_groups, const std::vector<std::vector<int32_t>>& group_distances, const std::vector<std::vector<int32_t>>& query_weights, const std::vector<std::vector<int32_t>>& reference_weights, const std::optional<PairedFeatureOffsets>& feature_offsets) {
     Alphabet alph = parse_alphabet(alphabet);
     ScoreMatrix out;
     out.rows = queries.size();
@@ -369,7 +387,7 @@ ScoreMatrix py_gapblock_matrix(const std::vector<std::string>& queries,
     {
         nb::gil_scoped_release release;
         out.data = gapblock_matrix(queries, refs, alph, matrix ? &*matrix : nullptr, gap_open,
-                                   gap_extend, prior, prior_width, threads, weights, query_groups, reference_groups, group_distances, query_weights, reference_weights);
+                                   gap_extend, prior, prior_width, threads, weights, query_groups, reference_groups, group_distances, query_weights, reference_weights, feature_offsets);
     }
     return out;
 }
@@ -797,11 +815,15 @@ NB_MODULE(_core, m) {
         "Dense (n_queries, n_refs) distance matrix d = s(a,a) + s(b,b) - 2*s(a,b), the "
         "sequence-level Gram transform of the alignment scores. Non-negative, zero on identity.");
 
+    nb::class_<PairedFeatureOffsets>(m, "PairedFeatureOffsets", "Immutable factored paired-feature offsets; validated by each batch.")
+        .def(nb::init<std::vector<std::vector<int32_t>>, std::vector<std::vector<int32_t>>, std::vector<std::vector<int32_t>>, double, int32_t>(),
+             nb::arg("query_codes"), nb::arg("reference_codes"), nb::arg("costs"), nb::arg("weight")=1.0, nb::arg("scale")=1);
+
     m.def("gapblock_matrix", &py_gapblock_matrix, nb::arg("queries"), nb::arg("refs"),
           nb::arg("alphabet") = "aa", nb::arg("matrix") = std::nullopt, nb::arg("gap_open") = 1,
           nb::arg("gap_extend") = 1, nb::arg("prior") = std::vector<int32_t>{},
           nb::arg("prior_width") = 0, nb::arg("threads") = 0, nb::arg("position_weights_by_length") = std::vector<std::vector<int32_t>>{},
-          nb::arg("query_group_ids") = std::vector<int32_t>{}, nb::arg("reference_group_ids") = std::vector<int32_t>{}, nb::arg("group_distances") = std::vector<std::vector<int32_t>>{}, nb::arg("query_position_weights") = std::vector<std::vector<int32_t>>{}, nb::arg("reference_position_weights") = std::vector<std::vector<int32_t>>{},
+          nb::arg("query_group_ids") = std::vector<int32_t>{}, nb::arg("reference_group_ids") = std::vector<int32_t>{}, nb::arg("group_distances") = std::vector<std::vector<int32_t>>{}, nb::arg("query_position_weights") = std::vector<std::vector<int32_t>>{}, nb::arg("reference_position_weights") = std::vector<std::vector<int32_t>>{}, nb::arg("feature_offsets") = std::nullopt,
           "Exhaustive single-gap-block penalties for every (query, ref) pair, GIL released. "
           "`prior` is the gap prior flattened to [m][d][i]; see seqtree.gapblock.score_matrix, "
           "which builds it for you.");
@@ -812,29 +834,106 @@ NB_MODULE(_core, m) {
         return gapblock_topk_batch(queries, refs, k, alph, matrix ? &*matrix : nullptr, go, ge, prior, width, threads, exclude_exact);
     }, nb::arg("queries"), nb::arg("refs"), nb::arg("k"), nb::arg("alphabet")="aa", nb::arg("matrix")=std::nullopt, nb::arg("gap_open")=1, nb::arg("gap_extend")=1, nb::arg("prior")=std::vector<int32_t>{}, nb::arg("prior_width")=0, nb::arg("threads")=0, nb::arg("exclude_exact")=false, "Bounded exhaustive gapblock reduction, GIL released.");
 
-    m.def("gapblock_count_batch", [](const std::vector<std::string>& queries, const std::vector<std::string>& refs, const std::vector<std::vector<int32_t>>& thresholds, const std::string& alphabet, const std::optional<SubstitutionMatrix>& matrix, int32_t go, int32_t ge, const std::vector<int32_t>& prior, uint32_t width, int threads, bool exclude_exact, const std::vector<std::vector<int32_t>>& weights, const std::vector<int32_t>& query_groups, const std::vector<int32_t>& reference_groups, const std::vector<std::vector<int32_t>>& group_distances, const std::vector<std::vector<int32_t>>& query_weights, const std::vector<std::vector<int32_t>>& reference_weights) {
+    nb::class_<CountBuffer>(m,"CountBuffer",nb::type_slots(kCountBufferSlots),
+        "Read-only uint32 C-contiguous buffer; numpy.asarray and memoryview wrap without copying.");
+    nb::class_<GroupedCountChunk>(m,"GroupedCountChunk")
+        .def_ro("start",&GroupedCountChunk::start).def_ro("stop",&GroupedCountChunk::stop)
+        .def_ro("counts",&GroupedCountChunk::counts).def_ro("sizes",&GroupedCountChunk::sizes)
+        .def_ro("exact_counts",&GroupedCountChunk::exact_counts);
+    nb::class_<GroupedGeometry>(m,"_GroupedGeometry")
+        .def(nb::init<>()).def_rw("weights",&GroupedGeometry::weights)
+        .def_rw("additional_features",&GroupedGeometry::additional_features)
+        .def_rw("gap_prior",&GroupedGeometry::gap_prior)
+        .def_rw("alignment_mode",&GroupedGeometry::alignment_mode)
+        .def_rw("alignment_scale",&GroupedGeometry::alignment_scale)
+        .def_rw("trim_left",&GroupedGeometry::trim_left)
+        .def_rw("trim_right",&GroupedGeometry::trim_right)
+        .def_rw("query_groups",&GroupedGeometry::query_groups)
+        .def_rw("reference_groups",&GroupedGeometry::reference_groups)
+        .def_rw("group_distances",&GroupedGeometry::group_distances)
+        .def_rw("query_weights",&GroupedGeometry::query_weights)
+        .def_rw("reference_weights",&GroupedGeometry::reference_weights)
+        .def_rw("features",&GroupedGeometry::features)
+        .def_rw("score_quantum",&GroupedGeometry::score_quantum,
+                "Positive alignment quantum; floor raw alignment before additive offsets.");
+    nb::class_<GroupedCountBatch>(m,"GroupedCountBatch",
+        "One prepared grouped scoring population, yielding owned bounded buffers; no NumPy dependency.")
+        .def_prop_ro("query_count",&GroupedCountBatch::query_count)
+        .def_prop_ro("reference_count",&GroupedCountBatch::reference_count)
+        .def_prop_ro("target_count",&GroupedCountBatch::target_count)
+        .def_prop_ro("peptide_count",&GroupedCountBatch::peptide_count)
+        .def("__iter__",[](GroupedCountBatch& batch)->GroupedCountBatch& {return batch;},nb::rv_policy::reference_internal)
+        .def("__next__",[](GroupedCountBatch& batch) {
+            std::optional<GroupedCountChunk> chunk;
+            {nb::gil_scoped_release release;chunk=batch.next();}
+            if (!chunk) throw nb::stop_iteration();
+            return std::move(*chunk);
+        });
+    m.def("gapblock_grouped_count_batch",[](const std::vector<std::string>& q,
+        const std::vector<std::string>& r, std::vector<int32_t> cuts,
+        std::vector<uint32_t> offsets,std::vector<uint32_t> labels,
+        std::vector<int32_t> target_peptides,std::vector<int32_t> exclusive,
+        std::vector<int32_t> qgenes,std::vector<int32_t> rgenes,size_t chunk_size,
+        const std::string& alphabet,const std::optional<SubstitutionMatrix>& matrix,
+        int32_t go,int32_t ge,std::vector<int32_t> prior,uint32_t width,int threads,
+        bool exclude,const GroupedGeometry& alpha,const std::optional<GroupedGeometry>& beta,
+        const std::vector<std::string>& qb,const std::vector<std::string>& rb,
+        std::optional<std::vector<int32_t>> withheld,
+        std::vector<uint32_t> peptide_offsets,std::vector<int32_t> peptide_ids) {
+        const auto alph=parse_alphabet(alphabet);
+        // Snapshot mutable Python geometry before releasing the GIL. Native
+        // iteration only reads its own prepared state, never a Python object.
+        const auto owned_alpha=alpha;
+        const auto owned_beta=beta;
+        nb::gil_scoped_release release;
+        return GroupedCountBatch(q,r,std::move(cuts),std::move(offsets),std::move(labels),
+            std::move(target_peptides),std::move(exclusive),std::move(qgenes),std::move(rgenes),
+            chunk_size,alph,matrix ? &*matrix : nullptr,go,ge,std::move(prior),width,threads,
+            exclude,owned_alpha,owned_beta,qb,rb,std::move(withheld),
+            std::move(peptide_offsets),std::move(peptide_ids));
+    },nb::arg("queries"),nb::arg("refs"),nb::arg("thresholds"),
+       nb::arg("reference_target_offsets"),nb::arg("reference_target_ids"),
+       nb::arg("target_peptide_ids"),nb::arg("reference_exclusive_peptide_ids"),
+       nb::arg("query_gene_ids"),nb::arg("reference_gene_ids"),nb::arg("chunk_size"),
+       nb::arg("alphabet"),nb::arg("matrix"),nb::arg("gap_open"),nb::arg("gap_extend"),
+       nb::arg("prior"),nb::arg("prior_width"),nb::arg("threads"),nb::arg("exclude_exact"),
+       nb::arg("alpha"),nb::arg("beta")=std::nullopt,
+       nb::arg("queries_beta")=std::vector<std::string>{},nb::arg("refs_beta")=std::vector<std::string>{},
+       nb::arg("query_withheld_peptide_ids")=std::nullopt,
+       nb::arg("reference_peptide_offsets")=std::vector<uint32_t>{},
+       nb::arg("reference_peptide_ids")=std::vector<int32_t>{},
+       "Generic grouped shared-threshold curves using existing gapblock scoring, feature_offsets, "
+       "paired sum and full-key exact exclusion. Optional query_withheld_peptide_ids removes full "
+       "reference peptide CSR memberships before counting and recomputes survivor exclusivity. "
+       "Geometry additional_features sums independently rounded factored offsets; optional geometry "
+       "gap_prior overrides the shared prior per lane (public gap_prior_alpha/gap_prior_beta). "
+       "Geometry alignment_mode selects gapblock/global/local; alignment_scale and trim_left/trim_right "
+       "apply to affine diagonal-sum distances before offsets. Geometry score_quantum floors each raw alignment independently before additive offsets "
+       "and paired summation; positive int32, default1 leaves scores unchanged. "
+       "Validation once, GIL released for preparation/chunks.");
+    m.def("gapblock_count_batch", [](const std::vector<std::string>& queries, const std::vector<std::string>& refs, const std::vector<std::vector<int32_t>>& thresholds, const std::string& alphabet, const std::optional<SubstitutionMatrix>& matrix, int32_t go, int32_t ge, const std::vector<int32_t>& prior, uint32_t width, int threads, bool exclude_exact, const std::vector<std::vector<int32_t>>& weights, const std::vector<int32_t>& query_groups, const std::vector<int32_t>& reference_groups, const std::vector<std::vector<int32_t>>& group_distances, const std::vector<std::vector<int32_t>>& query_weights, const std::vector<std::vector<int32_t>>& reference_weights, const std::optional<PairedFeatureOffsets>& feature_offsets, bool shared_thresholds) {
         const auto alph = parse_alphabet(alphabet);
         nb::gil_scoped_release release;
-        return gapblock_count_batch(queries, refs, thresholds, alph, matrix ? &*matrix : nullptr, go, ge, prior, width, threads, exclude_exact, weights, query_groups, reference_groups, group_distances, query_weights, reference_weights);
-    }, nb::arg("queries"), nb::arg("refs"), nb::arg("thresholds"), nb::arg("alphabet")="aa", nb::arg("matrix")=std::nullopt, nb::arg("gap_open")=1, nb::arg("gap_extend")=1, nb::arg("prior")=std::vector<int32_t>{}, nb::arg("prior_width")=0, nb::arg("threads")=0, nb::arg("exclude_exact")=false, nb::arg("position_weights_by_length")=std::vector<std::vector<int32_t>>{}, nb::arg("query_group_ids")=std::vector<int32_t>{}, nb::arg("reference_group_ids")=std::vector<int32_t>{}, nb::arg("group_distances")=std::vector<std::vector<int32_t>>{}, nb::arg("query_position_weights")=std::vector<std::vector<int32_t>>{}, nb::arg("reference_position_weights")=std::vector<std::vector<int32_t>>{}, "Bounded exhaustive gapblock reduction, GIL released.");
+        return gapblock_count_batch(queries, refs, thresholds, alph, matrix ? &*matrix : nullptr, go, ge, prior, width, threads, exclude_exact, weights, query_groups, reference_groups, group_distances, query_weights, reference_weights, feature_offsets, shared_thresholds);
+    }, nb::arg("queries"), nb::arg("refs"), nb::arg("thresholds"), nb::arg("alphabet")="aa", nb::arg("matrix")=std::nullopt, nb::arg("gap_open")=1, nb::arg("gap_extend")=1, nb::arg("prior")=std::vector<int32_t>{}, nb::arg("prior_width")=0, nb::arg("threads")=0, nb::arg("exclude_exact")=false, nb::arg("position_weights_by_length")=std::vector<std::vector<int32_t>>{}, nb::arg("query_group_ids")=std::vector<int32_t>{}, nb::arg("reference_group_ids")=std::vector<int32_t>{}, nb::arg("group_distances")=std::vector<std::vector<int32_t>>{}, nb::arg("query_position_weights")=std::vector<std::vector<int32_t>>{}, nb::arg("reference_position_weights")=std::vector<std::vector<int32_t>>{}, nb::arg("feature_offsets")=std::nullopt, nb::arg("shared_thresholds")=false, "Bounded exhaustive gapblock reduction, GIL released.");
 
-    m.def("gapblock_count_mass_batch", [](const std::vector<std::string>& queries, const std::vector<std::string>& refs, const std::vector<std::vector<int32_t>>& thresholds, const std::string& alphabet, const std::optional<SubstitutionMatrix>& matrix, int32_t go, int32_t ge, const std::vector<int32_t>& prior, uint32_t width, int threads, bool exclude_exact, const std::vector<std::vector<int32_t>>& weights, const std::vector<int32_t>& query_groups, const std::vector<int32_t>& reference_groups, const std::vector<std::vector<int32_t>>& group_distances, const std::vector<std::vector<int32_t>>& query_weights, const std::vector<std::vector<int32_t>>& reference_weights) {
+    m.def("gapblock_count_mass_batch", [](const std::vector<std::string>& queries, const std::vector<std::string>& refs, const std::vector<std::vector<int32_t>>& thresholds, const std::string& alphabet, const std::optional<SubstitutionMatrix>& matrix, int32_t go, int32_t ge, const std::vector<int32_t>& prior, uint32_t width, int threads, bool exclude_exact, const std::vector<std::vector<int32_t>>& weights, const std::vector<int32_t>& query_groups, const std::vector<int32_t>& reference_groups, const std::vector<std::vector<int32_t>>& group_distances, const std::vector<std::vector<int32_t>>& query_weights, const std::vector<std::vector<int32_t>>& reference_weights, const std::optional<PairedFeatureOffsets>& feature_offsets, bool shared_thresholds) {
         const auto alph = parse_alphabet(alphabet);
         nb::gil_scoped_release release;
-        return gapblock_count_mass_batch(queries, refs, thresholds, alph, matrix ? &*matrix : nullptr, go, ge, prior, width, threads, exclude_exact, weights, query_groups, reference_groups, group_distances, query_weights, reference_weights);
-    }, nb::arg("queries"), nb::arg("refs"), nb::arg("thresholds"), nb::arg("alphabet")="aa", nb::arg("matrix")=std::nullopt, nb::arg("gap_open")=1, nb::arg("gap_extend")=1, nb::arg("prior")=std::vector<int32_t>{}, nb::arg("prior_width")=0, nb::arg("threads")=0, nb::arg("exclude_exact")=false, nb::arg("position_weights_by_length")=std::vector<std::vector<int32_t>>{}, nb::arg("query_group_ids")=std::vector<int32_t>{}, nb::arg("reference_group_ids")=std::vector<int32_t>{}, nb::arg("group_distances")=std::vector<std::vector<int32_t>>{}, nb::arg("query_position_weights")=std::vector<std::vector<int32_t>>{}, nb::arg("reference_position_weights")=std::vector<std::vector<int32_t>>{}, "Counts and integer linear mass in one bounded traversal, GIL released.");
+        return gapblock_count_mass_batch(queries, refs, thresholds, alph, matrix ? &*matrix : nullptr, go, ge, prior, width, threads, exclude_exact, weights, query_groups, reference_groups, group_distances, query_weights, reference_weights, feature_offsets, shared_thresholds);
+    }, nb::arg("queries"), nb::arg("refs"), nb::arg("thresholds"), nb::arg("alphabet")="aa", nb::arg("matrix")=std::nullopt, nb::arg("gap_open")=1, nb::arg("gap_extend")=1, nb::arg("prior")=std::vector<int32_t>{}, nb::arg("prior_width")=0, nb::arg("threads")=0, nb::arg("exclude_exact")=false, nb::arg("position_weights_by_length")=std::vector<std::vector<int32_t>>{}, nb::arg("query_group_ids")=std::vector<int32_t>{}, nb::arg("reference_group_ids")=std::vector<int32_t>{}, nb::arg("group_distances")=std::vector<std::vector<int32_t>>{}, nb::arg("query_position_weights")=std::vector<std::vector<int32_t>>{}, nb::arg("reference_position_weights")=std::vector<std::vector<int32_t>>{}, nb::arg("feature_offsets")=std::nullopt, nb::arg("shared_thresholds")=false, "Counts and integer linear mass in one bounded traversal, GIL released.");
 
-    m.def("gapblock_group_audit_batch", [](const std::vector<std::string>& queries, const std::vector<std::string>& refs, const std::vector<int32_t>& thresholds, const std::string& alphabet, const std::optional<SubstitutionMatrix>& matrix, int32_t go, int32_t ge, const std::vector<int32_t>& prior, uint32_t width, int threads, bool exclude_exact, const std::vector<std::vector<int32_t>>& weights, const std::vector<int32_t>& query_groups, const std::vector<int32_t>& reference_groups, const std::vector<std::vector<int32_t>>& group_distances, const std::vector<std::vector<int32_t>>& query_weights, const std::vector<std::vector<int32_t>>& reference_weights) {
+    m.def("gapblock_group_audit_batch", [](const std::vector<std::string>& queries, const std::vector<std::string>& refs, const std::vector<int32_t>& thresholds, const std::string& alphabet, const std::optional<SubstitutionMatrix>& matrix, int32_t go, int32_t ge, const std::vector<int32_t>& prior, uint32_t width, int threads, bool exclude_exact, const std::vector<std::vector<int32_t>>& weights, const std::vector<int32_t>& query_groups, const std::vector<int32_t>& reference_groups, const std::vector<std::vector<int32_t>>& group_distances, const std::vector<std::vector<int32_t>>& query_weights, const std::vector<std::vector<int32_t>>& reference_weights, const std::optional<PairedFeatureOffsets>& feature_offsets) {
         const auto alph = parse_alphabet(alphabet);
         nb::gil_scoped_release release;
-        return gapblock_group_audit_batch(queries, refs, thresholds, alph, matrix ? &*matrix : nullptr, go, ge, prior, width, threads, exclude_exact, weights, query_groups, reference_groups, group_distances, query_weights, reference_weights);
-    }, nb::arg("queries"), nb::arg("refs"), nb::arg("thresholds"), nb::arg("alphabet")="aa", nb::arg("matrix")=std::nullopt, nb::arg("gap_open")=1, nb::arg("gap_extend")=1, nb::arg("prior")=std::vector<int32_t>{}, nb::arg("prior_width")=0, nb::arg("threads")=0, nb::arg("exclude_exact")=false, nb::arg("position_weights_by_length")=std::vector<std::vector<int32_t>>{}, nb::arg("query_group_ids")=std::vector<int32_t>{}, nb::arg("reference_group_ids")=std::vector<int32_t>{}, nb::arg("group_distances")=std::vector<std::vector<int32_t>>{}, nb::arg("query_position_weights")=std::vector<std::vector<int32_t>>{}, nb::arg("reference_position_weights")=std::vector<std::vector<int32_t>>{}, "Streaming component/full ball counts and minimum full score within the component ball, GIL released.");
+        return gapblock_group_audit_batch(queries, refs, thresholds, alph, matrix ? &*matrix : nullptr, go, ge, prior, width, threads, exclude_exact, weights, query_groups, reference_groups, group_distances, query_weights, reference_weights, feature_offsets);
+    }, nb::arg("queries"), nb::arg("refs"), nb::arg("thresholds"), nb::arg("alphabet")="aa", nb::arg("matrix")=std::nullopt, nb::arg("gap_open")=1, nb::arg("gap_extend")=1, nb::arg("prior")=std::vector<int32_t>{}, nb::arg("prior_width")=0, nb::arg("threads")=0, nb::arg("exclude_exact")=false, nb::arg("position_weights_by_length")=std::vector<std::vector<int32_t>>{}, nb::arg("query_group_ids")=std::vector<int32_t>{}, nb::arg("reference_group_ids")=std::vector<int32_t>{}, nb::arg("group_distances")=std::vector<std::vector<int32_t>>{}, nb::arg("query_position_weights")=std::vector<std::vector<int32_t>>{}, nb::arg("reference_position_weights")=std::vector<std::vector<int32_t>>{}, nb::arg("feature_offsets")=std::nullopt, "Streaming component/full ball counts and minimum full score within the component ball, GIL released.");
 
-    m.def("gapblock_ball_batch", [](const std::vector<std::string>& queries, const std::vector<std::string>& refs, const std::vector<int32_t>& thresholds, const std::string& alphabet, const std::optional<SubstitutionMatrix>& matrix, int32_t go, int32_t ge, const std::vector<int32_t>& prior, uint32_t width, int threads, bool exclude_exact, const std::vector<std::vector<int32_t>>& weights, const std::vector<int32_t>& query_groups, const std::vector<int32_t>& reference_groups, const std::vector<std::vector<int32_t>>& group_distances, const std::vector<std::vector<int32_t>>& query_weights, const std::vector<std::vector<int32_t>>& reference_weights) {
+    m.def("gapblock_ball_batch", [](const std::vector<std::string>& queries, const std::vector<std::string>& refs, const std::vector<int32_t>& thresholds, const std::string& alphabet, const std::optional<SubstitutionMatrix>& matrix, int32_t go, int32_t ge, const std::vector<int32_t>& prior, uint32_t width, int threads, bool exclude_exact, const std::vector<std::vector<int32_t>>& weights, const std::vector<int32_t>& query_groups, const std::vector<int32_t>& reference_groups, const std::vector<std::vector<int32_t>>& group_distances, const std::vector<std::vector<int32_t>>& query_weights, const std::vector<std::vector<int32_t>>& reference_weights, const std::optional<PairedFeatureOffsets>& feature_offsets) {
         const auto alph = parse_alphabet(alphabet);
         nb::gil_scoped_release release;
-        return gapblock_ball_batch(queries, refs, thresholds, alph, matrix ? &*matrix : nullptr, go, ge, prior, width, threads, exclude_exact, weights, query_groups, reference_groups, group_distances, query_weights, reference_weights);
-    }, nb::arg("queries"), nb::arg("refs"), nb::arg("thresholds"), nb::arg("alphabet")="aa", nb::arg("matrix")=std::nullopt, nb::arg("gap_open")=1, nb::arg("gap_extend")=1, nb::arg("prior")=std::vector<int32_t>{}, nb::arg("prior_width")=0, nb::arg("threads")=0, nb::arg("exclude_exact")=false, nb::arg("position_weights_by_length")=std::vector<std::vector<int32_t>>{}, nb::arg("query_group_ids")=std::vector<int32_t>{}, nb::arg("reference_group_ids")=std::vector<int32_t>{}, nb::arg("group_distances")=std::vector<std::vector<int32_t>>{}, nb::arg("query_position_weights")=std::vector<std::vector<int32_t>>{}, nb::arg("reference_position_weights")=std::vector<std::vector<int32_t>>{}, "Bounded exhaustive gapblock reduction, GIL released.");
+        return gapblock_ball_batch(queries, refs, thresholds, alph, matrix ? &*matrix : nullptr, go, ge, prior, width, threads, exclude_exact, weights, query_groups, reference_groups, group_distances, query_weights, reference_weights, feature_offsets);
+    }, nb::arg("queries"), nb::arg("refs"), nb::arg("thresholds"), nb::arg("alphabet")="aa", nb::arg("matrix")=std::nullopt, nb::arg("gap_open")=1, nb::arg("gap_extend")=1, nb::arg("prior")=std::vector<int32_t>{}, nb::arg("prior_width")=0, nb::arg("threads")=0, nb::arg("exclude_exact")=false, nb::arg("position_weights_by_length")=std::vector<std::vector<int32_t>>{}, nb::arg("query_group_ids")=std::vector<int32_t>{}, nb::arg("reference_group_ids")=std::vector<int32_t>{}, nb::arg("group_distances")=std::vector<std::vector<int32_t>>{}, nb::arg("query_position_weights")=std::vector<std::vector<int32_t>>{}, nb::arg("reference_position_weights")=std::vector<std::vector<int32_t>>{}, nb::arg("feature_offsets")=std::nullopt, "Bounded exhaustive gapblock reduction, GIL released.");
 
     m.def("gapblock_paired_topk_batch", [](const std::vector<std::string>& qa, const std::vector<std::string>& qb, const std::vector<std::string>& ra, const std::vector<std::string>& rb, uint32_t k, const std::string& alphabet, const std::optional<SubstitutionMatrix>& matrix, int32_t go, int32_t ge, const std::vector<int32_t>& prior, uint32_t width, int threads, bool exclude_exact) {
         const auto alph = parse_alphabet(alphabet);
@@ -848,11 +947,11 @@ NB_MODULE(_core, m) {
         return gapblock_paired_count_batch(qa, qb, ra, rb, thresholds, alph, matrix ? &*matrix : nullptr, go, ge, prior, width, threads, exclude_exact);
     }, nb::arg("qa"), nb::arg("qb"), nb::arg("ra"), nb::arg("rb"), nb::arg("thresholds"), nb::arg("alphabet")="aa", nb::arg("matrix")=std::nullopt, nb::arg("gap_open")=1, nb::arg("gap_extend")=1, nb::arg("prior")=std::vector<int32_t>{}, nb::arg("prior_width")=0, nb::arg("threads")=0, nb::arg("exclude_exact")=false, "Bounded exhaustive gapblock reduction, GIL released.");
 
-    m.def("gapblock_paired_sum_count_batch", [](const std::vector<std::string>& qa, const std::vector<std::string>& qb, const std::vector<std::string>& ra, const std::vector<std::string>& rb, const std::vector<std::vector<int32_t>>& thresholds, const std::string& alphabet, const std::optional<SubstitutionMatrix>& matrix, int32_t go, int32_t ge, const std::vector<int32_t>& prior, uint32_t width, int threads, bool exclude_exact,         const std::vector<std::vector<int32_t>>& weights_alpha,         const std::vector<std::vector<int32_t>>& weights_beta,         const std::vector<int32_t>& query_groups_alpha, const std::vector<int32_t>& query_groups_beta,         const std::vector<int32_t>& reference_groups_alpha, const std::vector<int32_t>& reference_groups_beta,         const std::vector<std::vector<int32_t>>& group_distances_alpha,         const std::vector<std::vector<int32_t>>& group_distances_beta, const std::vector<std::vector<int32_t>>& query_weights_alpha, const std::vector<std::vector<int32_t>>& query_weights_beta, const std::vector<std::vector<int32_t>>& reference_weights_alpha, const std::vector<std::vector<int32_t>>& reference_weights_beta) {
+    m.def("gapblock_paired_sum_count_batch", [](const std::vector<std::string>& qa, const std::vector<std::string>& qb, const std::vector<std::string>& ra, const std::vector<std::string>& rb, const std::vector<std::vector<int32_t>>& thresholds, const std::string& alphabet, const std::optional<SubstitutionMatrix>& matrix, int32_t go, int32_t ge, const std::vector<int32_t>& prior, uint32_t width, int threads, bool exclude_exact,         const std::vector<std::vector<int32_t>>& weights_alpha,         const std::vector<std::vector<int32_t>>& weights_beta,         const std::vector<int32_t>& query_groups_alpha, const std::vector<int32_t>& query_groups_beta,         const std::vector<int32_t>& reference_groups_alpha, const std::vector<int32_t>& reference_groups_beta,         const std::vector<std::vector<int32_t>>& group_distances_alpha,         const std::vector<std::vector<int32_t>>& group_distances_beta, const std::vector<std::vector<int32_t>>& query_weights_alpha, const std::vector<std::vector<int32_t>>& query_weights_beta, const std::vector<std::vector<int32_t>>& reference_weights_alpha, const std::vector<std::vector<int32_t>>& reference_weights_beta, const std::optional<PairedFeatureOffsets>& feature_offsets_alpha, const std::optional<PairedFeatureOffsets>& feature_offsets_beta, bool shared_thresholds) {
         const auto alph = parse_alphabet(alphabet);
         nb::gil_scoped_release release;
-        return gapblock_paired_sum_count_batch(qa, qb, ra, rb, thresholds, alph, matrix ? &*matrix : nullptr, go, ge, prior, width, threads, exclude_exact, weights_alpha, weights_beta, query_groups_alpha, query_groups_beta, reference_groups_alpha, reference_groups_beta, group_distances_alpha, group_distances_beta, query_weights_alpha, query_weights_beta, reference_weights_alpha, reference_weights_beta);
-    }, nb::arg("qa"), nb::arg("qb"), nb::arg("ra"), nb::arg("rb"), nb::arg("thresholds"), nb::arg("alphabet")="aa", nb::arg("matrix")=std::nullopt, nb::arg("gap_open")=1, nb::arg("gap_extend")=1, nb::arg("prior")=std::vector<int32_t>{}, nb::arg("prior_width")=0, nb::arg("threads")=0, nb::arg("exclude_exact")=false, nb::arg("position_weights_by_length_alpha")=std::vector<std::vector<int32_t>>{}, nb::arg("position_weights_by_length_beta")=std::vector<std::vector<int32_t>>{}, nb::arg("query_group_ids_alpha")=std::vector<int32_t>{}, nb::arg("query_group_ids_beta")=std::vector<int32_t>{}, nb::arg("reference_group_ids_alpha")=std::vector<int32_t>{}, nb::arg("reference_group_ids_beta")=std::vector<int32_t>{}, nb::arg("group_distances_alpha")=std::vector<std::vector<int32_t>>{}, nb::arg("group_distances_beta")=std::vector<std::vector<int32_t>>{}, nb::arg("query_position_weights_alpha")=std::vector<std::vector<int32_t>>{}, nb::arg("query_position_weights_beta")=std::vector<std::vector<int32_t>>{}, nb::arg("reference_position_weights_alpha")=std::vector<std::vector<int32_t>>{}, nb::arg("reference_position_weights_beta")=std::vector<std::vector<int32_t>>{}, "Linked sum counts and linear mass in one bounded traversal, GIL released.");
+        return gapblock_paired_sum_count_batch(qa, qb, ra, rb, thresholds, alph, matrix ? &*matrix : nullptr, go, ge, prior, width, threads, exclude_exact, weights_alpha, weights_beta, query_groups_alpha, query_groups_beta, reference_groups_alpha, reference_groups_beta, group_distances_alpha, group_distances_beta, query_weights_alpha, query_weights_beta, reference_weights_alpha, reference_weights_beta, feature_offsets_alpha, feature_offsets_beta, shared_thresholds);
+    }, nb::arg("qa"), nb::arg("qb"), nb::arg("ra"), nb::arg("rb"), nb::arg("thresholds"), nb::arg("alphabet")="aa", nb::arg("matrix")=std::nullopt, nb::arg("gap_open")=1, nb::arg("gap_extend")=1, nb::arg("prior")=std::vector<int32_t>{}, nb::arg("prior_width")=0, nb::arg("threads")=0, nb::arg("exclude_exact")=false, nb::arg("position_weights_by_length_alpha")=std::vector<std::vector<int32_t>>{}, nb::arg("position_weights_by_length_beta")=std::vector<std::vector<int32_t>>{}, nb::arg("query_group_ids_alpha")=std::vector<int32_t>{}, nb::arg("query_group_ids_beta")=std::vector<int32_t>{}, nb::arg("reference_group_ids_alpha")=std::vector<int32_t>{}, nb::arg("reference_group_ids_beta")=std::vector<int32_t>{}, nb::arg("group_distances_alpha")=std::vector<std::vector<int32_t>>{}, nb::arg("group_distances_beta")=std::vector<std::vector<int32_t>>{}, nb::arg("query_position_weights_alpha")=std::vector<std::vector<int32_t>>{}, nb::arg("query_position_weights_beta")=std::vector<std::vector<int32_t>>{}, nb::arg("reference_position_weights_alpha")=std::vector<std::vector<int32_t>>{}, nb::arg("reference_position_weights_beta")=std::vector<std::vector<int32_t>>{}, nb::arg("feature_offsets_alpha")=std::nullopt, nb::arg("feature_offsets_beta")=std::nullopt, nb::arg("shared_thresholds")=false, "Linked sum counts and linear mass in one bounded traversal, GIL released.");
 
     m.def("hamming", &hamming, nb::arg("a"), nb::arg("b"),
           "Hamming distance: the number of positions at which two EQUAL-length sequences differ. "
