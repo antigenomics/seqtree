@@ -19,7 +19,7 @@ def rows(buffer):
 @pytest.mark.parametrize('paired', [False, True])
 @pytest.mark.parametrize('factored', [False, True])
 @pytest.mark.parametrize('withheld', [False, True])
-def test_floor_each_alignment_before_offsets_and_pair_sum(threads, paired, factored, withheld):
+def test_floor_each_alignment_before_offsets_and_pair_sum(threads, paired, factored, withheld, require_thread_budget):
     q, r = ['AAAA', 'RRRA'], ['ARAA', 'RRRA', 'AAAA', 'AA']
     cuts = [0, 3, 5, 6, 9, 20, 100]
     matrix = SubstitutionMatrix.blosum62()

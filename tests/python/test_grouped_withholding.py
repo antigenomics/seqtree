@@ -65,7 +65,7 @@ def run(paired, indices, args, features, threads, exclude):
 @pytest.mark.parametrize('exclude',[False,True])
 @pytest.mark.parametrize('features',[False,True])
 @pytest.mark.parametrize('threads',[1,4])
-def test_every_fold_matches_independently_rebuilt_population(paired,exclude,features,threads):
+def test_every_fold_matches_independently_rebuilt_population(paired,exclude,features,threads, require_thread_budget):
     args=metadata();offsets,ids=csr(FULL)
     args.update(query_withheld_peptide_ids=WITHHELD,
                 reference_peptide_offsets=offsets,reference_peptide_ids=ids)

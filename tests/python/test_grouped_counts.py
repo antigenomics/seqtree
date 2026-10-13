@@ -47,7 +47,7 @@ def paired_geometry(features, indices=range(5)):
 @pytest.mark.parametrize('exclude', [False, True])
 @pytest.mark.parametrize('features', [False, True])
 @pytest.mark.parametrize('threads', [1, 4])
-def test_every_grouped_curve_and_population_matches_original(paired, exclude, features, threads):
+def test_every_grouped_curve_and_population_matches_original(paired, exclude, features, threads, require_thread_budget):
     options = paired_geometry(features) if paired else geometry(features)
     batch = (gb.grouped_paired_sum_count_batch(Q, QB, R, RB, CUTS, **metadata(), **options,
                threads=threads, exclude_exact=exclude) if paired else

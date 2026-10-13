@@ -6,7 +6,7 @@ from seqtree.gapblock import PairedFeatureOffsets, count_batch, paired_sum_count
 
 @pytest.mark.parametrize('threads',[1,4])
 @pytest.mark.parametrize('exclude',[False,True])
-def test_shared_thresholds_match_expanded(threads,exclude):
+def test_shared_thresholds_match_expanded(threads,exclude, require_thread_budget):
     q=['AAC','AC','AAC']; r=['AAC','ACC','AC','AAC']
     qb=['ACC','AC','AAC']; rb=['ACC','AAC','AC','AAC']
     cuts=[-1,0,3,1,3,12,20]

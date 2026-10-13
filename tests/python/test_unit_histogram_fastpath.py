@@ -51,7 +51,8 @@ def test_boundaries_iupac_and_existing_engine_fallbacks():
 
 @pytest.mark.parametrize("cap", [3,4,5])
 @pytest.mark.parametrize("exclude", [False,True])
-def test_bounded_rejection_preserves_per_type_caps_and_dense_hits(cap,exclude):
+@pytest.mark.parametrize("threads", [1, 4])
+def test_bounded_rejection_preserves_per_type_caps_and_dense_hits(cap,exclude,threads,require_thread_budget):
     refs=['ACDEFGHIKLMNPQRST','acdefghiklmnpqrst',
           'ACDEFACDGHIKLMNPQRST','ACDEFGHIKLMNP',
           'ACDEFGHIKLMNPACDRST','ACDGHIKLMNPQRST',
@@ -64,5 +65,4 @@ def test_bounded_rejection_preserves_per_type_caps_and_dense_hits(cap,exclude):
         args.update(limits)
         params=SearchParams(**args)
         expected=_expected(index,queries,params,exclude)
-        for threads in (1,4):
-            assert index.edit_histogram_batch(queries,params,threads,exclude)==expected
+        assert index.edit_histogram_batch(queries,params,threads,exclude)==expected

@@ -7,7 +7,8 @@ from seqtree.gapblock import (
 )
 
 
-def test_factored_offsets_explicit_oracle():
+@pytest.mark.parametrize("threads", [1, 4])
+def test_factored_offsets_explicit_oracle(threads, require_thread_budget):
     q = ['AAC', 'AC', 'AAA', 'AAC']
     r = ['AAC', 'ACC', 'AC', 'AAC', 'CCC']
     qc = [[0, 1, 2, 0], [1, 2, 0, 1], [2, 0, 1, 2], [0, 1, 2, 0]]
@@ -23,34 +24,33 @@ def test_factored_offsets_explicit_oracle():
                  2 * round(weight * sum(max(costs[a][b], costs[c][d])
                      for a, c, b, d in zip(qc[i][::2], qc[i][1::2], rc[j][::2], rc[j][1::2])) / 2)
                  for j in range(len(r))] for i in range(len(q))]
-        for threads in [1, 4]:
-            args = dict(gap_open=2, threads=threads, feature_offsets=offsets, **groups)
-            matrix = score_matrix(q, r, **args)
-            assert [[matrix[i, j] for j in range(len(r))] for i in range(len(q))] == full
-            for excluded in [False, True]:
-                counts, mass = count_batch(q, r, thresholds, linear_mass=True, exclude_exact=excluded, **args)
-                expected = [[sum(s <= t for j, s in enumerate(row) if not excluded or q[i] != r[j]) for t in thresholds[i]] for i, row in enumerate(full)]
-                expected_mass = [[sum(max(0, t-s) for j, s in enumerate(row) if not excluded or q[i] != r[j]) for t in thresholds[i]] for i, row in enumerate(full)]
-                assert counts == expected
-                assert mass == expected_mass
-                assert count_batch(q, r, thresholds, exclude_exact=excluded, **args) == expected
-                cuts = [10, 6, 15, -1]
-                balls = ball_batch(q, r, cuts, exclude_exact=excluded, **args)
-                assert [[(h.ref_id, h.score) for h in row] for row in balls] == [
-                    [(j, s) for j, s in enumerate(row) if s <= cuts[i] and (not excluded or q[i] != r[j])]
-                    for i, row in enumerate(full)]
-                before, after, nearest = group_audit_batch(q, r, cuts, exclude_exact=excluded, **args)
-                for i in range(len(q)):
-                    eligible = [j for j in range(len(r)) if component[i, j] <= cuts[i] and (not excluded or q[i] != r[j])]
-                    assert before[i] == len(eligible)
-                    assert after[i] == sum(full[i][j] <= cuts[i] for j in eligible)
-                    assert nearest[i] == min((full[i][j] for j in eligible), default=-1)
-                pair_counts, pair_mass = paired_sum_count_batch(q, q, r, r, thresholds,
-                    gap_open=2, threads=threads, exclude_exact=excluded,
-                    feature_offsets_alpha=offsets, feature_offsets_beta=offsets)
-                pair_scores = [[2 * (s - v[groups['query_group_ids'][i]][groups['reference_group_ids'][j]]) for j, s in enumerate(row)] for i, row in enumerate(full)]
-                assert pair_counts == [[sum(s <= t for j, s in enumerate(row) if not excluded or q[i] != r[j]) for t in thresholds[i]] for i, row in enumerate(pair_scores)]
-                assert pair_mass == [[sum(max(0,t-s) for j,s in enumerate(row) if not excluded or q[i] != r[j]) for t in thresholds[i]] for i,row in enumerate(pair_scores)]
+        args = dict(gap_open=2, threads=threads, feature_offsets=offsets, **groups)
+        matrix = score_matrix(q, r, **args)
+        assert [[matrix[i, j] for j in range(len(r))] for i in range(len(q))] == full
+        for excluded in [False, True]:
+            counts, mass = count_batch(q, r, thresholds, linear_mass=True, exclude_exact=excluded, **args)
+            expected = [[sum(s <= t for j, s in enumerate(row) if not excluded or q[i] != r[j]) for t in thresholds[i]] for i, row in enumerate(full)]
+            expected_mass = [[sum(max(0, t-s) for j, s in enumerate(row) if not excluded or q[i] != r[j]) for t in thresholds[i]] for i, row in enumerate(full)]
+            assert counts == expected
+            assert mass == expected_mass
+            assert count_batch(q, r, thresholds, exclude_exact=excluded, **args) == expected
+            cuts = [10, 6, 15, -1]
+            balls = ball_batch(q, r, cuts, exclude_exact=excluded, **args)
+            assert [[(h.ref_id, h.score) for h in row] for row in balls] == [
+                [(j, s) for j, s in enumerate(row) if s <= cuts[i] and (not excluded or q[i] != r[j])]
+                for i, row in enumerate(full)]
+            before, after, nearest = group_audit_batch(q, r, cuts, exclude_exact=excluded, **args)
+            for i in range(len(q)):
+                eligible = [j for j in range(len(r)) if component[i, j] <= cuts[i] and (not excluded or q[i] != r[j])]
+                assert before[i] == len(eligible)
+                assert after[i] == sum(full[i][j] <= cuts[i] for j in eligible)
+                assert nearest[i] == min((full[i][j] for j in eligible), default=-1)
+            pair_counts, pair_mass = paired_sum_count_batch(q, q, r, r, thresholds,
+                gap_open=2, threads=threads, exclude_exact=excluded,
+                feature_offsets_alpha=offsets, feature_offsets_beta=offsets)
+            pair_scores = [[2 * (s - v[groups['query_group_ids'][i]][groups['reference_group_ids'][j]]) for j, s in enumerate(row)] for i, row in enumerate(full)]
+            assert pair_counts == [[sum(s <= t for j, s in enumerate(row) if not excluded or q[i] != r[j]) for t in thresholds[i]] for i, row in enumerate(pair_scores)]
+            assert pair_mass == [[sum(max(0,t-s) for j,s in enumerate(row) if not excluded or q[i] != r[j]) for t in thresholds[i]] for i,row in enumerate(pair_scores)]
 
 
 def test_factored_rounding_and_owned_inputs():

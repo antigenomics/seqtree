@@ -11,7 +11,7 @@ def buf(value):
 @pytest.mark.parametrize('paired', [False, True])
 @pytest.mark.parametrize('withheld', [False, True])
 @pytest.mark.parametrize('threads', [1, 4])
-def test_all_curves_sizes_exact_against_independent_raw_diagonal_oracle(mode, paired, withheld, threads):
+def test_all_curves_sizes_exact_against_independent_raw_diagonal_oracle(mode, paired, withheld, threads, require_thread_budget):
     q = ['CAAAAF', 'CRRRRF', 'WAAAAW']
     r = ['CAAAAF', 'CRRAAF', 'CRRRRF', 'CAAARRAAF', 'WAAAAW']
     qb = ['CWWWWF', 'CAAAAF', 'CSSSSF']

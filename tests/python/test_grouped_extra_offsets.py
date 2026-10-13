@@ -21,7 +21,7 @@ def feature(cost, weight=1, scale=200):
 @pytest.mark.parametrize('withheld',[False,True])
 @pytest.mark.parametrize('paired',[False,True])
 @pytest.mark.parametrize('threads',[1,4])
-def test_independent_terms_and_lane_priors_against_explicit_expression(paired,threads,withheld):
+def test_independent_terms_and_lane_priors_against_explicit_expression(paired,threads,withheld, require_thread_budget):
     q,r=['AAAA','AAAR'],['AAAA','AARR','AAAAAA']
     qb,rb=['RRRR','RRAA'],['RRRR','AARRR','AAAA']
     matrix=SubstitutionMatrix.blosum62(); cuts=list(range(0,900,20))
