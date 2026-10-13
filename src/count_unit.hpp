@@ -23,17 +23,23 @@ struct Pattern {
             for (size_t i=0;i<length;++i)
                 if (codec.encode(char(c))==codes[i]) eq[c]|=uint64_t(1)<<i;
     }
-    int distance(std::string_view ref) const {
+    int distance(std::string_view ref, int cap) const {
+        size_t remaining=ref.size();
         uint64_t pv=~uint64_t(0),mv=0,high=uint64_t(1)<<(length-1);
         int score=int(length);
         for (unsigned char c:ref) {
             const uint64_t e=eq[c],xv=e|mv,xh=(((e&pv)+pv)^pv)|e;
             uint64_t ph=mv|~(xh|pv),mh=pv&xh;
             score+=bool(ph&high)-bool(mh&high);
+            // Appending one character reduces unit edit distance by at most one.
+            // This lower bound also rejects every stricter per-type edit path.
+            // Check every four characters to limit overhead on dense near hits.
+            --remaining;
+            if (!(remaining&3) && score-int(remaining)>cap) return cap+1;
             ph=(ph<<1)|1;mh<<=1;
             pv=mh|~(xv|ph);mv=ph&xv;
         }
-        return score;
+        return std::min(score,cap+1);
     }
 };
 // Minimal substitution count at each prefix and exact insertion/deletion counts.
@@ -59,7 +65,7 @@ inline int restricted(const Pattern& q,std::string_view r,const Codec& codec,int
 inline int exact_distance(const Pattern& q,std::string_view r,const Codec& codec,int cap) {
     if (r.size()>q.length+2 || q.length>r.size()+2) return cap+1;
     const int delta=int(r.size())-int(q.length);
-    const int d=q.distance(r);
+    const int d=q.distance(r,cap);
     if (d>cap) return cap+1;
     // For any path, ins+del<=d and |ins-del|=|delta|. Thus max(ins,del)
     // <=floor((d+|delta|)/2); both per-type caps are automatic when <=2.

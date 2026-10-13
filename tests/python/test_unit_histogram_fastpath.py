@@ -47,3 +47,22 @@ def test_boundaries_iupac_and_existing_engine_fallbacks():
     n=Index.build(['ACGTN','RYACGT','ryacgt','RYYACGT'],'iupac')
     p=SearchParams(max_subs=5,max_ins=2,max_dels=2,max_total_edits=5)
     assert n.edit_histogram_batch(['acgtN','RYACGT'],p,threads=2,exclude_exact=True)==_expected(n,['acgtN','RYACGT'],p,True)
+
+
+@pytest.mark.parametrize("cap", [3,4,5])
+@pytest.mark.parametrize("exclude", [False,True])
+def test_bounded_rejection_preserves_per_type_caps_and_dense_hits(cap,exclude):
+    refs=['ACDEFGHIKLMNPQRST','acdefghiklmnpqrst',
+          'ACDEFACDGHIKLMNPQRST','ACDEFGHIKLMNP',
+          'ACDEFGHIKLMNPACDRST','ACDGHIKLMNPQRST',
+          'AAAAAAAAAAAAAAAA','CCCCCCCCCCCCCCCC']
+    index=Index.build(refs+refs[:2])
+    queries=refs+['ACDEFGHIKLMNPQRS','ACDEFGHIKLMNPQACDRST']
+    for limits in ({},{'max_subs':1},{'max_ins':1},{'max_dels':1},
+                   {'max_ins':3},{'max_dels':3},{'max_ins':0,'max_dels':0}):
+        args=dict(max_subs=cap,max_ins=2,max_dels=2,max_total_edits=cap)
+        args.update(limits)
+        params=SearchParams(**args)
+        expected=_expected(index,queries,params,exclude)
+        for threads in (1,4):
+            assert index.edit_histogram_batch(queries,params,threads,exclude)==expected
