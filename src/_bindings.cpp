@@ -415,6 +415,7 @@ ScoreMatrix py_gapblock_matrix(const std::vector<std::string>& queries,
 }  // namespace
 
 NB_MODULE(_core, m) {
+    m.attr("exact_exclusion_hits_only") = true;
     m.doc() = "seqtree: fuzzy biological-sequence search (C++ core)";
 
     nb::class_<SubstitutionMatrix>(m, "SubstitutionMatrix",

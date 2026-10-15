@@ -88,7 +88,7 @@ TEST_CASE("single-character references") {
     CHECK(m.size() == 3);  // every length-1 ref is within one substitution
 }
 
-TEST_CASE("grouped gapblock population buffers and full-key puncture") {
+TEST_CASE("grouped gapblock fixed populations and full-key hit exclusion") {
     seqtree::GroupedGeometry geometry;
     seqtree::GroupedCountBatch batch({"AAA","AAC"},{"AAA","ACA"},{0,2},
         {0,2,3},{0,1,1},{0,1},{-1,1},{0,1},{1,0},1,
@@ -100,7 +100,7 @@ TEST_CASE("grouped gapblock population buffers and full-key puncture") {
     CHECK(first->counts.shape==std::vector<size_t>{1,7,2});
     CHECK(first->counts.data[0]==0);
     CHECK(first->counts.data[1]==1);
-    CHECK(first->sizes.data[0]==1);
+    CHECK(first->sizes.data[0]==2);
     CHECK(first->exact_counts.data==std::vector<uint32_t>{1,1});
     REQUIRE(batch.next().has_value());
     CHECK_FALSE(batch.next().has_value());

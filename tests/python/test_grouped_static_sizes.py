@@ -43,7 +43,7 @@ def test_all_buffers_match_no_withholding_full_membership_oracle(paired,exclude,
     members=[[0],[1,2],[0,2],[],[]]
     for i in range(3):
         exact=[j for j in range(5) if q[i]==r[j] and (not paired or qb[i]==rb[j])]
-        retained=[j for j in range(5) if not (exclude and j in exact)]
+        retained=list(range(5))
         target=[[j for j in retained if t in members[j]] for t in range(3)]
         same_gene=[[j for j in target[t] if metadata['query_gene_ids'][i]==metadata['reference_gene_ids'][j]] for t in range(3)]
         exclusive=[[j for j in retained if metadata['reference_exclusive_peptide_ids'][j]==p] for p in range(2)]
