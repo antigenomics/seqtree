@@ -267,15 +267,20 @@ inline int32_t group_offset(const GapInput& in, size_t i, size_t j) {
     return offset;
 }
 
-template<bool Factored = true>
 int32_t score_cell(const GapInput& in, size_t i, size_t j, int32_t go, int32_t ge,
-                   const std::vector<int32_t>& prior, int32_t* scratch) {
+                   const std::vector<int32_t>& prior, int32_t* scratch, int32_t offset) {
     const uint32_t m = uint32_t(in.q[i].size()), n = uint32_t(in.r[j].size());
     const uint32_t M = std::max(m, n), d = m > n ? m - n : n - m;
     const int32_t* prow = prior.empty() ? nullptr : prior.data() + (size_t(M) * in.W1 + d) * in.W1;
-    return group_offset<Factored>(in, i, j) + cell(in.q[i].data(), m, in.r[j].data(), n, in.pen.data(), in.A, go, ge, prow, scratch, in.weights.empty() || !M ? nullptr : in.weights[M].data(),
+    return offset + cell(in.q[i].data(), m, in.r[j].data(), n, in.pen.data(), in.A, go, ge, prow, scratch, in.weights.empty() || !M ? nullptr : in.weights[M].data(),
         in.query_weights.empty() ? nullptr : in.query_weights[i].data(),
         in.reference_weights.empty() ? nullptr : in.reference_weights[j].data());
+}
+
+template<bool Factored = true>
+int32_t score_cell(const GapInput& in, size_t i, size_t j, int32_t go, int32_t ge,
+                   const std::vector<int32_t>& prior, int32_t* scratch) {
+    return score_cell(in,i,j,go,ge,prior,scratch,group_offset<Factored>(in,i,j));
 }
 
 struct Ranked {
@@ -736,18 +741,16 @@ struct GroupedCountBatch::Impl {
         diagonals(lane.q,qdiag,max_q); diagonals(lane.r,rdiag,max_r);
     }
 
-    template<bool Factored>
     int64_t affine_cell(const GapInput& lane, size_t i, size_t j,
             const std::vector<int64_t>& qdiag, const std::vector<int64_t>& rdiag,
-            detail::PairwiseScratch& scratch) const {
+            detail::PairwiseScratch& scratch, int32_t offset) const {
         const auto& q=lane.q[i]; const auto& r=lane.r[j];
         // data() can be null for an empty vector; avoid pointer arithmetic then.
         const auto* qp=q.empty() ? q.data() : q.data()+left;
         const auto* rp=r.empty() ? r.data() : r.data()+left;
         const int64_t sim=detail::align_score_encoded(qp,q.size()-left-right,
             rp,r.size()-left-right,*similarity,mode,go,ge,scratch);
-        return std::max(int64_t(0),qdiag[i]+rdiag[j]-2*sim)*scale+
-            group_offset<Factored>(lane,i,j);
+        return std::max(int64_t(0),qdiag[i]+rdiag[j]-2*sim)*scale+offset;
     }
 
     template<bool Additional> int64_t extra_offset(const std::vector<PairedFeatureOffsets>& terms,
@@ -821,25 +824,26 @@ struct GroupedCountBatch::Impl {
                     if (!K) continue;
                     const int64_t extra_alpha=extra_offset<Additional>(extra_a,i,j);
                     const int64_t extra_beta=b ? extra_offset<Additional>(extra_b,i,j) : 0;
-                    const int64_t offset = int64_t(group_offset<Factored>(a,i,j))+extra_alpha +
-                        (b ? int64_t(group_offset<Factored>(*b,i,j))+extra_beta : 0);
+                    const int32_t offset_alpha=group_offset<Factored>(a,i,j);
+                    const int32_t offset_beta=b ? group_offset<Factored>(*b,i,j) : 0;
+                    const int64_t offset=int64_t(offset_alpha)+extra_alpha+offset_beta+extra_beta;
                     if (offset>cuts.back()) continue;
                     int64_t score;
-                    if constexpr (Affine) score=affine_cell<Factored>(a,i,j,qdiag_a,rdiag_a,scratch);
-                    else score=score_cell<Factored>(a,i,j,go,ge,prior,scratch.data());
+                    if constexpr (Affine) score=affine_cell(a,i,j,qdiag_a,rdiag_a,scratch,offset_alpha);
+                    else score=score_cell(a,i,j,go,ge,prior,scratch.data(),offset_alpha);
                     score+=extra_alpha;
                     if constexpr (Quantized) {
-                        const int64_t additive=group_offset<Factored>(a,i,j)+extra_alpha;
+                        const int64_t additive=offset_alpha+extra_alpha;
                         score=additive+(score-additive)/quantum_a*quantum_a;
                     }
                     if (b) {
                         if (score>cuts.back()) continue;
                         int64_t other;
-                        if constexpr (Affine) other=affine_cell<Factored>(*b,i,j,qdiag_b,rdiag_b,scratch);
-                        else other=score_cell<Factored>(*b,i,j,go,ge,other_prior,scratch.data());
+                        if constexpr (Affine) other=affine_cell(*b,i,j,qdiag_b,rdiag_b,scratch,offset_beta);
+                        else other=score_cell(*b,i,j,go,ge,other_prior,scratch.data(),offset_beta);
                         other+=extra_beta;
                         if constexpr (Quantized) {
-                            const int64_t additive=group_offset<Factored>(*b,i,j)+extra_beta;
+                            const int64_t additive=offset_beta+extra_beta;
                             other=additive+(other-additive)/quantum_b*quantum_b;
                         }
                         score+=other;
