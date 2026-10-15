@@ -63,14 +63,14 @@ void recurse(TmCtx& c, uint32_t node, int qpos, int ns, int ni, int nd, int32_t 
         if (!c.hamming) {  // insertion: consume ref char only
             int nni = ni + 1;
             int32_t npen = pen + c.lim.gap;
-            if (nni <= c.lim.max_ins && tot + 1 <= c.lim.max_tot && npen <= c.lim.budget)
+            if (nni <= c.lim.max_ins && nni + nd <= c.lim.max_indels && tot + 1 <= c.lim.max_tot && npen <= c.lim.budget)
                 recurse(c, child, qpos, ns, nni, nd, npen);
         }
     }
     if (!c.hamming && qpos < c.qlen) {  // deletion: consume query char, stay at node
         int nnd = nd + 1;
         int32_t npen = pen + c.lim.gap;
-        if (nnd <= c.lim.max_del && tot + 1 <= c.lim.max_tot && npen <= c.lim.budget)
+        if (nnd <= c.lim.max_del && ni + nnd <= c.lim.max_indels && tot + 1 <= c.lim.max_tot && npen <= c.lim.budget)
             recurse(c, node, qpos + 1, ns, ni, nnd, npen);
     }
 }

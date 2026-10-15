@@ -257,3 +257,14 @@ This repo follows **git-flow**:
 Roadmap (affine gaps, position-specific matrices, succinct memory packing) lives in
 [docs/roadmap.rst](docs/roadmap.rst). Control-set E-values already ship — see the
 [E-value guide](https://antigenomics.github.io/seqtree/evalue.html).
+
+### Floating alignment reductions
+
+`Index.alignment_max_batch` streams unit-cost search candidates through float64
+global alignment and requested numeric-target maxima without a dense pair table.
+It accepts explicit matrix symbols, small group-offset matrices and annotation CSR,
+with separate alignment-selection and final scoring coefficients.
+`Index.edit_histogram_batch(..., max_indels=...)` additionally supports an aggregate
+insertion/deletion cap; its default preserves previous behavior. See the
+[API reference](https://antigenomics.github.io/seqtree/api.html) for array contracts
+and tie, count, exclusion and unsupported-value semantics.

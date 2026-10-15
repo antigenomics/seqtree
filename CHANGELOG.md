@@ -3,6 +3,15 @@
 All notable changes to `seqtree`. Dates are release dates. From 1.0.0 the project follows semantic
 versioning: breaking changes need a **major** bump.
 
+## [Unreleased]
+
+### Added
+
+- Generic float64 global-alignment target maxima with numeric annotation CSR,
+  group offsets, explicit matrix symbols and independent candidate edit budgets.
+- Optional aggregate insertion/deletion limits for batched edit histograms;
+  omitted and redundant limits preserve the existing count paths.
+
 ## [1.1.0] — 2026-10-11
 
 ### Added
