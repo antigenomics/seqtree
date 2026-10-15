@@ -6,6 +6,7 @@
 #include <cmath>
 #include <limits>
 #include <mutex>
+#include <numeric>
 #include <stdexcept>
 #include <tuple>
 #include <unordered_map>
@@ -686,6 +687,33 @@ struct GroupedCountBatch::Impl {
     int32_t scale = 1;
     uint32_t left = 0, right = 0;
     std::vector<int64_t> qdiag_a, rdiag_a, qdiag_b, rdiag_b;
+    int64_t bin_step = 1;
+    std::vector<size_t> score_bins;
+
+    void prepare_bins() {
+        if (cuts.empty() || cuts.back()<0) return;
+        int64_t step=0;
+        for (const auto cut:cuts) step=std::gcd(step,cut<0 ? -int64_t(cut) : int64_t(cut));
+        bin_step=std::max(int64_t(1),step);
+        const uint64_t slots=uint64_t(cuts.back()/bin_step)+1, K=cuts.size();
+        // Building more than K squared bins cannot repay even K binary searches.
+        if (slots/K+uint64_t(slots%K!=0)>K) return;
+        score_bins.resize(size_t(slots));
+        size_t bin=size_t(std::lower_bound(cuts.begin(),cuts.end(),0)-cuts.begin());
+        for (size_t i=0;i<score_bins.size();++i) {
+            while (bin<cuts.size() && cuts[bin]<int64_t(i)*bin_step) ++bin;
+            score_bins[i]=bin;
+        }
+    }
+
+    size_t score_bin(int64_t score) const {
+        if (!score_bins.empty() && score>=0) {
+            if (score>cuts.back()) return cuts.size();
+            return score_bins[size_t((score+bin_step-1)/bin_step)];
+        }
+        return size_t(std::lower_bound(cuts.begin(),cuts.end(),score)-cuts.begin());
+    }
+
     std::vector<uint32_t> static_sizes;
     std::unordered_map<int32_t,std::vector<std::pair<uint32_t,uint32_t>>> gene_sizes;
 
@@ -912,9 +940,8 @@ struct GroupedCountBatch::Impl {
                         }
                         score+=other;
                     }
-                    const auto found=std::lower_bound(cuts.begin(),cuts.end(),score);
-                    if (found==cuts.end()) continue;
-                    const size_t bin=size_t(found-cuts.begin());
+                    const size_t bin=score_bin(score);
+                    if (bin==K) continue;
                     ++hist[bin];
                     for (size_t p=offsets[j];p<offsets[j+1];++p) {
                         if constexpr (Withheld)
@@ -1034,6 +1061,7 @@ GroupedCountBatch::GroupedCountBatch(const std::vector<std::string>& qa, const s
     if (threads<0 || unsigned(threads)>available_cpus())
         throw std::invalid_argument("worker count exceeds the available CPU budget");
     in.cuts=std::move(cuts); in.offsets=std::move(offsets); in.labels=std::move(labels);
+    in.prepare_bins();
     in.target_peptides=std::move(target_peptides); in.exclusive=std::move(exclusive);
     in.qgenes=std::move(qgenes);in.rgenes=std::move(rgenes);
     in.prior=alpha.gap_prior ? *alpha.gap_prior : std::move(prior);
