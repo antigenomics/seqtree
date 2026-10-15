@@ -174,3 +174,24 @@ def test_redundant_aggregate_cap_preserves_unit_count_fastpath_results():
             expected=index.edit_histogram_batch(queries,p,threads=1,exclude_exact=exclude)
             for cap in (ins+dels,ins+dels+1):
                 assert index.edit_histogram_batch(queries,p,threads=1,exclude_exact=exclude,max_indels=cap)==expected
+
+
+@pytest.mark.parametrize('threads',[1,2])
+@pytest.mark.parametrize('exclude',[False,True])
+def test_candidate_backend_preserves_trie_fallback_buffers(threads,exclude,require_thread_budget):
+    import random
+    rng=random.Random(41)
+    queries=['','A']+[''.join(rng.choice('ACGT') for _ in range(n)) for n in (8,20,63,64)]
+    refs=list(dict.fromkeys(queries+[q[1:]+q[:1] for q in queries]+[q+'A' for q in queries]))
+    target_ids=[i%3 for i in range(len(refs))]
+    updates={'target_class_ids':[0,0,0],'reference_multiplicities':[i%4+1 for i in range(len(refs))],
+        'reference_group_ids':[[(-1 if i%5==0 else 0) for i in range(len(refs))],[0]*len(refs)]}
+    kwargs=dict(target_ids=target_ids,roles=[[0] for _ in refs],requests=[[i%3] for i in range(len(queries))],
+        groups=[[-1,0,0,0,0,0],[0]*len(queries)],exclude=exclude,threads=threads,updates=updates)
+    bounded=run(queries,refs,params=SearchParams(max_subs=4,max_ins=2,max_dels=2,max_total_edits=6),**kwargs)
+    # Total7 is redundant: substitutions<=4 plus aggregate indels<=2 implies total<=6.
+    # It deliberately exercises the existing trie fallback with exactly the same set.
+    fallback=run(queries,refs,params=SearchParams(max_subs=4,max_ins=2,max_dels=2,max_total_edits=7),**kwargs)
+    for key in bounded:
+        assert bounded[key].dtype==fallback[key].dtype
+        assert bounded[key].tobytes()==fallback[key].tobytes(),key

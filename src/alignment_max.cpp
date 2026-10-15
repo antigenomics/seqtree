@@ -1,5 +1,6 @@
 #include "seqtree/seqtree.hpp"
 #include "seqtree/parallel.hpp"
+#include "count_unit.hpp"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -124,7 +125,15 @@ AlignmentMaxResult Index::alignment_max_batch(const std::vector<std::string>& qu
     parallel_for(Q,threads,[&]{return Worker(*this,T);},[&](size_t i,Worker& w) {
         for (size_t c=0;c<qg.size();++c) if (qg[c][i]<0) out.query_supported[i]=0;
         for (size_t k=qo[i];k<qo[i+1];++k) w.slots[qt[k]]=int64_t(k);
-        w.search.search_into(queries[i],p,w.hits,max_indels); out.candidate_counts[i]=w.hits.size();
+        if (count_unit::bounded_eligible(p,max_indels) && !queries[i].empty() && queries[i].size()<=63) {
+            count_unit::Pattern pattern(queries[i],codec()); w.hits.clear();
+            for (uint32_t r=0;r<R;++r) {
+                const int d=count_unit::bounded_distance(pattern,ref_seq(r),codec(),p,max_indels);
+                // Only ref_id is consumed below; no operation trace is reconstructed.
+                if (d<=p.max_total_edits) w.hits.push_back(Hit{r,d,0,0,0});
+            }
+        } else w.search.search_into(queries[i],p,w.hits,max_indels);
+        out.candidate_counts[i]=w.hits.size();
         const int64_t er=exact_ref[i]; const size_t qb=er<0?0:co[size_t(er)],qe=er<0?0:co[size_t(er)+1];
         const uint64_t N=ci.size()-(exclude_exact?qe-qb:0);
         for (const auto& hit:w.hits) {

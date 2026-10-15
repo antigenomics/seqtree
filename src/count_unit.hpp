@@ -81,28 +81,33 @@ inline bool eligible(const SearchParams& p) {
         (p.max_score_penalty<=0 || p.max_score_penalty>=p.max_total_edits) &&
         p.engine!=Engine::SeqTrie && p.mode==Mode::AllHits && !p.max_hits;
 }
-inline bool fill_histogram(const Index& idx,std::string_view query,const SearchParams& p,
-                           bool exclude_exact,std::vector<uint64_t>& out,int max_indels=-1) {
-    const bool original=(max_indels<0 || max_indels>=int(p.max_insertions)+int(p.max_deletions)) && eligible(p);
-    // Same fixed 3x3 scratch supports directional bounds <=2 and an aggregate cap.
-    const bool bounded=max_indels>=0 && !p.matrix && !p.pos_matrix && p.gap_open==1 &&
+// Same fixed 3x3 scratch supports directional bounds <=2 and an aggregate cap.
+inline bool bounded_eligible(const SearchParams& p,int max_indels) {
+    return max_indels>=0 && !p.matrix && !p.pos_matrix && p.gap_open==1 &&
         p.max_total_edits>=3 && p.max_total_edits<=6 && p.max_insertions<=2 && p.max_deletions<=2 &&
         (p.max_score_penalty<=0 || p.max_score_penalty>=p.max_total_edits) &&
         p.engine!=Engine::SeqTrie && p.mode==Mode::AllHits && !p.max_hits;
-    if ((!original && !bounded) || query.empty() || query.size()>63) return false;
+}
+inline int bounded_distance(const Pattern& pattern,std::string_view ref,const Codec& codec,
+                            const SearchParams& p,int max_indels) {
+    const int rejected=int(p.max_total_edits)+1;
+    if (ref.size()>pattern.length+p.max_insertions || pattern.length>ref.size()+p.max_deletions) return rejected;
+    const int delta=int(ref.size())-int(pattern.length);
+    if (delta>p.max_insertions || -delta>p.max_deletions || std::abs(delta)>max_indels) return rejected;
+    // Unrestricted edit distance is only a lower bound, never an acceptance test.
+    if (pattern.distance(ref,p.max_total_edits)>p.max_total_edits) return rejected;
+    return restricted(pattern,ref,codec,p.max_total_edits,p.max_substitutions,
+                      p.max_insertions,p.max_deletions,max_indels);
+}
+inline bool fill_histogram(const Index& idx,std::string_view query,const SearchParams& p,
+                           bool exclude_exact,std::vector<uint64_t>& out,int max_indels=-1) {
+    const bool original=(max_indels<0 || max_indels>=int(p.max_insertions)+int(p.max_deletions)) && eligible(p);
+    if ((!original && !bounded_eligible(p,max_indels)) || query.empty() || query.size()>63) return false;
     Pattern pattern(query,idx.codec());
     for(uint32_t id=0;id<idx.size();++id) {
         const auto ref=idx.ref_seq(id); int d;
         if (original) d=exact_distance(pattern,ref,idx.codec(),p.max_total_edits);
-        else {
-            if (ref.size()>query.size()+p.max_insertions || query.size()>ref.size()+p.max_deletions) continue;
-            const int delta=int(ref.size())-int(query.size());
-            if (delta>p.max_insertions || -delta>p.max_deletions || std::abs(delta)>max_indels) continue;
-            // Unrestricted edit distance is only a lower bound, never an acceptance test.
-            if (pattern.distance(ref,p.max_total_edits)>p.max_total_edits) continue;
-            d=restricted(pattern,ref,idx.codec(),p.max_total_edits,p.max_substitutions,
-                         p.max_insertions,p.max_deletions,max_indels);
-        }
+        else d=bounded_distance(pattern,ref,idx.codec(),p,max_indels);
         if (d<=p.max_total_edits && (!exclude_exact || d)) ++out[d];
     }
     return true;

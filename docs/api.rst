@@ -63,6 +63,9 @@ max_indels``. ``similarity`` is a square finite float64 grid in the explicit
 must be represented. Candidate ``params`` must describe uncapped unit-cost all-hit
 ``seqtm``/``auto`` search. ``max_indels`` independently caps total insertion and
 deletion residues. Candidate existence does not constrain the selected alignment.
+Eligible short unit-cost profiles reuse the exact bounded-count predicate to
+collect full-index candidate IDs; other profiles retain the existing searcher.
+Global candidate counts are preserved before target filtering.
 
 Global Needleman--Wunsch maximizes ``U - lambda*g``, where ``U`` sums nongap
 similarities, ``g`` counts gap residues including terminal gaps, and
