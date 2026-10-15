@@ -8,7 +8,7 @@ from seqtree import gapblock as gb
 @pytest.mark.parametrize('exclude',[False,True])
 @pytest.mark.parametrize('threads',[1,4])
 @pytest.mark.parametrize('cuts',[[],[-1],[-1,0,3,10,40]])
-def test_all_buffers_match_no_withholding_full_membership_oracle(paired,exclude,threads,cuts):
+def test_all_buffers_match_no_withholding_full_membership_oracle(paired,exclude,threads,cuts,require_thread_budget):
     q=['AAA','CCC','ATA'];r=['AAA','AAA','ACA','TTT','CCC']
     qb=['CCC','AAA','CCC'];rb=['CCC','CCA','CCC','AAA','AAA']
     metadata=dict(reference_target_offsets=[0,1,3,5,5,5],
