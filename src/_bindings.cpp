@@ -188,13 +188,13 @@ nb::list py_search_batch(const Index& idx, const std::vector<std::string>& queri
 
 std::vector<std::vector<uint64_t>> py_edit_histogram_batch(
         const Index& idx, const std::vector<std::string>& queries,
-        const PyParams& pp, int threads, bool exclude_exact) {
+        const PyParams& pp, int threads, bool exclude_exact, int max_indels) {
     if (pp.max_total_edits < 1 || pp.max_total_edits > 65535)
         throw nb::value_error("edit histogram requires max_total_edits in [1, 65535]");
     auto mat = make_matrix(pp, idx.alphabet());
     SearchParams cp = to_cpp(pp, mat ? &*mat : nullptr);
     nb::gil_scoped_release release;
-    return idx.edit_histogram_batch(queries, cp, threads, exclude_exact);
+    return idx.edit_histogram_batch(queries, cp, threads, exclude_exact, max_indels);
 }
 
 std::vector<uint64_t> py_collisions_batch(const Index& idx, const std::vector<std::string>& queries,
@@ -333,6 +333,26 @@ PyType_Slot kArrayViewSlots[] = {
 template <class T>
 ArrayView view_of(const nb::object& owner, const std::vector<T>& v, char fmt) {
     return ArrayView{owner, v.data(), v.size(), sizeof(T), {fmt, 0}};
+}
+
+nb::dict alignment_max_arrays(const nb::object& self) {
+    const auto& r=nb::cast<const AlignmentMaxResult&>(self); nb::dict d;
+    d["scores"]=view_of(self,r.scores,'d');
+    d["raw_similarity"]=view_of(self,r.raw_similarity,'d');
+    d["normalized_similarity"]=view_of(self,r.normalized_similarity,'d');
+    d["pfit"]=view_of(self,r.pfit,'d');
+    d["informativeness"]=view_of(self,r.informativeness,'d');
+    d["counts"]=view_of(self,r.counts,'Q');
+    d["modeled_counts"]=view_of(self,r.modeled_counts,'Q');
+    d["aa_counts"]=view_of(self,r.aa_counts,'Q');
+    d["exact_counts"]=view_of(self,r.exact_counts,'Q');
+    d["candidate_counts"]=view_of(self,r.candidate_counts,'Q');
+    d["nw_pairs"]=view_of(self,r.nw_pairs,'Q');
+    d["best_ref_ids"]=view_of(self,r.best_ref_ids,'q');
+    d["best_lane_ids"]=view_of(self,r.best_lane_ids,'q');
+    d["gap_counts"]=view_of(self,r.gap_counts,'I');
+    d["query_supported"]=view_of(self,r.query_supported,'B');
+    return d;
 }
 
 // One hit as a Python object. Built only for the query actually asked for, never for the whole
@@ -663,6 +683,9 @@ NB_MODULE(_core, m) {
             return "Alignment(score=" + std::to_string(a.score) + ", ops='" + a.ops + "')";
         });
 
+    nb::class_<AlignmentMaxResult>(m,"AlignmentMaxResult")
+        .def("arrays",&alignment_max_arrays,"Read-only zero-copy requested-target CSR buffers; views own their result.");
+
     nb::class_<Index>(m, "Index",
                       "Immutable search index over a set of reference sequences. Build once, "
                       "then query concurrently; reference id is the position in ``refs``.")
@@ -696,11 +719,32 @@ NB_MODULE(_core, m) {
              "cores. Returns one hit list per query, in input order.")
         .def("edit_histogram_batch", &py_edit_histogram_batch,
              nb::arg("queries"), nb::arg("params"), nb::arg("threads") = 0,
-             nb::arg("exclude_exact") = false,
+             nb::arg("exclude_exact") = false, nb::arg("max_indels") = -1,
              "Exact reference counts by total n_subs+n_ins+n_dels, bins 0..max_total_edits. "
              "Requires explicit positive max_total_edits and uncapped seqtm/auto all-hit search. "
+             "max_indels>=0 also caps total insertions+deletions; -1 preserves directional-only caps. "
              "Duplicates count separately; exclude_exact retains bin 0 with count zero. threads<=0 uses the detected available CPU budget. Releases the GIL; "
              "one reusable hit buffer per worker, no all-query hit vectors.")
+        .def("alignment_max_batch", [](const Index& idx,const std::vector<std::string>& queries,const PyParams& pp,
+            const std::vector<std::vector<double>>& sim,const std::string& symbols,int max_indels,
+            const std::vector<uint32_t>& qo,const std::vector<uint32_t>& qt,const std::vector<uint32_t>& ro,
+            const std::vector<uint32_t>& rt,const std::vector<int32_t>& tc,const std::vector<uint32_t>& co,
+            const std::vector<int32_t>& ci,const std::vector<std::vector<int32_t>>& qg,
+            const std::vector<std::vector<int32_t>>& rg,const std::vector<std::vector<std::vector<double>>>& offsets,
+            const std::vector<uint64_t>& other,const std::vector<uint64_t>& multiplicities,
+            const std::vector<double>& coefficients,int threads,bool exclude_exact) {
+                auto mat=make_matrix(pp,idx.alphabet()); auto cp=to_cpp(pp,mat?&*mat:nullptr);
+                nb::gil_scoped_release release;
+                return idx.alignment_max_batch(queries,cp,sim,symbols,max_indels,qo,qt,ro,rt,tc,co,ci,qg,rg,offsets,other,multiplicities,coefficients,threads,exclude_exact);
+            }, nb::arg("queries"),nb::arg("params"),nb::arg("similarity"),nb::arg("similarity_symbols"),nb::arg("max_indels"),nb::kw_only(),
+            nb::arg("query_target_offsets"),nb::arg("query_target_ids"),nb::arg("reference_target_offsets"),nb::arg("reference_target_ids"),
+            nb::arg("target_class_ids"),nb::arg("reference_class_offsets"),nb::arg("reference_class_ids"),
+            nb::arg("query_group_ids"),nb::arg("reference_group_ids"),nb::arg("group_offsets"),nb::arg("reference_other_counts"),
+            nb::arg("reference_multiplicities"),nb::arg("coefficients"),nb::arg("threads")=0,nb::arg("exclude_exact")=false,
+            "Fused numeric requested-label max of cloglog(offset+c3*(rawNW-maxself)+gapcoef*g)*finite information. "
+            "Candidate scope is independent of float64 global NW; selection gap=max(abs(similarity)); "
+            "strict ties use M/X/Y for M and X, M/Y/X for Y, terminal M/X/Y. Group ID -1 is unsupported, not imputed. "
+            "Target filtering precedes NW. Use bounded query chunks against the same immutable Index. GIL released.")
         .def("align", &py_align, nb::arg("ref_id"), nb::arg("query"), nb::arg("params"),
              "Compute a global alignment between ``query`` and a reference, on demand.")
         .def("collisions_batch", &py_collisions_batch, nb::arg("queries"), nb::arg("params"),

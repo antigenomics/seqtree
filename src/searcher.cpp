@@ -15,6 +15,7 @@ Limits resolve_limits(const SearchParams& p) {
     L.max_sub = p.max_substitutions;
     L.max_ins = p.max_insertions;
     L.max_del = p.max_deletions;
+    L.max_indels = L.max_ins + L.max_del;
     // max_total_edits is an independent total cap (0 => no total cap, fall back
     // to the per-type sum). It is NOT clamped by the per-type sum, so seqtrie --
     // which ignores per-type caps -- can be driven by max_total_edits alone.
@@ -38,7 +39,9 @@ bool by_score(const Hit& a, const Hit& b) {
 Searcher::Searcher(const Index& idx) : idx_(idx), scratch_(std::make_unique<Scratch>()) {}
 Searcher::~Searcher() = default;
 
-void Searcher::search_into(std::string_view query, const SearchParams& p, std::vector<Hit>& out) {
+void Searcher::search_into(std::string_view query, const SearchParams& p, std::vector<Hit>& out, int max_indels) {
+    if (max_indels >= 0 && p.engine == Engine::SeqTrie)
+        throw std::invalid_argument("aggregate max_indels requires seqtm or auto engine");
     const Codec& cod = idx_.codec();
     qcodes_.resize(query.size());
     for (size_t i = 0; i < query.size(); ++i) {
@@ -49,6 +52,7 @@ void Searcher::search_into(std::string_view query, const SearchParams& p, std::v
     }
 
     Limits L = resolve_limits(p);
+    if (max_indels >= 0) L.max_indels = max_indels;
     out.clear();
     scratch_->collisions = 0;  // seqtrie leaves it 0; seqtm accumulates per re-reached ref
     // seqtrie is selected only when it is asked for by name: Auto always means seqtm, which
