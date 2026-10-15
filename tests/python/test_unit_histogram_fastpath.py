@@ -66,3 +66,56 @@ def test_bounded_rejection_preserves_per_type_caps_and_dense_hits(cap,exclude,th
         params=SearchParams(**args)
         expected=_expected(index,queries,params,exclude)
         assert index.edit_histogram_batch(queries,params,threads,exclude)==expected
+
+
+def _bounded_edit_distance(q,r,subs,ins,dels,total,aggregate):
+    # Independent graph oracle: keep every reachable edit-count state.
+    pending=[(0,0,0,0,0)];seen=set(pending);best=total+1
+    while pending:
+        i,j,s,a,b=pending.pop()
+        if i==len(q) and j==len(r):best=min(best,s+a+b)
+        edges=[]
+        if i<len(q) and j<len(r):edges.append((i+1,j+1,s+(q[i].upper()!=r[j].upper()),a,b))
+        if j<len(r):edges.append((i,j+1,s,a+1,b))
+        if i<len(q):edges.append((i+1,j,s,a,b+1))
+        for state in edges:
+            _,_,ss,aa,bb=state
+            if ss<=subs and aa<=ins and bb<=dels and aa+bb<=aggregate and ss+aa+bb<=total and state not in seen:
+                seen.add(state);pending.append(state)
+    return best
+
+
+@pytest.mark.parametrize('limits',[(4,2,2,6,2),(1,2,2,6,2),(0,2,2,6,2),(4,1,2,6,2),
+    (4,2,1,6,2),(4,2,2,6,0),(4,2,2,6,1),(4,2,2,6,3),(4,2,2,6,4),(3,2,2,3,2)])
+def test_aggregate_bounded_histogram_independent_graph_oracle(limits):
+    subs,ins,dels,total,aggregate=limits
+    seqs=['']+[''.join('A' if mask&(1<<i) else 'C' for i in range(n)) for n in range(1,5) for mask in range(1<<n)]
+    refs=seqs+['AC','ac','CCAAC'];queries=seqs+['AACCA','CCCAA']
+    index=Index.build(refs,alphabet='aa')
+    p=SearchParams(max_subs=subs,max_ins=ins,max_dels=dels,max_total_edits=total)
+    expected=[]
+    for q in queries:
+        bins=[0]*(total+1)
+        for r in refs:
+            d=_bounded_edit_distance(q,r,subs,ins,dels,total,aggregate)
+            if d<=total:bins[d]+=1
+        expected.append(bins)
+    assert index.edit_histogram_batch(queries,p,threads=1,max_indels=aggregate)==expected
+    for row in expected:row[0]=0
+    assert index.edit_histogram_batch(queries,p,threads=1,exclude_exact=True,max_indels=aggregate)==expected
+
+
+def test_aggregate_counter_bitword_boundary_and_fallback():
+    rng=random.Random(29)
+    queries=[''.join(rng.choice('ACDEFGHIKLMNPQRSTVWY') for _ in range(n)) for n in (1,20,63,64)]
+    refs=queries+[q[1:]+q[:1] for q in queries]+[q[2:]+q[:2] for q in queries]
+    index=Index.build(refs)
+    p=SearchParams(max_subs=4,max_ins=2,max_dels=2,max_total_edits=6)
+    expected=[]
+    for q in queries:
+        bins=[0]*7
+        for r in refs:
+            d=_bounded_edit_distance(q,r,4,2,2,6,2)
+            if d<=6:bins[d]+=1
+        expected.append(bins)
+    assert index.edit_histogram_batch(queries,p,threads=1,max_indels=2)==expected

@@ -202,7 +202,7 @@ std::vector<std::vector<uint64_t>> Index::edit_histogram_batch(
     struct Local { Searcher s; std::vector<Hit> hits; };
     parallel_for(queries.size(), threads, [&] { return Local{Searcher(*this), {}}; },
         [&](size_t i, Local& worker) {
-            if ((max_indels < 0 || max_indels >= int(p.max_insertions) + int(p.max_deletions)) && count_unit::fill_histogram(*this,queries[i],p,exclude_exact,out[i])) return;
+            if (count_unit::fill_histogram(*this,queries[i],p,exclude_exact,out[i],max_indels)) return;
             worker.s.search_into(queries[i], p, worker.hits, max_indels);
             for (const auto& h : worker.hits) {
                 const uint32_t edits = uint32_t(h.n_subs) + h.n_ins + h.n_dels;

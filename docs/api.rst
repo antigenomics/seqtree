@@ -42,8 +42,9 @@ and all-hit mode; the search uses one reusable native hit buffer per worker rath
 than materializing all hits in Python. Counts are not cumulative; sum the bins up
 to a radius to obtain its ball count.
 The optional final ``max_indels`` argument limits total insertions plus deletions;
-``-1`` preserves the directional-only limits. An active nonredundant bound uses
-the generic search worker; redundant bounds retain the existing fast count path.
+``-1`` preserves the directional-only limits. Bounded unit-cost profiles reuse bit-vector rejection
+and exact constrained dynamic programming; other profiles use the generic search
+worker. Existing eligible count paths are retained when the bound is redundant.
 Explicit ``seqtrie`` remains unsupported.
 
 Floating alignment target reductions
