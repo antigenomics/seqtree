@@ -5,6 +5,11 @@ versioning: breaking changes need a **major** bump.
 
 ## [Unreleased]
 
+### Fixed
+
+- Exact exclusion masks matching hits without shrinking model populations or
+  supplied annotation counters, including withheld-label models.
+
 ### Added
 
 - Generic float64 global-alignment target maxima with numeric annotation CSR,

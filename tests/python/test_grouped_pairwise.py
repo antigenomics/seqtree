@@ -62,11 +62,17 @@ def test_all_curves_sizes_exact_against_independent_raw_diagonal_oracle(mode, pa
         scores = [[x + y for x, y in zip(a, b)] for a, b in zip(scores, other)]
     expected, sizes, exact = [], [], []
     for i in range(len(q)):
-        channels = [[] for _ in range(7)]; exactrow = [0, 0]
+        channels = [[] for _ in range(7)]; model_sizes = [0]*7; exactrow = [0, 0]
         for j in range(len(r)):
             surviving = set(full[j]) - {folds[i]}
             if not surviving: continue
             remaining = [t for t in labels[j] if t != folds[i]]
+            model_sizes[0] += 1
+            for t in remaining:
+                model_sizes[1+t] += 1
+                if qgene[i] == rgene[j]: model_sizes[3+t] += 1
+            pep = next(iter(surviving)) if len(surviving) == 1 else -1
+            if pep in (0,1): model_sizes[5+pep] += 1
             identical = q[i] == r[j] and (not paired or qb[i] == rb[j])
             if identical:
                 for t in remaining: exactrow[t] += 1
@@ -78,7 +84,7 @@ def test_all_curves_sizes_exact_against_independent_raw_diagonal_oracle(mode, pa
             pep = next(iter(surviving)) if len(surviving) == 1 else -1
             if pep in (0, 1): channels[5 + pep].append(scores[i][j])
         expected.append([[sum(x <= cut for x in row) for cut in cuts] for row in channels])
-        sizes.append([len(row) for row in channels]); exact.append(exactrow)
+        sizes.append(model_sizes); exact.append(exactrow)
     chunks = list(batch)
     assert [row for chunk in chunks for row in buf(chunk.counts)] == expected
     assert [row for chunk in chunks for row in buf(chunk.sizes)] == sizes

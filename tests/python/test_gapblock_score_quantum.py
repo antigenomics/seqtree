@@ -58,7 +58,7 @@ def test_floor_each_alignment_before_offsets_and_pair_sum(threads, paired, facto
                      for j, score in enumerate(scores)) for cutoff in cuts]
         expected.append([curve] * 4)
     assert rows(chunk.counts) == expected
-    assert rows(chunk.sizes) == [[3] * 4, [3] * 4]
+    assert rows(chunk.sizes) == [[len(r)] * 4 for _ in q]
     assert rows(chunk.exact_counts) == [[1], [1]]
 
 

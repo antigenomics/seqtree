@@ -60,7 +60,6 @@ AlignmentMaxResult Index::alignment_max_batch(const std::vector<std::string>& qu
     const size_t Q=queries.size(),R=size(),L=rt.size(),T=tc.size(),M=qt.size();
     require(p.engine!=Engine::SeqTrie && p.mode==Mode::AllHits && !p.max_hits && !p.matrix && !p.pos_matrix &&
         p.gap_open==1 && p.gap_extend==1 && !p.max_score_penalty,"candidate scope requires uncapped unit-cost seqtm");
-    require(!exclude_exact || p.max_insertions==p.max_deletions,"query puncture requires symmetric candidate indel caps");
     require(max_indels>=0 && max_indels<=65535,"max_indels must be in [0,65535]");
     require(coefficients.size()==3 && std::all_of(coefficients.begin(),coefficients.end(),[](double x){return std::isfinite(x);}),"three finite coefficients required");
     require(!symbols.empty() && similarity.size()==symbols.size(),"similarity dimension does not match symbols");
@@ -134,8 +133,8 @@ AlignmentMaxResult Index::alignment_max_batch(const std::vector<std::string>& qu
             }
         } else w.search.search_into(queries[i],p,w.hits,max_indels);
         out.candidate_counts[i]=w.hits.size();
-        const int64_t er=exact_ref[i]; const size_t qb=er<0?0:co[size_t(er)],qe=er<0?0:co[size_t(er)+1];
-        const uint64_t N=ci.size()-(exclude_exact?qe-qb:0);
+        const int64_t er=exact_ref[i];
+        const uint64_t N=ci.size();
         for (const auto& hit:w.hits) {
             const uint32_t r=hit.ref_id; const bool exact=int64_t(r)==er; bool align=false;
             for (size_t a=ro[r];a<ro[r+1];++a) {
@@ -152,12 +151,9 @@ AlignmentMaxResult Index::alignment_max_batch(const std::vector<std::string>& qu
             if (!std::isfinite(features.score) || !std::isfinite(normalized)) throw std::overflow_error("NW similarity overflow");
             for (size_t a=ro[r];a<ro[r+1];++a) {
                 const uint32_t t=rt[a]; const int64_t slot=w.slots[t]; if (slot<0 || !modeled[a]) continue;
-                const size_t k=size_t(slot); bool query_other=false;
-                for (size_t c=qb;c<qe;++c) if (ci[c]!=tc[t]) query_other=true;
-                const uint64_t removed=exclude_exact && query_other?1:0;
-                require(other[a]>=removed,"punctured other-class counter underflow");
-                const uint64_t numerator=other[a]-removed+1;
-                require(N>=numerator,"punctured reference-role denominator is too small");
+                const size_t k=size_t(slot);
+                const uint64_t numerator=other[a]+1;
+                require(N>=numerator,"reference-role denominator is too small");
                 const double information=-std::log10(double(numerator)/double(N));
                 double eta=coefficients[0];
                 for (size_t c=0;c<offsets.size();++c) eta+=offsets[c][size_t(qg[c][i])][size_t(rg[c][a])];

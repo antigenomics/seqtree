@@ -59,12 +59,12 @@ def test_fractional_raw_self_normalization_and_independent_nw():
     assert norm==-4.25 and norm!=-(2.5+4.75-2*raw)/2
 
 
-def test_requested_target_filter_counts_puncture_and_unsupported():
+def test_requested_target_filter_counts_hit_mask_and_unsupported():
     out=run(['ACGT'],['ACGT','ACGA','TTTT'],requests=[[1]],exclude=True,roles=[[0,1],[1],[2]],other=[1,1,0],params=SearchParams(max_subs=1,max_total_edits=1),cap=0)
     assert out['candidate_counts'].tolist()==[2]
     assert out['nw_pairs'].tolist()==[1]
     assert out['counts'].tolist()==[1] and out['aa_counts'].tolist()==[1]
-    assert out['informativeness'][0]==pytest.approx(math.log10(2)) # N=4roles−2; k=1−1
+    assert out['informativeness'][0]==pytest.approx(math.log10(2)) # N=4 roles and k=1 remain fixed
     assert out['best_ref_ids'].tolist()==[1]
     unsupported=run(['ACGT'],['ACGT','ACGA'],groups=[[-1],[0]],requests=[[1]])
     assert np.isnan(unsupported['scores'][0]) and unsupported['counts'][0]==1
@@ -195,3 +195,13 @@ def test_candidate_backend_preserves_trie_fallback_buffers(threads,exclude,requi
     for key in bounded:
         assert bounded[key].dtype==fallback[key].dtype
         assert bounded[key].tobytes()==fallback[key].tobytes(),key
+
+
+def test_exact_hit_mask_keeps_full_information_model():
+    opts=dict(requests=[[1]],roles=[[0,1],[1],[2],[3]],other=[1,1,0,0],
+        params=SearchParams(max_subs=1,max_total_edits=1),cap=0)
+    full=run(['ACGT'],['ACGT','ACGA','TTTT','GGGG'],**opts)
+    masked=run(['ACGT'],['ACGT','ACGA','TTTT','GGGG'],exclude=True,**opts)
+    assert masked['counts'].tolist()==[1] and masked['candidate_counts'].tolist()==[2]
+    assert masked['informativeness'][0]==pytest.approx(math.log10(5/2))
+    assert masked['scores'].tobytes()==full['scores'].tobytes()

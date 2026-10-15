@@ -94,9 +94,11 @@ The final predictor is the intercept plus group offsets plus the fitted normaliz
 and gap terms. Its complementary-log-log transform is multiplied by
 ``-log10((k+1)/N)``, where ``N`` is the number of unique reference/class roles and
 ``k`` is the supplied other-class count for that annotation. With
-``exclude_exact=True``, every role and annotation of the exact query sequence is
-removed; its contribution to an other-class count is subtracted once. This requires
-symmetric directional indel caps. Inconsistent counters raise instead of clipping.
+``exclude_exact=True``, matching query/reference sequences are excluded only from
+candidate hits. Reference/class roles and supplied other-class counts remain fixed.
+The native module reports this contract through ``_core.exact_exclusion_hits_only``;
+version strings alone do not establish support.
+Inconsistent model counters raise instead of clipping.
 These supplied-count semantics do not make the output a calibrated probability.
 
 The result's ``arrays()`` method returns read-only owned zero-copy buffers. Per

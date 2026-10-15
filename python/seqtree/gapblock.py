@@ -997,7 +997,7 @@ def grouped_count_batch(queries, refs, thresholds, *, reference_target_offsets,
     Each chunk owns read-only uint32 buffers: counts[C,1+2*T+P,K], sizes[C,1+2*T+P],
     exact_counts[C,T], with start/stop query offsets. numpy.asarray is zero-copy;
     no NumPy import/dependency is required. Exact counts retain raw multiplicity;
-    exclude_exact punctures every curve and population size by full sequence identity.
+    exclude_exact masks hit curves by full sequence identity; model population sizes remain fixed.
     Optional query_withheld_peptide_ids is one ID/query (-1 means none) and
     requires full reference_peptide_offsets/reference_peptide_ids CSR. Each sorted
     unique row includes all raw peptide labels, including sparse/unselected IDs in

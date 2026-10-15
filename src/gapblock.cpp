@@ -893,18 +893,7 @@ struct GroupedCountBatch::Impl {
                                 if (target_peptides[labels[p]]==withheld_peptide) continue;
                             ++exact[labels[p]];
                         }
-                    if constexpr (!Withheld) {
-                        if (exclude && identical) {
-                            --sizes[0];
-                            for (size_t p=offsets[j];p<offsets[j+1];++p) {
-                                --sizes[1+labels[p]];
-                                if (same_gene) --sizes[1+targets+labels[p]];
-                            }
-                            if (exclusive_peptide>=0) --sizes[1+2*targets+size_t(exclusive_peptide)];
-                            continue;
-                        }
-                    } else {
-                        if (exclude && identical) continue;
+                    if constexpr (Withheld) {
                         ++sizes[0];
                         for (size_t p=offsets[j];p<offsets[j+1];++p) {
                             if (target_peptides[labels[p]]==withheld_peptide) continue;
@@ -913,6 +902,7 @@ struct GroupedCountBatch::Impl {
                         }
                         if (exclusive_peptide>=0) ++sizes[1+2*targets+size_t(exclusive_peptide)];
                     }
+                    if (exclude && identical) continue; // Hit mask never changes this model's populations.
                     if (!K) continue;
                     const int64_t extra_alpha=extra_offset<Additional>(extra_a,i,j);
                     const int64_t extra_beta=b ? extra_offset<Additional>(extra_b,i,j) : 0;
