@@ -8,6 +8,7 @@
 #include <mutex>
 #include <stdexcept>
 #include <tuple>
+#include <unordered_map>
 
 namespace seqtree {
 namespace {
@@ -685,6 +686,42 @@ struct GroupedCountBatch::Impl {
     int32_t scale = 1;
     uint32_t left = 0, right = 0;
     std::vector<int64_t> qdiag_a, rdiag_a, qdiag_b, rdiag_b;
+    std::vector<uint32_t> static_sizes;
+    std::unordered_map<int32_t,std::vector<std::pair<uint32_t,uint32_t>>> gene_sizes;
+
+    std::unordered_map<std::string,std::vector<uint32_t>> exact_references;
+
+    std::string identity(size_t i, bool query) const {
+        const auto& alpha=query ? a.q[i] : a.r[i];
+        std::string key(alpha.begin(),alpha.end());
+        if (b) {
+            // Encoded symbols cannot equal the invalid-code separator.
+            key.push_back(char(Codec::kInvalid));
+            const auto& beta=query ? b->q[i] : b->r[i];
+            key.append(beta.begin(),beta.end());
+        }
+        return key;
+    }
+
+    void prepare_sizes() {
+        if (withheld) return;
+        static_sizes.resize(channels);
+        static_sizes[0]=uint32_t(a.r.size());
+        // Sparse gene/target totals: at most one entry per distinct reference
+        // membership, independent of the number of query rows.
+        std::unordered_map<uint64_t,uint32_t> totals;
+        for (size_t j=0;j<a.r.size();++j) {
+            for (size_t p=offsets[j];p<offsets[j+1];++p) {
+                const auto target=labels[p];
+                ++static_sizes[1+target];
+                ++totals[(uint64_t(uint32_t(rgenes[j]))<<32)|target];
+            }
+            exact_references[identity(j,false)].push_back(uint32_t(j));
+            if (exclusive[j]>=0) ++static_sizes[1+2*targets+size_t(exclusive[j])];
+        }
+        for (const auto& [key,count]:totals)
+            gene_sizes[int32_t(key>>32)].emplace_back(uint32_t(key),count);
+    }
 
     void prepare_affine(const GroupedGeometry& geometry, const GapInput& lane,
             std::vector<int64_t>& qdiag, std::vector<int64_t>& rdiag,
@@ -789,6 +826,16 @@ struct GroupedCountBatch::Impl {
                 auto* sizes = out.sizes.data.data()+row*channels;
                 auto* hist = K ? out.counts.data.data()+row*channels*K : nullptr;
                 auto* exact = targets ? out.exact_counts.data.data()+row*targets : nullptr;
+                const std::vector<uint32_t>* identical_refs=nullptr;
+                size_t identical_cursor=0;
+                if constexpr (!Withheld) {
+                    std::copy(static_sizes.begin(),static_sizes.end(),sizes);
+                    if (const auto found=gene_sizes.find(qgenes[i]);found!=gene_sizes.end())
+                        for (const auto& [target,count]:found->second)
+                            sizes[1+targets+target]=count;
+                    if (const auto found=exact_references.find(identity(i,true));found!=exact_references.end())
+                        identical_refs=&found->second;
+                }
                 for (size_t j=0;j<a.r.size();++j) {
                     int32_t exclusive_peptide=exclusive[j], withheld_peptide=-1;
                     if constexpr (Withheld) {
@@ -804,7 +851,13 @@ struct GroupedCountBatch::Impl {
                             if (size_t(peptide)<peptides) exclusive_peptide=peptide;
                         }
                     }
-                    const bool identical = a.q[i]==a.r[j] && (!b || b->q[i]==b->r[j]);
+                    bool identical;
+                    if constexpr (Withheld) identical=a.q[i]==a.r[j] && (!b || b->q[i]==b->r[j]);
+                    else {
+                        identical=identical_refs && identical_cursor<identical_refs->size() &&
+                            (*identical_refs)[identical_cursor]==j;
+                        if (identical) ++identical_cursor;
+                    }
                     const bool same_gene = qgenes[i]==rgenes[j];
                     if (identical)
                         for (size_t p=offsets[j];p<offsets[j+1];++p) {
@@ -812,15 +865,26 @@ struct GroupedCountBatch::Impl {
                                 if (target_peptides[labels[p]]==withheld_peptide) continue;
                             ++exact[labels[p]];
                         }
-                    if (exclude && identical) continue;
-                    ++sizes[0];
-                    for (size_t p=offsets[j];p<offsets[j+1];++p) {
-                        if constexpr (Withheld)
+                    if constexpr (!Withheld) {
+                        if (exclude && identical) {
+                            --sizes[0];
+                            for (size_t p=offsets[j];p<offsets[j+1];++p) {
+                                --sizes[1+labels[p]];
+                                if (same_gene) --sizes[1+targets+labels[p]];
+                            }
+                            if (exclusive_peptide>=0) --sizes[1+2*targets+size_t(exclusive_peptide)];
+                            continue;
+                        }
+                    } else {
+                        if (exclude && identical) continue;
+                        ++sizes[0];
+                        for (size_t p=offsets[j];p<offsets[j+1];++p) {
                             if (target_peptides[labels[p]]==withheld_peptide) continue;
-                        ++sizes[1+labels[p]];
-                        if (same_gene) ++sizes[1+targets+labels[p]];
+                            ++sizes[1+labels[p]];
+                            if (same_gene) ++sizes[1+targets+labels[p]];
+                        }
+                        if (exclusive_peptide>=0) ++sizes[1+2*targets+size_t(exclusive_peptide)];
                     }
-                    if (exclusive_peptide>=0) ++sizes[1+2*targets+size_t(exclusive_peptide)];
                     if (!K) continue;
                     const int64_t extra_alpha=extra_offset<Additional>(extra_a,i,j);
                     const int64_t extra_beta=b ? extra_offset<Additional>(extra_b,i,j) : 0;
@@ -993,6 +1057,7 @@ GroupedCountBatch::GroupedCountBatch(const std::vector<std::string>& qa, const s
     }
     in.channels=1+2*in.targets+in.peptides;in.chunk_size=chunk_size;
     in.go=go;in.ge=ge;in.threads=threads;in.exclude=exclude;
+    if (!in.a.q.empty()) in.prepare_sizes();
     if (alpha.alignment_scale<1 || (alpha.alignment_mode!="gapblock" &&
             alpha.alignment_mode!="global" && alpha.alignment_mode!="local"))
         throw std::invalid_argument("invalid grouped alignment mode or scale");
