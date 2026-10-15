@@ -745,24 +745,34 @@ def group_audit_batch(queries, refs, thresholds, matrix=None, gap_open=None, gap
                gap_prior=None, alphabet="aa", threads=0, exclude_exact=False,
                position_weights_by_length=None,
                query_group_ids=None, reference_group_ids=None, group_distances=None,
-               query_position_weights=None, reference_position_weights=None, feature_offsets=None):
+               query_position_weights=None, reference_position_weights=None, feature_offsets=None,
+               query_partition_ids=None, reference_partition_ids=None):
     """Stream component-ball count, full-score count and bounded nearest in one batch.
 
     Geometry/offset options match ball_batch. Component excludes the nonnegative
     group offset; full score includes it. For each query threshold, return three
     lists: component count, full count and minimum full score among component hits.
     Empty component balls have nearest=-1. Duplicate references count separately;
-    full encoded exact puncturing is identical. O(Q) output; no sparse hit objects.
+    full encoded exact puncturing is identical. Optional nonnegative partition IDs
+    restrict each query to references with the same ID. Both arrays are required;
+    unmatched partitions return zero counts and nearest=-1. Partition restriction
+    precedes scoring and is independent of additive group/feature distances. O(Q) output; no sparse hit objects.
     """
     q, r = list(queries), list(refs)
     thresholds = [_batch_integer(v, "threshold", -(1 << 31)) for v in thresholds]
     if len(thresholds) != len(q):
         raise ValueError("group audit thresholds must have one value per query")
+    if (query_partition_ids is None) != (reference_partition_ids is None):
+        raise ValueError("both query and reference partition IDs are required")
+    qp = [] if query_partition_ids is None else [_batch_integer(v, "query partition ID") for v in query_partition_ids]
+    rp = [] if reference_partition_ids is None else [_batch_integer(v, "reference partition ID") for v in reference_partition_ids]
+    if query_partition_ids is not None and (len(qp) != len(q) or len(rp) != len(r)):
+        raise ValueError("partition IDs must cover every query and reference")
     go, ge, cube, width, threads = _batch_options((q, r), matrix, gap_open, gap_extend, gap_prior, threads)
     return _gapblock_group_audit_batch(q, r, thresholds, alphabet, matrix, go, ge, cube, width,
                                threads, exclude_exact, _position_weights(position_weights_by_length, q, r),
                             *_group_options(query_group_ids, reference_group_ids, group_distances, q, r),
-                            *_sequence_weights(query_position_weights, reference_position_weights, position_weights_by_length, q, r), feature_offsets)
+                            *_sequence_weights(query_position_weights, reference_position_weights, position_weights_by_length, q, r), feature_offsets, qp, rp)
 
 
 def ball_batch(queries, refs, thresholds, matrix=None, gap_open=None, gap_extend=1,

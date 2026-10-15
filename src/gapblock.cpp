@@ -546,9 +546,25 @@ gapblock_group_audit_batch(const std::vector<std::string>& queries,
         const std::vector<std::vector<int32_t>>& group_distances,
         const std::vector<std::vector<int32_t>>& query_weights,
         const std::vector<std::vector<int32_t>>& reference_weights,
-        const std::optional<PairedFeatureOffsets>& feature_offsets) {
+        const std::optional<PairedFeatureOffsets>& feature_offsets,
+        const std::vector<int32_t>& query_partitions,
+        const std::vector<int32_t>& reference_partitions) {
     if (thresholds.size() != queries.size())
         throw std::invalid_argument("group audit thresholds must have one value per query");
+    const bool partitioned = !query_partitions.empty() || !reference_partitions.empty();
+    std::unordered_map<int32_t, std::vector<size_t>> populations;
+    if (partitioned) {
+        if (query_partitions.size() != queries.size() || reference_partitions.size() != refs.size())
+            throw std::invalid_argument("partition IDs must cover every query and reference");
+        for (auto id : query_partitions)
+            if (id < 0) throw std::invalid_argument("partition IDs must be nonnegative");
+        for (size_t j = 0; j < refs.size(); ++j) {
+            if (reference_partitions[j] < 0)
+                throw std::invalid_argument("partition IDs must be nonnegative");
+            populations[reference_partitions[j]].push_back(j);
+        }
+    }
+    const auto& fixed_populations = populations;
     const auto in = prepare(queries, refs, alphabet, matrix, go, ge, prior, width, threads,
                            weights, query_groups, reference_groups, group_distances,
                            query_weights, reference_weights, feature_offsets);
@@ -561,7 +577,15 @@ gapblock_group_audit_batch(const std::vector<std::string>& queries,
         [&](size_t i, std::vector<int32_t>& scratch) {
             if (thresholds[i] < 0) return;
             int32_t minimum = std::numeric_limits<int32_t>::max();
-            for (size_t j = 0; j < refs.size(); ++j) {
+            const std::vector<size_t>* selected = nullptr;
+            if (partitioned) {
+                const auto found = fixed_populations.find(query_partitions[i]);
+                if (found == fixed_populations.end()) return;
+                selected = &found->second;
+            }
+            const size_t count = selected ? selected->size() : refs.size();
+            for (size_t k = 0; k < count; ++k) {
+                const size_t j = selected ? (*selected)[k] : k;
                 if (exclude_exact && in.q[i] == in.r[j]) continue;
                 const auto score = score_cell(in, i, j, go, ge, prior, scratch.data());
                 if (score - group_offset(in, i, j) > thresholds[i]) continue;

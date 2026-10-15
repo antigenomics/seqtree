@@ -304,7 +304,9 @@ gapblock_group_audit_batch(const std::vector<std::string>& queries,
         const std::vector<std::vector<int32_t>>& group_distances = {},
         const std::vector<std::vector<int32_t>>& query_weights = {},
         const std::vector<std::vector<int32_t>>& reference_weights = {},
-        const std::optional<PairedFeatureOffsets>& feature_offsets = std::nullopt);
+        const std::optional<PairedFeatureOffsets>& feature_offsets = std::nullopt,
+        const std::vector<int32_t>& query_partitions = {},
+        const std::vector<int32_t>& reference_partitions = {});
 
 std::vector<std::vector<Hit>> gapblock_topk_batch(const std::vector<std::string>& queries,
         const std::vector<std::string>& refs, uint32_t k, Alphabet alphabet,
