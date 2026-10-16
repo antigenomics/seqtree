@@ -702,6 +702,11 @@ struct GroupedCountBatch::Impl {
     int32_t quantum_a = 1, quantum_b = 1;
     int threads = 0;
     bool exclude = false;
+    bool return_hits = false;
+    size_t max_hits = 0;
+    std::vector<int32_t> query_targets;
+    std::optional<std::vector<int64_t>> query_references;
+    std::vector<std::vector<uint32_t>> references_by_target;
     std::mutex mutex;
     std::optional<std::vector<int32_t>> beta_prior;
     std::vector<PairedFeatureOffsets> extra_a,extra_b;
@@ -849,6 +854,71 @@ struct GroupedCountBatch::Impl {
         return offset;
     }
 
+    template<bool Factored,bool Quantized,bool Affine,bool Additional,class Scratch>
+    int64_t pair_score(size_t i,size_t j,Scratch& scratch) const {
+        const auto& other_prior=beta_prior ? *beta_prior : prior;
+        const int64_t extra_alpha=extra_offset<Additional>(extra_a,i,j);
+        const int64_t extra_beta=b ? extra_offset<Additional>(extra_b,i,j) : 0;
+        const int32_t offset_alpha=group_offset<Factored>(a,i,j);
+        const int32_t offset_beta=b ? group_offset<Factored>(*b,i,j) : 0;
+        const int64_t offset=int64_t(offset_alpha)+extra_alpha+offset_beta+extra_beta;
+        if (offset>cuts.back()) return INT64_MAX;
+        int64_t score;
+        if constexpr (Affine) score=affine_cell(a,i,j,qdiag_a,rdiag_a,scratch,offset_alpha);
+        else score=score_cell(a,i,j,go,ge,prior,scratch.data(),offset_alpha);
+        score+=extra_alpha;
+        if constexpr (Quantized) {
+            const int64_t additive=offset_alpha+extra_alpha;
+            score=additive+(score-additive)/quantum_a*quantum_a;
+        }
+        if (b) {
+            if (score>cuts.back()) return INT64_MAX;
+            int64_t other;
+            if constexpr (Affine) other=affine_cell(*b,i,j,qdiag_b,rdiag_b,scratch,offset_beta);
+            else other=score_cell(*b,i,j,go,ge,other_prior,scratch.data(),offset_beta);
+            other+=extra_beta;
+            if constexpr (Quantized) {
+                const int64_t additive=offset_beta+extra_beta;
+                other=additive+(other-additive)/quantum_b*quantum_b;
+            }
+            score+=other;
+        }
+        return score;
+    }
+
+    template<bool Factored,bool Quantized,bool Affine,bool Additional>
+    GroupedCountChunk sparse_hits(size_t start,size_t stop) {
+        GroupedCountChunk out;
+        out.start=start;out.stop=stop;
+        out.counts.shape={0};out.sizes.shape={0};out.exact_counts.shape={0};
+        out.hits.shape={0,3};
+        if (cuts.empty()) return out;
+        std::vector<std::vector<uint32_t>> rows(stop-start);
+        std::atomic<size_t> hit_count{0};
+        parallel_for(rows.size(),threads,[&] {
+            if constexpr (Affine) return detail::PairwiseScratch{};
+            else return std::vector<int32_t>(size_t(a.longest)+1);
+        },[&](size_t row,auto& scratch) {
+            const size_t i=start+row;
+            for (const auto j:references_by_target[size_t(query_targets[i])]) {
+                if (query_references && int64_t(j)<=(*query_references)[i]) continue;
+                if (exclude && a.q[i]==a.r[j]) continue;
+                const int64_t score=pair_score<Factored,Quantized,Affine,Additional>(i,j,scratch);
+                if (score>cuts.back()) continue;
+                if (hit_count.fetch_add(1,std::memory_order_relaxed)>=max_hits)
+                    throw std::overflow_error("sparse hit output exceeds max_hit_bytes; reduce chunk_size or increase max_hit_bytes");
+                rows[row].insert(rows[row].end(),{uint32_t(i),j,uint32_t(score)});
+            }
+        });
+        out.hits.shape[0]=hit_count.load();
+        out.hits.data.reserve(out.hits.shape[0]*3);
+        for (auto& row:rows) {
+            out.hits.data.insert(out.hits.data.end(),row.begin(),row.end());
+            std::vector<uint32_t>().swap(row);
+        }
+        return out;
+    }
+
     template<bool Factored, bool Withheld=false, bool Quantized=false, bool Affine=false, bool Additional=false> GroupedCountChunk run(size_t start, size_t stop) {
         GroupedCountChunk out;
         out.start = start; out.stop = stop;
@@ -866,7 +936,6 @@ struct GroupedCountBatch::Impl {
         out.sizes = make_buffer({rows,channels});
         out.exact_counts = make_buffer({rows,targets});
         const auto longest = b ? std::max(a.longest,b->longest) : a.longest;
-        const auto& other_prior=beta_prior ? *beta_prior : prior;
         parallel_for(rows,threads,[&] {
                 if constexpr (Affine) {
                     detail::PairwiseScratch scratch;
@@ -928,32 +997,7 @@ struct GroupedCountBatch::Impl {
                     }
                     if (exclude && identical) continue; // Hit mask never changes this model's populations.
                     if (!K) continue;
-                    const int64_t extra_alpha=extra_offset<Additional>(extra_a,i,j);
-                    const int64_t extra_beta=b ? extra_offset<Additional>(extra_b,i,j) : 0;
-                    const int32_t offset_alpha=group_offset<Factored>(a,i,j);
-                    const int32_t offset_beta=b ? group_offset<Factored>(*b,i,j) : 0;
-                    const int64_t offset=int64_t(offset_alpha)+extra_alpha+offset_beta+extra_beta;
-                    if (offset>cuts.back()) continue;
-                    int64_t score;
-                    if constexpr (Affine) score=affine_cell(a,i,j,qdiag_a,rdiag_a,scratch,offset_alpha);
-                    else score=score_cell(a,i,j,go,ge,prior,scratch.data(),offset_alpha);
-                    score+=extra_alpha;
-                    if constexpr (Quantized) {
-                        const int64_t additive=offset_alpha+extra_alpha;
-                        score=additive+(score-additive)/quantum_a*quantum_a;
-                    }
-                    if (b) {
-                        if (score>cuts.back()) continue;
-                        int64_t other;
-                        if constexpr (Affine) other=affine_cell(*b,i,j,qdiag_b,rdiag_b,scratch,offset_beta);
-                        else other=score_cell(*b,i,j,go,ge,other_prior,scratch.data(),offset_beta);
-                        other+=extra_beta;
-                        if constexpr (Quantized) {
-                            const int64_t additive=offset_beta+extra_beta;
-                            other=additive+(other-additive)/quantum_b*quantum_b;
-                        }
-                        score+=other;
-                    }
+                    const int64_t score=pair_score<Factored,Quantized,Affine,Additional>(i,j,scratch);
                     const size_t bin=score_bin(score);
                     if (bin==K) continue;
                     ++hist[bin];
@@ -973,6 +1017,9 @@ struct GroupedCountBatch::Impl {
     template<bool Affine,bool Additional> GroupedCountChunk dispatch(size_t start,size_t stop) {
         const bool features=a.features || (b && b->features);
         const bool quantized=quantum_a!=1 || quantum_b!=1;
+        if (return_hits) return quantized ?
+            (features ? sparse_hits<true,true,Affine,Additional>(start,stop) : sparse_hits<false,true,Affine,Additional>(start,stop)) :
+            (features ? sparse_hits<true,false,Affine,Additional>(start,stop) : sparse_hits<false,false,Affine,Additional>(start,stop));
         return quantized ?
             (withheld ?
                 (features ? run<true,true,true,Affine,Additional>(start,stop) : run<false,true,true,Affine,Additional>(start,stop)) :
@@ -1057,6 +1104,30 @@ GroupedCountBatch::GroupedCountBatch(const std::vector<std::string>& qa, const s
         }
     } else if (!peptide_offsets.empty() || !peptide_ids.empty())
         throw std::invalid_argument("reference peptide memberships require query withheld peptide IDs");
+    if (alpha.return_hits) {
+        if (beta || withheld)
+            throw std::invalid_argument("sparse hits require a single non-withheld population");
+        if (qa.size()>std::numeric_limits<uint32_t>::max())
+            throw std::overflow_error("sparse query count exceeds uint32");
+        if (!alpha.query_target_ids || alpha.query_target_ids->size()!=qa.size() ||
+                std::any_of(alpha.query_target_ids->begin(),alpha.query_target_ids->end(),
+                    [&](auto x){return x<0 || size_t(x)>=in.targets;}))
+            throw std::invalid_argument("sparse query target IDs must match queries and be in range");
+        if (alpha.query_reference_ids && (alpha.query_reference_ids->size()!=qa.size() ||
+                std::any_of(alpha.query_reference_ids->begin(),alpha.query_reference_ids->end(),
+                    [&](auto x){return x<-1 || x>=int64_t(ra.size());})))
+            throw std::invalid_argument("sparse query reference IDs must match queries and be -1 or a reference index");
+        if (alpha.max_hit_bytes<3*sizeof(uint32_t))
+            throw std::invalid_argument("max_hit_bytes must hold at least one hit (12 bytes)");
+        in.return_hits=true;in.max_hits=alpha.max_hit_bytes/(3*sizeof(uint32_t));
+        in.query_targets=*alpha.query_target_ids;
+        in.query_references=alpha.query_reference_ids;
+        in.references_by_target.resize(in.targets);
+        for (size_t j=0;j<ra.size();++j)
+            for (size_t p=offsets[j];p<offsets[j+1];++p)
+                in.references_by_target[labels[p]].push_back(uint32_t(j));
+    } else if (alpha.query_target_ids || alpha.query_reference_ids)
+        throw std::invalid_argument("query target/reference selectors require return_hits=True");
     in.withheld=std::move(withheld);
     in.peptide_offsets=std::move(peptide_offsets);in.peptide_ids=std::move(peptide_ids);
     const auto& alpha_prior=alpha.gap_prior ? *alpha.gap_prior : prior;
@@ -1075,7 +1146,7 @@ GroupedCountBatch::GroupedCountBatch(const std::vector<std::string>& qa, const s
     if (threads<0 || unsigned(threads)>available_cpus())
         throw std::invalid_argument("worker count exceeds the available CPU budget");
     in.cuts=std::move(cuts); in.offsets=std::move(offsets); in.labels=std::move(labels);
-    in.prepare_bins();
+    if (!in.return_hits) in.prepare_bins();
     in.target_peptides=std::move(target_peptides); in.exclusive=std::move(exclusive);
     in.qgenes=std::move(qgenes);in.rgenes=std::move(rgenes);
     in.prior=alpha.gap_prior ? *alpha.gap_prior : std::move(prior);
@@ -1099,7 +1170,7 @@ GroupedCountBatch::GroupedCountBatch(const std::vector<std::string>& qa, const s
     }
     in.channels=1+2*in.targets+in.peptides;in.chunk_size=chunk_size;
     in.go=go;in.ge=ge;in.threads=threads;in.exclude=exclude;
-    if (!in.a.q.empty()) in.prepare_sizes();
+    if (!in.a.q.empty() && !in.return_hits) in.prepare_sizes();
     if (alpha.alignment_scale<1 || (alpha.alignment_mode!="gapblock" &&
             alpha.alignment_mode!="global" && alpha.alignment_mode!="local"))
         throw std::invalid_argument("invalid grouped alignment mode or scale");

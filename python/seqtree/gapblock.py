@@ -973,8 +973,20 @@ def grouped_count_batch(queries, refs, thresholds, *, reference_target_offsets,
         feature_offsets=None, query_withheld_peptide_ids=None,
         reference_peptide_offsets=None, reference_peptide_ids=None, score_quantum=1,
         alignment_mode="gapblock", alignment_scale=1, trim_left=0, trim_right=0,
-        additional_feature_offsets=None):
+        additional_feature_offsets=None, return_hits=False, query_target_ids=None,
+        query_reference_ids=None, max_hit_bytes=64*1024*1024):
     """Yield bounded label curves from one immutable prepared scoring population.
+
+    ``return_hits=True`` instead yields ``chunk.hits[H,3]`` read-only uint32 rows
+    (global query index, reference index, raw distance) at thresholds[-1], ordered
+    by query then reference; counts/sizes/exact_counts are empty. Requires one
+    query_target_ids entry per query and scans only that target's CSR references.
+    Optional query_reference_ids keeps reference indices strictly greater than
+    each query's supplied index (-1 keeps all). Exact exclusion still compares
+    full sequences. Supports the single non-withheld population API only.
+    max_hit_bytes bounds actual hit output per chunk (default64MiB); exceeding it
+    raises without dropping hits. Row assembly plus final output temporarily uses
+    at most roughly three times that cap, excluding inputs and worker DP scratch.
 
     ``alignment_mode`` defaults to gapblock. Global/local reuse the existing affine
     similarity recurrence and require a raw similarity matrix. For trimmed sequences
@@ -1028,6 +1040,15 @@ def grouped_count_batch(queries, refs, thresholds, *, reference_target_offsets,
     go, ge, cube, width, threads = _batch_options((q, r), matrix, gap_open, gap_extend, gap_prior, threads)
     geometry = _grouped_geometry(q, r, position_weights_by_length, query_group_ids,
         reference_group_ids, group_distances, query_position_weights, reference_position_weights, feature_offsets, score_quantum)
+    if return_hits or query_target_ids is not None or query_reference_ids is not None:
+        if not hasattr(geometry, "return_hits"):
+            raise RuntimeError("sparse hits require native return_hits support")
+        geometry.return_hits = bool(return_hits)
+        geometry.max_hit_bytes = _batch_integer(max_hit_bytes, "max_hit_bytes", 12)
+        geometry.query_target_ids = (None if query_target_ids is None else
+            [_batch_integer(x, "query target ID", 0) for x in query_target_ids])
+        geometry.query_reference_ids = (None if query_reference_ids is None else
+            [_batch_integer(x, "query reference ID", -1) for x in query_reference_ids])
     _additional_geometry(geometry, additional_feature_offsets)
     _alignment_options(geometry, q, r, alignment_mode, alignment_scale, trim_left, trim_right,
         matrix, gap_prior, position_weights_by_length, query_position_weights, reference_position_weights)

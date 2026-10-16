@@ -392,6 +392,10 @@ struct GroupedGeometry {
     int32_t alignment_scale = 1;
     uint32_t trim_left = 0, trim_right = 0;
     int32_t score_quantum = 1;
+    bool return_hits = false;
+    size_t max_hit_bytes = 64*1024*1024;
+    std::optional<std::vector<int32_t>> query_target_ids;
+    std::optional<std::vector<int64_t>> query_reference_ids;
     std::vector<std::vector<int32_t>> weights, group_distances, query_weights, reference_weights;
     std::vector<int32_t> query_groups, reference_groups;
     std::optional<PairedFeatureOffsets> features;
@@ -403,6 +407,7 @@ struct CountBuffer {
 struct GroupedCountChunk {
     size_t start = 0, stop = 0;
     CountBuffer counts, sizes, exact_counts;
+    CountBuffer hits{{},{0,3}};
 };
 class GroupedCountBatch {
 public:

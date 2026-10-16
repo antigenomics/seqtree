@@ -884,9 +884,14 @@ NB_MODULE(_core, m) {
     nb::class_<GroupedCountChunk>(m,"GroupedCountChunk")
         .def_ro("start",&GroupedCountChunk::start).def_ro("stop",&GroupedCountChunk::stop)
         .def_ro("counts",&GroupedCountChunk::counts).def_ro("sizes",&GroupedCountChunk::sizes)
-        .def_ro("exact_counts",&GroupedCountChunk::exact_counts);
+        .def_ro("exact_counts",&GroupedCountChunk::exact_counts)
+        .def_ro("hits",&GroupedCountChunk::hits);
     nb::class_<GroupedGeometry>(m,"_GroupedGeometry")
         .def(nb::init<>()).def_rw("weights",&GroupedGeometry::weights)
+        .def_rw("return_hits",&GroupedGeometry::return_hits)
+        .def_rw("max_hit_bytes",&GroupedGeometry::max_hit_bytes)
+        .def_rw("query_target_ids",&GroupedGeometry::query_target_ids)
+        .def_rw("query_reference_ids",&GroupedGeometry::query_reference_ids)
         .def_rw("additional_features",&GroupedGeometry::additional_features)
         .def_rw("gap_prior",&GroupedGeometry::gap_prior)
         .def_rw("alignment_mode",&GroupedGeometry::alignment_mode)
