@@ -3,7 +3,7 @@
 All notable changes to `seqtree`. Dates are release dates. From 1.0.0 the project follows semantic
 versioning: breaking changes need a **major** bump.
 
-## [Unreleased]
+## [1.2.0] — 2026-10-17
 
 ### Fixed
 
