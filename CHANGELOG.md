@@ -12,6 +12,10 @@ versioning: breaking changes need a **major** bump.
 
 ### Added
 
+- Fixed query/reference partitions for native group audits.
+- Bounded sparse grouped radius-hit output with deterministic ordering and explicit memory-cap failures.
+- Optional grouped geometry compatible with the supported nanobind 2.5 floor.
+
 - Generic float64 global-alignment target maxima with numeric annotation CSR,
   group offsets, explicit matrix symbols and independent candidate edit budgets.
 - Optional aggregate insertion/deletion limits for batched edit histograms;
