@@ -960,7 +960,8 @@ def _grouped_geometry(q, r, weights, query_groups, reference_groups, distances,
         query_groups, reference_groups, distances, q, r)
     geometry.query_weights, geometry.reference_weights = _sequence_weights(
         query_weights, reference_weights, weights, q, r)
-    geometry.features = features
+    if features is not None:
+        geometry.features = features
     return geometry
 
 
@@ -1045,10 +1046,10 @@ def grouped_count_batch(queries, refs, thresholds, *, reference_target_offsets,
             raise RuntimeError("sparse hits require native return_hits support")
         geometry.return_hits = bool(return_hits)
         geometry.max_hit_bytes = _batch_integer(max_hit_bytes, "max_hit_bytes", 12)
-        geometry.query_target_ids = (None if query_target_ids is None else
-            [_batch_integer(x, "query target ID", 0) for x in query_target_ids])
-        geometry.query_reference_ids = (None if query_reference_ids is None else
-            [_batch_integer(x, "query reference ID", -1) for x in query_reference_ids])
+        if query_target_ids is not None:
+            geometry.query_target_ids = [_batch_integer(x, "query target ID", 0) for x in query_target_ids]
+        if query_reference_ids is not None:
+            geometry.query_reference_ids = [_batch_integer(x, "query reference ID", -1) for x in query_reference_ids]
     _additional_geometry(geometry, additional_feature_offsets)
     _alignment_options(geometry, q, r, alignment_mode, alignment_scale, trim_left, trim_right,
         matrix, gap_prior, position_weights_by_length, query_position_weights, reference_position_weights)

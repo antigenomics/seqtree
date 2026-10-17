@@ -945,7 +945,7 @@ NB_MODULE(_core, m) {
        nb::arg("reference_target_offsets"),nb::arg("reference_target_ids"),
        nb::arg("target_peptide_ids"),nb::arg("reference_exclusive_peptide_ids"),
        nb::arg("query_gene_ids"),nb::arg("reference_gene_ids"),nb::arg("chunk_size"),
-       nb::arg("alphabet"),nb::arg("matrix"),nb::arg("gap_open"),nb::arg("gap_extend"),
+       nb::arg("alphabet"),nb::arg("matrix").none(),nb::arg("gap_open"),nb::arg("gap_extend"),
        nb::arg("prior"),nb::arg("prior_width"),nb::arg("threads"),nb::arg("exclude_exact"),
        nb::arg("alpha"),nb::arg("beta")=std::nullopt,
        nb::arg("queries_beta")=std::vector<std::string>{},nb::arg("refs_beta")=std::vector<std::string>{},
