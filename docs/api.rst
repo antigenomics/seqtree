@@ -32,7 +32,7 @@ payload.
    :members:
    :undoc-members:
 
-For edit-count summaries, ``Index.edit_histogram_batch(queries, params, threads=0, exclude_exact=False)``
+For edit-count summaries, ``Index.edit_histogram_batch(queries, params, threads=0, exclude_exact=False, max_indels=-1)``
 returns one list of exact counts per query, indexed by total substitutions,
 insertions and deletions. Set ``params.max_total_edits`` explicitly to a positive
 value; bins run from zero through that cap. Reference duplicates count separately.
@@ -41,6 +41,78 @@ uses the detected available CPU budget, matching the other batch APIs. This requ
 and all-hit mode; the search uses one reusable native hit buffer per worker rather
 than materializing all hits in Python. Counts are not cumulative; sum the bins up
 to a radius to obtain its ball count.
+The optional final ``max_indels`` argument limits total insertions plus deletions;
+``-1`` preserves the directional-only limits. Bounded unit-cost profiles reuse bit-vector rejection
+and exact constrained dynamic programming; other profiles use the generic search
+worker. Existing eligible count paths are retained when the bound is redundant.
+Explicit ``seqtrie`` remains unsupported.
+
+Floating alignment target reductions
+------------------------------------
+
+``Index.alignment_max_batch`` filters unit-cost search candidates by requested
+numeric target IDs, aligns each relevant reference sequence once, and reduces
+annotation scores without exporting the query-by-reference pair table. It releases
+the GIL and uses the same batch CPU budget as search. Build the index with unique
+sequences. Bound output memory with contiguous query chunks against that index.
+This is a numeric reduction API; callers supply their own group mappings and counts.
+
+The positional arguments are ``queries, params, similarity, similarity_symbols,
+max_indels``. ``similarity`` is a square finite float64 grid in the explicit
+``similarity_symbols`` order; asymmetric grids are allowed. Every input residue
+must be represented. Candidate ``params`` must describe uncapped unit-cost all-hit
+``seqtm``/``auto`` search. ``max_indels`` independently caps total insertion and
+deletion residues. Candidate existence does not constrain the selected alignment.
+Eligible short unit-cost profiles reuse the exact bounded-count predicate to
+collect full-index candidate IDs; other profiles retain the existing searcher.
+Global candidate counts are preserved before target filtering.
+
+Global Needleman--Wunsch maximizes ``U - lambda*g``, where ``U`` sums nongap
+similarities, ``g`` counts gap residues including terminal gaps, and
+``lambda = max(abs(similarity)) > 0``. Strict predecessor ties use M/X/Y for the
+match and insertion states, M/Y/X for the deletion state, and M/X/Y at the terminal
+cell. The normalized feature is ``U - max(H_query, H_reference)``, where ``H`` is
+the sum of diagonal self similarities. No integer scaling or Gram transform is used.
+
+Required keyword arrays describe the annotations:
+
+* ``query_target_offsets`` (Q+1) and ``query_target_ids`` (M) are requested-target
+  CSR; repeated targets within a query are rejected.
+* ``reference_target_offsets`` (R+1) and ``reference_target_ids`` (L) map each
+  reference to annotation lanes. ``target_class_ids`` maps each target to a class.
+* ``reference_class_offsets`` (R+1) and ``reference_class_ids`` enumerate each
+  reference's unique class roles, independently of target annotations.
+* ``query_group_ids`` (C by Q), ``reference_group_ids`` (C by L), and
+  ``group_offsets`` (C small rectangular matrices) describe additive components.
+  Each matrix is indexed by query and reference group ID; ``-1`` is unsupported.
+* ``reference_other_counts`` (L) supplies distinct neighboring references with
+  another class, and ``reference_multiplicities`` (L) supplies positive observation
+  counts. These counts are supplied and checked, never estimated by this reducer.
+* ``coefficients`` contains ``[intercept, normalized_coefficient, gap_coefficient]``.
+
+The final predictor is the intercept plus group offsets plus the fitted normalized
+and gap terms. Its complementary-log-log transform is multiplied by
+``-log10((k+1)/N)``, where ``N`` is the number of unique reference/class roles and
+``k`` is the supplied other-class count for that annotation. With
+``exclude_exact=True``, matching query/reference sequences are excluded only from
+candidate hits. Reference/class roles and supplied other-class counts remain fixed.
+The native module reports this contract through ``_core.exact_exclusion_hits_only``;
+version strings alone do not establish support.
+Inconsistent model counters raise instead of clipping.
+These supplied-count semantics do not make the output a calibrated probability.
+
+The result's ``arrays()`` method returns read-only owned zero-copy buffers. Per
+requested target: ``scores``, ``raw_similarity``, ``normalized_similarity``, ``pfit``,
+``informativeness``, ``gap_counts``, ``best_ref_ids``, ``best_lane_ids``, ``counts``,
+``modeled_counts``, ``aa_counts``, and ``exact_counts``. Counts distinguish observation
+multiplicity, supported multiplicity, distinct reference sequences, and raw exact
+multiplicity before exclusion. IDs are -1 if unavailable. Per query:
+``candidate_counts`` counts all full-index candidates before filtering,
+``nw_pairs`` counts actual alignments, and ``query_supported`` records group support.
+Supported no-hit scores are zero; unsupported scores are NaN while counts remain.
+Tied maxima choose the smallest annotation lane ID. Invalid CSR, IDs, duplicate
+references or roles, nonfinite coefficients, and overflow raise explicitly.
+
 
 .. autoclass:: SearchParams
    :members:

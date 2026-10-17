@@ -73,7 +73,7 @@ def test_every_grouped_curve_and_population_matches_original(paired, exclude, fe
                 gb.count_batch(Q, [R[j] for j in refs], CUTS, **subopt,
                     shared_thresholds=True, exclude_exact=exclude, threads=threads))
             np.testing.assert_array_equal(counts[i, channel], native[i])
-            assert sizes[i, channel] == sum(not (exclude and identical[j]) for j in refs)
+            assert sizes[i, channel] == len(refs)
         for t in range(3):
             assert exact[i, t] == sum(identical[j] and t in MEMBERS[j] for j in range(5))
         # All-source complement retains shared-label keys and unselected references.

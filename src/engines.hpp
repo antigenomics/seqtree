@@ -18,7 +18,7 @@ struct Scratch {
 // Resolved, engine-independent limits derived from SearchParams + matrix.
 struct Limits {
     int32_t budget;        // max accumulated penalty
-    int     max_sub, max_ins, max_del, max_tot;
+    int     max_sub, max_ins, max_del, max_tot, max_indels;
     int32_t gap;           // linear gap cost per indel
     bool    unit;          // true => unit cost, false => use matrix
     const SubstitutionMatrix* mat;

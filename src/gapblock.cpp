@@ -6,8 +6,10 @@
 #include <cmath>
 #include <limits>
 #include <mutex>
+#include <numeric>
 #include <stdexcept>
 #include <tuple>
+#include <unordered_map>
 
 namespace seqtree {
 namespace {
@@ -267,15 +269,20 @@ inline int32_t group_offset(const GapInput& in, size_t i, size_t j) {
     return offset;
 }
 
-template<bool Factored = true>
 int32_t score_cell(const GapInput& in, size_t i, size_t j, int32_t go, int32_t ge,
-                   const std::vector<int32_t>& prior, int32_t* scratch) {
+                   const std::vector<int32_t>& prior, int32_t* scratch, int32_t offset) {
     const uint32_t m = uint32_t(in.q[i].size()), n = uint32_t(in.r[j].size());
     const uint32_t M = std::max(m, n), d = m > n ? m - n : n - m;
     const int32_t* prow = prior.empty() ? nullptr : prior.data() + (size_t(M) * in.W1 + d) * in.W1;
-    return group_offset<Factored>(in, i, j) + cell(in.q[i].data(), m, in.r[j].data(), n, in.pen.data(), in.A, go, ge, prow, scratch, in.weights.empty() || !M ? nullptr : in.weights[M].data(),
+    return offset + cell(in.q[i].data(), m, in.r[j].data(), n, in.pen.data(), in.A, go, ge, prow, scratch, in.weights.empty() || !M ? nullptr : in.weights[M].data(),
         in.query_weights.empty() ? nullptr : in.query_weights[i].data(),
         in.reference_weights.empty() ? nullptr : in.reference_weights[j].data());
+}
+
+template<bool Factored = true>
+int32_t score_cell(const GapInput& in, size_t i, size_t j, int32_t go, int32_t ge,
+                   const std::vector<int32_t>& prior, int32_t* scratch) {
+    return score_cell(in,i,j,go,ge,prior,scratch,group_offset<Factored>(in,i,j));
 }
 
 struct Ranked {
@@ -539,9 +546,25 @@ gapblock_group_audit_batch(const std::vector<std::string>& queries,
         const std::vector<std::vector<int32_t>>& group_distances,
         const std::vector<std::vector<int32_t>>& query_weights,
         const std::vector<std::vector<int32_t>>& reference_weights,
-        const std::optional<PairedFeatureOffsets>& feature_offsets) {
+        const std::optional<PairedFeatureOffsets>& feature_offsets,
+        const std::vector<int32_t>& query_partitions,
+        const std::vector<int32_t>& reference_partitions) {
     if (thresholds.size() != queries.size())
         throw std::invalid_argument("group audit thresholds must have one value per query");
+    const bool partitioned = !query_partitions.empty() || !reference_partitions.empty();
+    std::unordered_map<int32_t, std::vector<size_t>> populations;
+    if (partitioned) {
+        if (query_partitions.size() != queries.size() || reference_partitions.size() != refs.size())
+            throw std::invalid_argument("partition IDs must cover every query and reference");
+        for (auto id : query_partitions)
+            if (id < 0) throw std::invalid_argument("partition IDs must be nonnegative");
+        for (size_t j = 0; j < refs.size(); ++j) {
+            if (reference_partitions[j] < 0)
+                throw std::invalid_argument("partition IDs must be nonnegative");
+            populations[reference_partitions[j]].push_back(j);
+        }
+    }
+    const auto& fixed_populations = populations;
     const auto in = prepare(queries, refs, alphabet, matrix, go, ge, prior, width, threads,
                            weights, query_groups, reference_groups, group_distances,
                            query_weights, reference_weights, feature_offsets);
@@ -554,7 +577,15 @@ gapblock_group_audit_batch(const std::vector<std::string>& queries,
         [&](size_t i, std::vector<int32_t>& scratch) {
             if (thresholds[i] < 0) return;
             int32_t minimum = std::numeric_limits<int32_t>::max();
-            for (size_t j = 0; j < refs.size(); ++j) {
+            const std::vector<size_t>* selected = nullptr;
+            if (partitioned) {
+                const auto found = fixed_populations.find(query_partitions[i]);
+                if (found == fixed_populations.end()) return;
+                selected = &found->second;
+            }
+            const size_t count = selected ? selected->size() : refs.size();
+            for (size_t k = 0; k < count; ++k) {
+                const size_t j = selected ? (*selected)[k] : k;
                 if (exclude_exact && in.q[i] == in.r[j]) continue;
                 const auto score = score_cell(in, i, j, go, ge, prior, scratch.data());
                 if (score - group_offset(in, i, j) > thresholds[i]) continue;
@@ -671,6 +702,11 @@ struct GroupedCountBatch::Impl {
     int32_t quantum_a = 1, quantum_b = 1;
     int threads = 0;
     bool exclude = false;
+    bool return_hits = false;
+    size_t max_hits = 0;
+    std::vector<int32_t> query_targets;
+    std::optional<std::vector<int64_t>> query_references;
+    std::vector<std::vector<uint32_t>> references_by_target;
     std::mutex mutex;
     std::optional<std::vector<int32_t>> beta_prior;
     std::vector<PairedFeatureOffsets> extra_a,extra_b;
@@ -680,6 +716,69 @@ struct GroupedCountBatch::Impl {
     int32_t scale = 1;
     uint32_t left = 0, right = 0;
     std::vector<int64_t> qdiag_a, rdiag_a, qdiag_b, rdiag_b;
+    int64_t bin_step = 1;
+    std::vector<size_t> score_bins;
+
+    void prepare_bins() {
+        if (cuts.empty() || cuts.back()<0) return;
+        int64_t step=0;
+        for (const auto cut:cuts) step=std::gcd(step,cut<0 ? -int64_t(cut) : int64_t(cut));
+        bin_step=std::max(int64_t(1),step);
+        const uint64_t slots=uint64_t(cuts.back()/bin_step)+1, K=cuts.size();
+        // Building more than K squared bins cannot repay even K binary searches.
+        if (slots/K+uint64_t(slots%K!=0)>K) return;
+        score_bins.resize(size_t(slots));
+        size_t bin=size_t(std::lower_bound(cuts.begin(),cuts.end(),0)-cuts.begin());
+        for (size_t i=0;i<score_bins.size();++i) {
+            while (bin<cuts.size() && cuts[bin]<int64_t(i)*bin_step) ++bin;
+            score_bins[i]=bin;
+        }
+    }
+
+    size_t score_bin(int64_t score) const {
+        if (!score_bins.empty() && score>=0) {
+            if (score>cuts.back()) return cuts.size();
+            return score_bins[size_t((score+bin_step-1)/bin_step)];
+        }
+        return size_t(std::lower_bound(cuts.begin(),cuts.end(),score)-cuts.begin());
+    }
+
+    std::vector<uint32_t> static_sizes;
+    std::unordered_map<int32_t,std::vector<std::pair<uint32_t,uint32_t>>> gene_sizes;
+
+    std::unordered_map<std::string,std::vector<uint32_t>> exact_references;
+
+    std::string identity(size_t i, bool query) const {
+        const auto& alpha=query ? a.q[i] : a.r[i];
+        std::string key(alpha.begin(),alpha.end());
+        if (b) {
+            // Encoded symbols cannot equal the invalid-code separator.
+            key.push_back(char(Codec::kInvalid));
+            const auto& beta=query ? b->q[i] : b->r[i];
+            key.append(beta.begin(),beta.end());
+        }
+        return key;
+    }
+
+    void prepare_sizes() {
+        if (withheld) return;
+        static_sizes.resize(channels);
+        static_sizes[0]=uint32_t(a.r.size());
+        // Sparse gene/target totals: at most one entry per distinct reference
+        // membership, independent of the number of query rows.
+        std::unordered_map<uint64_t,uint32_t> totals;
+        for (size_t j=0;j<a.r.size();++j) {
+            for (size_t p=offsets[j];p<offsets[j+1];++p) {
+                const auto target=labels[p];
+                ++static_sizes[1+target];
+                ++totals[(uint64_t(uint32_t(rgenes[j]))<<32)|target];
+            }
+            exact_references[identity(j,false)].push_back(uint32_t(j));
+            if (exclusive[j]>=0) ++static_sizes[1+2*targets+size_t(exclusive[j])];
+        }
+        for (const auto& [key,count]:totals)
+            gene_sizes[int32_t(key>>32)].emplace_back(uint32_t(key),count);
+    }
 
     void prepare_affine(const GroupedGeometry& geometry, const GapInput& lane,
             std::vector<int64_t>& qdiag, std::vector<int64_t>& rdiag,
@@ -736,18 +835,16 @@ struct GroupedCountBatch::Impl {
         diagonals(lane.q,qdiag,max_q); diagonals(lane.r,rdiag,max_r);
     }
 
-    template<bool Factored>
     int64_t affine_cell(const GapInput& lane, size_t i, size_t j,
             const std::vector<int64_t>& qdiag, const std::vector<int64_t>& rdiag,
-            detail::PairwiseScratch& scratch) const {
+            detail::PairwiseScratch& scratch, int32_t offset) const {
         const auto& q=lane.q[i]; const auto& r=lane.r[j];
         // data() can be null for an empty vector; avoid pointer arithmetic then.
         const auto* qp=q.empty() ? q.data() : q.data()+left;
         const auto* rp=r.empty() ? r.data() : r.data()+left;
         const int64_t sim=detail::align_score_encoded(qp,q.size()-left-right,
             rp,r.size()-left-right,*similarity,mode,go,ge,scratch);
-        return std::max(int64_t(0),qdiag[i]+rdiag[j]-2*sim)*scale+
-            group_offset<Factored>(lane,i,j);
+        return std::max(int64_t(0),qdiag[i]+rdiag[j]-2*sim)*scale+offset;
     }
 
     template<bool Additional> int64_t extra_offset(const std::vector<PairedFeatureOffsets>& terms,
@@ -755,6 +852,71 @@ struct GroupedCountBatch::Impl {
         int64_t offset=0;
         if constexpr (Additional) for (const auto& term:terms) offset+=feature_offset(term,i,j);
         return offset;
+    }
+
+    template<bool Factored,bool Quantized,bool Affine,bool Additional,class Scratch>
+    int64_t pair_score(size_t i,size_t j,Scratch& scratch) const {
+        const auto& other_prior=beta_prior ? *beta_prior : prior;
+        const int64_t extra_alpha=extra_offset<Additional>(extra_a,i,j);
+        const int64_t extra_beta=b ? extra_offset<Additional>(extra_b,i,j) : 0;
+        const int32_t offset_alpha=group_offset<Factored>(a,i,j);
+        const int32_t offset_beta=b ? group_offset<Factored>(*b,i,j) : 0;
+        const int64_t offset=int64_t(offset_alpha)+extra_alpha+offset_beta+extra_beta;
+        if (offset>cuts.back()) return INT64_MAX;
+        int64_t score;
+        if constexpr (Affine) score=affine_cell(a,i,j,qdiag_a,rdiag_a,scratch,offset_alpha);
+        else score=score_cell(a,i,j,go,ge,prior,scratch.data(),offset_alpha);
+        score+=extra_alpha;
+        if constexpr (Quantized) {
+            const int64_t additive=offset_alpha+extra_alpha;
+            score=additive+(score-additive)/quantum_a*quantum_a;
+        }
+        if (b) {
+            if (score>cuts.back()) return INT64_MAX;
+            int64_t other;
+            if constexpr (Affine) other=affine_cell(*b,i,j,qdiag_b,rdiag_b,scratch,offset_beta);
+            else other=score_cell(*b,i,j,go,ge,other_prior,scratch.data(),offset_beta);
+            other+=extra_beta;
+            if constexpr (Quantized) {
+                const int64_t additive=offset_beta+extra_beta;
+                other=additive+(other-additive)/quantum_b*quantum_b;
+            }
+            score+=other;
+        }
+        return score;
+    }
+
+    template<bool Factored,bool Quantized,bool Affine,bool Additional>
+    GroupedCountChunk sparse_hits(size_t start,size_t stop) {
+        GroupedCountChunk out;
+        out.start=start;out.stop=stop;
+        out.counts.shape={0};out.sizes.shape={0};out.exact_counts.shape={0};
+        out.hits.shape={0,3};
+        if (cuts.empty()) return out;
+        std::vector<std::vector<uint32_t>> rows(stop-start);
+        std::atomic<size_t> hit_count{0};
+        parallel_for(rows.size(),threads,[&] {
+            if constexpr (Affine) return detail::PairwiseScratch{};
+            else return std::vector<int32_t>(size_t(a.longest)+1);
+        },[&](size_t row,auto& scratch) {
+            const size_t i=start+row;
+            for (const auto j:references_by_target[size_t(query_targets[i])]) {
+                if (query_references && int64_t(j)<=(*query_references)[i]) continue;
+                if (exclude && a.q[i]==a.r[j]) continue;
+                const int64_t score=pair_score<Factored,Quantized,Affine,Additional>(i,j,scratch);
+                if (score>cuts.back()) continue;
+                if (hit_count.fetch_add(1,std::memory_order_relaxed)>=max_hits)
+                    throw std::overflow_error("sparse hit output exceeds max_hit_bytes; reduce chunk_size or increase max_hit_bytes");
+                rows[row].insert(rows[row].end(),{uint32_t(i),j,uint32_t(score)});
+            }
+        });
+        out.hits.shape[0]=hit_count.load();
+        out.hits.data.reserve(out.hits.shape[0]*3);
+        for (auto& row:rows) {
+            out.hits.data.insert(out.hits.data.end(),row.begin(),row.end());
+            std::vector<uint32_t>().swap(row);
+        }
+        return out;
     }
 
     template<bool Factored, bool Withheld=false, bool Quantized=false, bool Affine=false, bool Additional=false> GroupedCountChunk run(size_t start, size_t stop) {
@@ -774,7 +936,6 @@ struct GroupedCountBatch::Impl {
         out.sizes = make_buffer({rows,channels});
         out.exact_counts = make_buffer({rows,targets});
         const auto longest = b ? std::max(a.longest,b->longest) : a.longest;
-        const auto& other_prior=beta_prior ? *beta_prior : prior;
         parallel_for(rows,threads,[&] {
                 if constexpr (Affine) {
                     detail::PairwiseScratch scratch;
@@ -786,6 +947,16 @@ struct GroupedCountBatch::Impl {
                 auto* sizes = out.sizes.data.data()+row*channels;
                 auto* hist = K ? out.counts.data.data()+row*channels*K : nullptr;
                 auto* exact = targets ? out.exact_counts.data.data()+row*targets : nullptr;
+                const std::vector<uint32_t>* identical_refs=nullptr;
+                size_t identical_cursor=0;
+                if constexpr (!Withheld) {
+                    std::copy(static_sizes.begin(),static_sizes.end(),sizes);
+                    if (const auto found=gene_sizes.find(qgenes[i]);found!=gene_sizes.end())
+                        for (const auto& [target,count]:found->second)
+                            sizes[1+targets+target]=count;
+                    if (const auto found=exact_references.find(identity(i,true));found!=exact_references.end())
+                        identical_refs=&found->second;
+                }
                 for (size_t j=0;j<a.r.size();++j) {
                     int32_t exclusive_peptide=exclusive[j], withheld_peptide=-1;
                     if constexpr (Withheld) {
@@ -801,7 +972,13 @@ struct GroupedCountBatch::Impl {
                             if (size_t(peptide)<peptides) exclusive_peptide=peptide;
                         }
                     }
-                    const bool identical = a.q[i]==a.r[j] && (!b || b->q[i]==b->r[j]);
+                    bool identical;
+                    if constexpr (Withheld) identical=a.q[i]==a.r[j] && (!b || b->q[i]==b->r[j]);
+                    else {
+                        identical=identical_refs && identical_cursor<identical_refs->size() &&
+                            (*identical_refs)[identical_cursor]==j;
+                        if (identical) ++identical_cursor;
+                    }
                     const bool same_gene = qgenes[i]==rgenes[j];
                     if (identical)
                         for (size_t p=offsets[j];p<offsets[j+1];++p) {
@@ -809,44 +986,20 @@ struct GroupedCountBatch::Impl {
                                 if (target_peptides[labels[p]]==withheld_peptide) continue;
                             ++exact[labels[p]];
                         }
-                    if (exclude && identical) continue;
-                    ++sizes[0];
-                    for (size_t p=offsets[j];p<offsets[j+1];++p) {
-                        if constexpr (Withheld)
+                    if constexpr (Withheld) {
+                        ++sizes[0];
+                        for (size_t p=offsets[j];p<offsets[j+1];++p) {
                             if (target_peptides[labels[p]]==withheld_peptide) continue;
-                        ++sizes[1+labels[p]];
-                        if (same_gene) ++sizes[1+targets+labels[p]];
-                    }
-                    if (exclusive_peptide>=0) ++sizes[1+2*targets+size_t(exclusive_peptide)];
-                    if (!K) continue;
-                    const int64_t extra_alpha=extra_offset<Additional>(extra_a,i,j);
-                    const int64_t extra_beta=b ? extra_offset<Additional>(extra_b,i,j) : 0;
-                    const int64_t offset = int64_t(group_offset<Factored>(a,i,j))+extra_alpha +
-                        (b ? int64_t(group_offset<Factored>(*b,i,j))+extra_beta : 0);
-                    if (offset>cuts.back()) continue;
-                    int64_t score;
-                    if constexpr (Affine) score=affine_cell<Factored>(a,i,j,qdiag_a,rdiag_a,scratch);
-                    else score=score_cell<Factored>(a,i,j,go,ge,prior,scratch.data());
-                    score+=extra_alpha;
-                    if constexpr (Quantized) {
-                        const int64_t additive=group_offset<Factored>(a,i,j)+extra_alpha;
-                        score=additive+(score-additive)/quantum_a*quantum_a;
-                    }
-                    if (b) {
-                        if (score>cuts.back()) continue;
-                        int64_t other;
-                        if constexpr (Affine) other=affine_cell<Factored>(*b,i,j,qdiag_b,rdiag_b,scratch);
-                        else other=score_cell<Factored>(*b,i,j,go,ge,other_prior,scratch.data());
-                        other+=extra_beta;
-                        if constexpr (Quantized) {
-                            const int64_t additive=group_offset<Factored>(*b,i,j)+extra_beta;
-                            other=additive+(other-additive)/quantum_b*quantum_b;
+                            ++sizes[1+labels[p]];
+                            if (same_gene) ++sizes[1+targets+labels[p]];
                         }
-                        score+=other;
+                        if (exclusive_peptide>=0) ++sizes[1+2*targets+size_t(exclusive_peptide)];
                     }
-                    const auto found=std::lower_bound(cuts.begin(),cuts.end(),score);
-                    if (found==cuts.end()) continue;
-                    const size_t bin=size_t(found-cuts.begin());
+                    if (exclude && identical) continue; // Hit mask never changes this model's populations.
+                    if (!K) continue;
+                    const int64_t score=pair_score<Factored,Quantized,Affine,Additional>(i,j,scratch);
+                    const size_t bin=score_bin(score);
+                    if (bin==K) continue;
                     ++hist[bin];
                     for (size_t p=offsets[j];p<offsets[j+1];++p) {
                         if constexpr (Withheld)
@@ -864,6 +1017,9 @@ struct GroupedCountBatch::Impl {
     template<bool Affine,bool Additional> GroupedCountChunk dispatch(size_t start,size_t stop) {
         const bool features=a.features || (b && b->features);
         const bool quantized=quantum_a!=1 || quantum_b!=1;
+        if (return_hits) return quantized ?
+            (features ? sparse_hits<true,true,Affine,Additional>(start,stop) : sparse_hits<false,true,Affine,Additional>(start,stop)) :
+            (features ? sparse_hits<true,false,Affine,Additional>(start,stop) : sparse_hits<false,false,Affine,Additional>(start,stop));
         return quantized ?
             (withheld ?
                 (features ? run<true,true,true,Affine,Additional>(start,stop) : run<false,true,true,Affine,Additional>(start,stop)) :
@@ -948,6 +1104,30 @@ GroupedCountBatch::GroupedCountBatch(const std::vector<std::string>& qa, const s
         }
     } else if (!peptide_offsets.empty() || !peptide_ids.empty())
         throw std::invalid_argument("reference peptide memberships require query withheld peptide IDs");
+    if (alpha.return_hits) {
+        if (beta || withheld)
+            throw std::invalid_argument("sparse hits require a single non-withheld population");
+        if (qa.size()>std::numeric_limits<uint32_t>::max())
+            throw std::overflow_error("sparse query count exceeds uint32");
+        if (!alpha.query_target_ids || alpha.query_target_ids->size()!=qa.size() ||
+                std::any_of(alpha.query_target_ids->begin(),alpha.query_target_ids->end(),
+                    [&](auto x){return x<0 || size_t(x)>=in.targets;}))
+            throw std::invalid_argument("sparse query target IDs must match queries and be in range");
+        if (alpha.query_reference_ids && (alpha.query_reference_ids->size()!=qa.size() ||
+                std::any_of(alpha.query_reference_ids->begin(),alpha.query_reference_ids->end(),
+                    [&](auto x){return x<-1 || x>=int64_t(ra.size());})))
+            throw std::invalid_argument("sparse query reference IDs must match queries and be -1 or a reference index");
+        if (alpha.max_hit_bytes<3*sizeof(uint32_t))
+            throw std::invalid_argument("max_hit_bytes must hold at least one hit (12 bytes)");
+        in.return_hits=true;in.max_hits=alpha.max_hit_bytes/(3*sizeof(uint32_t));
+        in.query_targets=*alpha.query_target_ids;
+        in.query_references=alpha.query_reference_ids;
+        in.references_by_target.resize(in.targets);
+        for (size_t j=0;j<ra.size();++j)
+            for (size_t p=offsets[j];p<offsets[j+1];++p)
+                in.references_by_target[labels[p]].push_back(uint32_t(j));
+    } else if (alpha.query_target_ids || alpha.query_reference_ids)
+        throw std::invalid_argument("query target/reference selectors require return_hits=True");
     in.withheld=std::move(withheld);
     in.peptide_offsets=std::move(peptide_offsets);in.peptide_ids=std::move(peptide_ids);
     const auto& alpha_prior=alpha.gap_prior ? *alpha.gap_prior : prior;
@@ -966,6 +1146,7 @@ GroupedCountBatch::GroupedCountBatch(const std::vector<std::string>& qa, const s
     if (threads<0 || unsigned(threads)>available_cpus())
         throw std::invalid_argument("worker count exceeds the available CPU budget");
     in.cuts=std::move(cuts); in.offsets=std::move(offsets); in.labels=std::move(labels);
+    if (!in.return_hits) in.prepare_bins();
     in.target_peptides=std::move(target_peptides); in.exclusive=std::move(exclusive);
     in.qgenes=std::move(qgenes);in.rgenes=std::move(rgenes);
     in.prior=alpha.gap_prior ? *alpha.gap_prior : std::move(prior);
@@ -989,6 +1170,7 @@ GroupedCountBatch::GroupedCountBatch(const std::vector<std::string>& qa, const s
     }
     in.channels=1+2*in.targets+in.peptides;in.chunk_size=chunk_size;
     in.go=go;in.ge=ge;in.threads=threads;in.exclude=exclude;
+    if (!in.a.q.empty() && !in.return_hits) in.prepare_sizes();
     if (alpha.alignment_scale<1 || (alpha.alignment_mode!="gapblock" &&
             alpha.alignment_mode!="global" && alpha.alignment_mode!="local"))
         throw std::invalid_argument("invalid grouped alignment mode or scale");

@@ -30,6 +30,7 @@ add_library(seqtree_core STATIC
   src/searcher.cpp
   src/gapblock.cpp
   src/pairwise.cpp
+  src/alignment_max.cpp
   src/distance.cpp
 )
 target_include_directories(seqtree_core PUBLIC include PRIVATE src)

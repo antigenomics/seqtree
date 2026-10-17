@@ -190,7 +190,9 @@ std::vector<std::vector<Hit>> Index::search_batch(const std::vector<std::string>
 
 std::vector<std::vector<uint64_t>> Index::edit_histogram_batch(
         const std::vector<std::string>& queries, const SearchParams& p,
-        int threads, bool exclude_exact) const {
+        int threads, bool exclude_exact, int max_indels) const {
+    if (max_indels < -1 || max_indels > 65535)
+        throw std::invalid_argument("max_indels must be in [-1,65535]");
     if (!p.max_total_edits)
         throw std::invalid_argument("edit histogram requires explicit positive max_total_edits");
     if (p.engine == Engine::SeqTrie || p.mode != Mode::AllHits || p.max_hits)
@@ -200,8 +202,8 @@ std::vector<std::vector<uint64_t>> Index::edit_histogram_batch(
     struct Local { Searcher s; std::vector<Hit> hits; };
     parallel_for(queries.size(), threads, [&] { return Local{Searcher(*this), {}}; },
         [&](size_t i, Local& worker) {
-            if (count_unit::fill_histogram(*this,queries[i],p,exclude_exact,out[i])) return;
-            worker.s.search_into(queries[i], p, worker.hits);
+            if (count_unit::fill_histogram(*this,queries[i],p,exclude_exact,out[i],max_indels)) return;
+            worker.s.search_into(queries[i], p, worker.hits, max_indels);
             for (const auto& h : worker.hits) {
                 const uint32_t edits = uint32_t(h.n_subs) + h.n_ins + h.n_dels;
                 if (edits > p.max_total_edits)

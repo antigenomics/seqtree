@@ -430,6 +430,14 @@ If the component penalty is c and the nonnegative group offset is g, every
 full-score hit c+g <= t is also a component hit c <= t. The reduction visits
 references once with shared encoded inputs and per-worker alignment scratch;
 output occupies O(Q) storage without sparse hit objects or a dense matrix.
+
+Optional ``query_partition_ids`` and ``reference_partition_ids`` restrict each
+query to references carrying the same nonnegative integer ID. Supply both arrays
+with one ID per input. Unmatched partitions have zero counts and nearest ``-1``.
+Reference indices are grouped once before the parallel batch, so cross-partition
+pairs are never scored. These hard populations are independent of additive
+``group_distances`` and feature offsets; omitted IDs preserve unrestricted search.
+
 The bounded minimum is not an unbounded nearest result. No statistical model
 or cutoff recommendation is introduced.
 
@@ -523,8 +531,8 @@ chunk rows, ``T`` targets, ``P`` parent labels and ``K`` cutoffs:
 * ``chunk.exact_counts`` has shape ``(C, T)`` and always reports raw full-key exact
   multiplicity, including when exact references are excluded from other outputs.
 
-With ``exclude_exact=True``, every curve and corresponding population size is
-punctured by the full encoded query key, irrespective of additive groups/identities.
+With ``exclude_exact=True``, hit curves omit the full encoded query key,
+irrespective of additive groups/identities. Model population sizes remain fixed.
 For paired sum geometry both full sequences must match. Subtracting an exclusive
 parent channel from the whole channel therefore yields the exact complement,
 including references carrying shared labels. Count overflow is excluded explicitly

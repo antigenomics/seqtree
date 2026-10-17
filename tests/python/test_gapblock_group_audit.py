@@ -19,3 +19,21 @@ def test_group_audit_matches_dense_components_and_threads():
                 assert nearest[i]==(int(full[i,selected].min()) if selected.any() else -1)
     assert gapblock.group_audit_batch(['AA'],[],[0])==([0],[0],[-1])
     with pytest.raises(ValueError):gapblock.group_audit_batch(q,r,[])
+
+
+def test_partitioned_audit_matches_separate_searches():
+    q, r = ['AA', 'CA', 'AA', 'CC'], ['AA', 'CC', 'CA', 'AA']
+    qp, rp = [7, 7, 42, 99], [7, 7, 42, 42]
+    for threads in (1, 2):
+        for excluded in (False, True):
+            got = gapblock.group_audit_batch(q, r, [100]*len(q),
+                query_partition_ids=qp, reference_partition_ids=rp,
+                exclude_exact=excluded, threads=threads)
+            expected = [gapblock.group_audit_batch([s], [t for t, p in zip(r, rp) if p == partition],
+                [100], exclude_exact=excluded, threads=1) for s, partition in zip(q, qp)]
+            assert got == tuple([row[c][0] for row in expected] for c in range(3))
+    assert got[2][-1] == -1
+    for left, right in [([7], rp), (qp, []), ([-1]*4, rp)]:
+        with pytest.raises(ValueError):
+            gapblock.group_audit_batch(q, r, [100]*4,
+                query_partition_ids=left, reference_partition_ids=right)

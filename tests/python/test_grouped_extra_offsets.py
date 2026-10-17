@@ -49,10 +49,15 @@ def test_independent_terms_and_lane_priors_against_explicit_expression(paired,th
     expected=[];sizes=[];exact=[]
     members=[[0],[1],[0,1]]
     for i in range(2):
-        channels=[[] for _ in range(7)];ex=[0,0]
+        channels=[[] for _ in range(7)];model_sizes=[0]*7;ex=[0,0]
         for j,original_labels in enumerate(members):
             labels=[t for t in original_labels if t!=folds[i]]
             if not labels:continue
+            model_sizes[0]+=1
+            for t in labels:
+                model_sizes[1+t]+=1
+                if i%2==j%2:model_sizes[3+t]+=1
+            if len(labels)==1:model_sizes[5+labels[0]]+=1
             identical=q[i]==r[j] and (not paired or qb[i]==rb[j])
             if identical:
                 for t in labels:ex[t]+=1
@@ -63,7 +68,7 @@ def test_independent_terms_and_lane_priors_against_explicit_expression(paired,th
                 if i%2==j%2:channels[3+t].append(scores[i][j])
             if len(labels)==1:channels[5+labels[0]].append(scores[i][j])
         expected.append([[sum(score<=cut for score in row) for cut in cuts] for row in channels])
-        sizes.append([len(row) for row in channels]);exact.append(ex)
+        sizes.append(model_sizes);exact.append(ex)
     chunks=list(batch)
     assert [row for chunk in chunks for row in rows(chunk.counts)]==expected
     assert [row for chunk in chunks for row in rows(chunk.sizes)]==sizes

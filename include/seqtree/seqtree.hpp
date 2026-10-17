@@ -105,6 +105,14 @@ private:
     std::vector<uint8_t> masked_;  // [width]
 };
 
+struct AlignmentMaxResult {
+    std::vector<double> scores, raw_similarity, normalized_similarity, pfit, informativeness;
+    std::vector<uint64_t> counts, modeled_counts, aa_counts, exact_counts, candidate_counts, nw_pairs;
+    std::vector<int64_t> best_ref_ids, best_lane_ids;
+    std::vector<uint32_t> gap_counts;
+    std::vector<uint8_t> query_supported;
+};
+
 // Immutable after build. Lock-free for concurrent reads; share one Index across
 // threads, give each thread its own Searcher.
 class Index {
@@ -129,7 +137,18 @@ public:
     // Exact edit-count bins 0..max_total_edits; one reusable hit buffer per worker.
     std::vector<std::vector<uint64_t>> edit_histogram_batch(
         const std::vector<std::string>& queries, const SearchParams&,
-        int threads = 0, bool exclude_exact = false) const;
+        int threads = 0, bool exclude_exact = false, int max_indels = -1) const;
+
+    // Numeric requested-label maxima; float NW selection is independent of candidate scope.
+    AlignmentMaxResult alignment_max_batch(const std::vector<std::string>& queries,
+        const SearchParams&, const std::vector<std::vector<double>>& similarity, const std::string& symbols, int max_indels,
+        const std::vector<uint32_t>& query_target_offsets, const std::vector<uint32_t>& query_target_ids,
+        const std::vector<uint32_t>& reference_target_offsets, const std::vector<uint32_t>& reference_target_ids,
+        const std::vector<int32_t>& target_class_ids, const std::vector<uint32_t>& reference_class_offsets,
+        const std::vector<int32_t>& reference_class_ids, const std::vector<std::vector<int32_t>>& query_group_ids,
+        const std::vector<std::vector<int32_t>>& reference_group_ids, const std::vector<std::vector<std::vector<double>>>& group_offsets,
+        const std::vector<uint64_t>& reference_other_counts, const std::vector<uint64_t>& reference_multiplicities,
+        const std::vector<double>& coefficients, int threads=0, bool exclude_exact=false) const;
 
     // Per-query count of seqtm collisions: how often a reference was re-reached via a
     // different edit path during branch-and-bound (0 for the seqtrie engine / Hamming).
@@ -155,7 +174,7 @@ public:
     ~Searcher();
 
     std::vector<Hit> search(std::string_view query, const SearchParams&);
-    void search_into(std::string_view query, const SearchParams&, std::vector<Hit>& out);
+    void search_into(std::string_view query, const SearchParams&, std::vector<Hit>& out, int max_indels = -1);
     bool search_top(std::string_view query, const SearchParams&, Hit& out);
 
     // seqtm collisions from the most recent search_into on this Searcher.
@@ -285,7 +304,9 @@ gapblock_group_audit_batch(const std::vector<std::string>& queries,
         const std::vector<std::vector<int32_t>>& group_distances = {},
         const std::vector<std::vector<int32_t>>& query_weights = {},
         const std::vector<std::vector<int32_t>>& reference_weights = {},
-        const std::optional<PairedFeatureOffsets>& feature_offsets = std::nullopt);
+        const std::optional<PairedFeatureOffsets>& feature_offsets = std::nullopt,
+        const std::vector<int32_t>& query_partitions = {},
+        const std::vector<int32_t>& reference_partitions = {});
 
 std::vector<std::vector<Hit>> gapblock_topk_batch(const std::vector<std::string>& queries,
         const std::vector<std::string>& refs, uint32_t k, Alphabet alphabet,
@@ -371,6 +392,10 @@ struct GroupedGeometry {
     int32_t alignment_scale = 1;
     uint32_t trim_left = 0, trim_right = 0;
     int32_t score_quantum = 1;
+    bool return_hits = false;
+    size_t max_hit_bytes = 64*1024*1024;
+    std::optional<std::vector<int32_t>> query_target_ids;
+    std::optional<std::vector<int64_t>> query_reference_ids;
     std::vector<std::vector<int32_t>> weights, group_distances, query_weights, reference_weights;
     std::vector<int32_t> query_groups, reference_groups;
     std::optional<PairedFeatureOffsets> features;
@@ -382,6 +407,7 @@ struct CountBuffer {
 struct GroupedCountChunk {
     size_t start = 0, stop = 0;
     CountBuffer counts, sizes, exact_counts;
+    CountBuffer hits{{},{0,3}};
 };
 class GroupedCountBatch {
 public:

@@ -188,13 +188,13 @@ nb::list py_search_batch(const Index& idx, const std::vector<std::string>& queri
 
 std::vector<std::vector<uint64_t>> py_edit_histogram_batch(
         const Index& idx, const std::vector<std::string>& queries,
-        const PyParams& pp, int threads, bool exclude_exact) {
+        const PyParams& pp, int threads, bool exclude_exact, int max_indels) {
     if (pp.max_total_edits < 1 || pp.max_total_edits > 65535)
         throw nb::value_error("edit histogram requires max_total_edits in [1, 65535]");
     auto mat = make_matrix(pp, idx.alphabet());
     SearchParams cp = to_cpp(pp, mat ? &*mat : nullptr);
     nb::gil_scoped_release release;
-    return idx.edit_histogram_batch(queries, cp, threads, exclude_exact);
+    return idx.edit_histogram_batch(queries, cp, threads, exclude_exact, max_indels);
 }
 
 std::vector<uint64_t> py_collisions_batch(const Index& idx, const std::vector<std::string>& queries,
@@ -335,6 +335,26 @@ ArrayView view_of(const nb::object& owner, const std::vector<T>& v, char fmt) {
     return ArrayView{owner, v.data(), v.size(), sizeof(T), {fmt, 0}};
 }
 
+nb::dict alignment_max_arrays(const nb::object& self) {
+    const auto& r=nb::cast<const AlignmentMaxResult&>(self); nb::dict d;
+    d["scores"]=view_of(self,r.scores,'d');
+    d["raw_similarity"]=view_of(self,r.raw_similarity,'d');
+    d["normalized_similarity"]=view_of(self,r.normalized_similarity,'d');
+    d["pfit"]=view_of(self,r.pfit,'d');
+    d["informativeness"]=view_of(self,r.informativeness,'d');
+    d["counts"]=view_of(self,r.counts,'Q');
+    d["modeled_counts"]=view_of(self,r.modeled_counts,'Q');
+    d["aa_counts"]=view_of(self,r.aa_counts,'Q');
+    d["exact_counts"]=view_of(self,r.exact_counts,'Q');
+    d["candidate_counts"]=view_of(self,r.candidate_counts,'Q');
+    d["nw_pairs"]=view_of(self,r.nw_pairs,'Q');
+    d["best_ref_ids"]=view_of(self,r.best_ref_ids,'q');
+    d["best_lane_ids"]=view_of(self,r.best_lane_ids,'q');
+    d["gap_counts"]=view_of(self,r.gap_counts,'I');
+    d["query_supported"]=view_of(self,r.query_supported,'B');
+    return d;
+}
+
 // One hit as a Python object. Built only for the query actually asked for, never for the whole
 // batch -- the flat arrays are what a 445k-query run should read.
 struct PyTextHit {
@@ -395,6 +415,7 @@ ScoreMatrix py_gapblock_matrix(const std::vector<std::string>& queries,
 }  // namespace
 
 NB_MODULE(_core, m) {
+    m.attr("exact_exclusion_hits_only") = true;
     m.doc() = "seqtree: fuzzy biological-sequence search (C++ core)";
 
     nb::class_<SubstitutionMatrix>(m, "SubstitutionMatrix",
@@ -663,6 +684,9 @@ NB_MODULE(_core, m) {
             return "Alignment(score=" + std::to_string(a.score) + ", ops='" + a.ops + "')";
         });
 
+    nb::class_<AlignmentMaxResult>(m,"AlignmentMaxResult")
+        .def("arrays",&alignment_max_arrays,"Read-only zero-copy requested-target CSR buffers; views own their result.");
+
     nb::class_<Index>(m, "Index",
                       "Immutable search index over a set of reference sequences. Build once, "
                       "then query concurrently; reference id is the position in ``refs``.")
@@ -696,11 +720,32 @@ NB_MODULE(_core, m) {
              "cores. Returns one hit list per query, in input order.")
         .def("edit_histogram_batch", &py_edit_histogram_batch,
              nb::arg("queries"), nb::arg("params"), nb::arg("threads") = 0,
-             nb::arg("exclude_exact") = false,
+             nb::arg("exclude_exact") = false, nb::arg("max_indels") = -1,
              "Exact reference counts by total n_subs+n_ins+n_dels, bins 0..max_total_edits. "
              "Requires explicit positive max_total_edits and uncapped seqtm/auto all-hit search. "
+             "max_indels>=0 also caps total insertions+deletions; -1 preserves directional-only caps. "
              "Duplicates count separately; exclude_exact retains bin 0 with count zero. threads<=0 uses the detected available CPU budget. Releases the GIL; "
              "one reusable hit buffer per worker, no all-query hit vectors.")
+        .def("alignment_max_batch", [](const Index& idx,const std::vector<std::string>& queries,const PyParams& pp,
+            const std::vector<std::vector<double>>& sim,const std::string& symbols,int max_indels,
+            const std::vector<uint32_t>& qo,const std::vector<uint32_t>& qt,const std::vector<uint32_t>& ro,
+            const std::vector<uint32_t>& rt,const std::vector<int32_t>& tc,const std::vector<uint32_t>& co,
+            const std::vector<int32_t>& ci,const std::vector<std::vector<int32_t>>& qg,
+            const std::vector<std::vector<int32_t>>& rg,const std::vector<std::vector<std::vector<double>>>& offsets,
+            const std::vector<uint64_t>& other,const std::vector<uint64_t>& multiplicities,
+            const std::vector<double>& coefficients,int threads,bool exclude_exact) {
+                auto mat=make_matrix(pp,idx.alphabet()); auto cp=to_cpp(pp,mat?&*mat:nullptr);
+                nb::gil_scoped_release release;
+                return idx.alignment_max_batch(queries,cp,sim,symbols,max_indels,qo,qt,ro,rt,tc,co,ci,qg,rg,offsets,other,multiplicities,coefficients,threads,exclude_exact);
+            }, nb::arg("queries"),nb::arg("params"),nb::arg("similarity"),nb::arg("similarity_symbols"),nb::arg("max_indels"),nb::kw_only(),
+            nb::arg("query_target_offsets"),nb::arg("query_target_ids"),nb::arg("reference_target_offsets"),nb::arg("reference_target_ids"),
+            nb::arg("target_class_ids"),nb::arg("reference_class_offsets"),nb::arg("reference_class_ids"),
+            nb::arg("query_group_ids"),nb::arg("reference_group_ids"),nb::arg("group_offsets"),nb::arg("reference_other_counts"),
+            nb::arg("reference_multiplicities"),nb::arg("coefficients"),nb::arg("threads")=0,nb::arg("exclude_exact")=false,
+            "Fused numeric requested-label max of cloglog(offset+c3*(rawNW-maxself)+gapcoef*g)*finite information. "
+            "Candidate scope is independent of float64 global NW; selection gap=max(abs(similarity)); "
+            "strict ties use M/X/Y for M and X, M/Y/X for Y, terminal M/X/Y. Group ID -1 is unsupported, not imputed. "
+            "Target filtering precedes NW. Use bounded query chunks against the same immutable Index. GIL released.")
         .def("align", &py_align, nb::arg("ref_id"), nb::arg("query"), nb::arg("params"),
              "Compute a global alignment between ``query`` and a reference, on demand.")
         .def("collisions_batch", &py_collisions_batch, nb::arg("queries"), nb::arg("params"),
@@ -839,9 +884,14 @@ NB_MODULE(_core, m) {
     nb::class_<GroupedCountChunk>(m,"GroupedCountChunk")
         .def_ro("start",&GroupedCountChunk::start).def_ro("stop",&GroupedCountChunk::stop)
         .def_ro("counts",&GroupedCountChunk::counts).def_ro("sizes",&GroupedCountChunk::sizes)
-        .def_ro("exact_counts",&GroupedCountChunk::exact_counts);
+        .def_ro("exact_counts",&GroupedCountChunk::exact_counts)
+        .def_ro("hits",&GroupedCountChunk::hits);
     nb::class_<GroupedGeometry>(m,"_GroupedGeometry")
         .def(nb::init<>()).def_rw("weights",&GroupedGeometry::weights)
+        .def_rw("return_hits",&GroupedGeometry::return_hits)
+        .def_rw("max_hit_bytes",&GroupedGeometry::max_hit_bytes)
+        .def_rw("query_target_ids",&GroupedGeometry::query_target_ids)
+        .def_rw("query_reference_ids",&GroupedGeometry::query_reference_ids)
         .def_rw("additional_features",&GroupedGeometry::additional_features)
         .def_rw("gap_prior",&GroupedGeometry::gap_prior)
         .def_rw("alignment_mode",&GroupedGeometry::alignment_mode)
@@ -895,7 +945,7 @@ NB_MODULE(_core, m) {
        nb::arg("reference_target_offsets"),nb::arg("reference_target_ids"),
        nb::arg("target_peptide_ids"),nb::arg("reference_exclusive_peptide_ids"),
        nb::arg("query_gene_ids"),nb::arg("reference_gene_ids"),nb::arg("chunk_size"),
-       nb::arg("alphabet"),nb::arg("matrix"),nb::arg("gap_open"),nb::arg("gap_extend"),
+       nb::arg("alphabet"),nb::arg("matrix").none(),nb::arg("gap_open"),nb::arg("gap_extend"),
        nb::arg("prior"),nb::arg("prior_width"),nb::arg("threads"),nb::arg("exclude_exact"),
        nb::arg("alpha"),nb::arg("beta")=std::nullopt,
        nb::arg("queries_beta")=std::vector<std::string>{},nb::arg("refs_beta")=std::vector<std::string>{},
@@ -923,11 +973,11 @@ NB_MODULE(_core, m) {
         return gapblock_count_mass_batch(queries, refs, thresholds, alph, matrix ? &*matrix : nullptr, go, ge, prior, width, threads, exclude_exact, weights, query_groups, reference_groups, group_distances, query_weights, reference_weights, feature_offsets, shared_thresholds);
     }, nb::arg("queries"), nb::arg("refs"), nb::arg("thresholds"), nb::arg("alphabet")="aa", nb::arg("matrix")=std::nullopt, nb::arg("gap_open")=1, nb::arg("gap_extend")=1, nb::arg("prior")=std::vector<int32_t>{}, nb::arg("prior_width")=0, nb::arg("threads")=0, nb::arg("exclude_exact")=false, nb::arg("position_weights_by_length")=std::vector<std::vector<int32_t>>{}, nb::arg("query_group_ids")=std::vector<int32_t>{}, nb::arg("reference_group_ids")=std::vector<int32_t>{}, nb::arg("group_distances")=std::vector<std::vector<int32_t>>{}, nb::arg("query_position_weights")=std::vector<std::vector<int32_t>>{}, nb::arg("reference_position_weights")=std::vector<std::vector<int32_t>>{}, nb::arg("feature_offsets")=std::nullopt, nb::arg("shared_thresholds")=false, "Counts and integer linear mass in one bounded traversal, GIL released.");
 
-    m.def("gapblock_group_audit_batch", [](const std::vector<std::string>& queries, const std::vector<std::string>& refs, const std::vector<int32_t>& thresholds, const std::string& alphabet, const std::optional<SubstitutionMatrix>& matrix, int32_t go, int32_t ge, const std::vector<int32_t>& prior, uint32_t width, int threads, bool exclude_exact, const std::vector<std::vector<int32_t>>& weights, const std::vector<int32_t>& query_groups, const std::vector<int32_t>& reference_groups, const std::vector<std::vector<int32_t>>& group_distances, const std::vector<std::vector<int32_t>>& query_weights, const std::vector<std::vector<int32_t>>& reference_weights, const std::optional<PairedFeatureOffsets>& feature_offsets) {
+    m.def("gapblock_group_audit_batch", [](const std::vector<std::string>& queries, const std::vector<std::string>& refs, const std::vector<int32_t>& thresholds, const std::string& alphabet, const std::optional<SubstitutionMatrix>& matrix, int32_t go, int32_t ge, const std::vector<int32_t>& prior, uint32_t width, int threads, bool exclude_exact, const std::vector<std::vector<int32_t>>& weights, const std::vector<int32_t>& query_groups, const std::vector<int32_t>& reference_groups, const std::vector<std::vector<int32_t>>& group_distances, const std::vector<std::vector<int32_t>>& query_weights, const std::vector<std::vector<int32_t>>& reference_weights, const std::optional<PairedFeatureOffsets>& feature_offsets, const std::vector<int32_t>& query_partitions, const std::vector<int32_t>& reference_partitions) {
         const auto alph = parse_alphabet(alphabet);
         nb::gil_scoped_release release;
-        return gapblock_group_audit_batch(queries, refs, thresholds, alph, matrix ? &*matrix : nullptr, go, ge, prior, width, threads, exclude_exact, weights, query_groups, reference_groups, group_distances, query_weights, reference_weights, feature_offsets);
-    }, nb::arg("queries"), nb::arg("refs"), nb::arg("thresholds"), nb::arg("alphabet")="aa", nb::arg("matrix")=std::nullopt, nb::arg("gap_open")=1, nb::arg("gap_extend")=1, nb::arg("prior")=std::vector<int32_t>{}, nb::arg("prior_width")=0, nb::arg("threads")=0, nb::arg("exclude_exact")=false, nb::arg("position_weights_by_length")=std::vector<std::vector<int32_t>>{}, nb::arg("query_group_ids")=std::vector<int32_t>{}, nb::arg("reference_group_ids")=std::vector<int32_t>{}, nb::arg("group_distances")=std::vector<std::vector<int32_t>>{}, nb::arg("query_position_weights")=std::vector<std::vector<int32_t>>{}, nb::arg("reference_position_weights")=std::vector<std::vector<int32_t>>{}, nb::arg("feature_offsets")=std::nullopt, "Streaming component/full ball counts and minimum full score within the component ball, GIL released.");
+        return gapblock_group_audit_batch(queries, refs, thresholds, alph, matrix ? &*matrix : nullptr, go, ge, prior, width, threads, exclude_exact, weights, query_groups, reference_groups, group_distances, query_weights, reference_weights, feature_offsets, query_partitions, reference_partitions);
+    }, nb::arg("queries"), nb::arg("refs"), nb::arg("thresholds"), nb::arg("alphabet")="aa", nb::arg("matrix")=std::nullopt, nb::arg("gap_open")=1, nb::arg("gap_extend")=1, nb::arg("prior")=std::vector<int32_t>{}, nb::arg("prior_width")=0, nb::arg("threads")=0, nb::arg("exclude_exact")=false, nb::arg("position_weights_by_length")=std::vector<std::vector<int32_t>>{}, nb::arg("query_group_ids")=std::vector<int32_t>{}, nb::arg("reference_group_ids")=std::vector<int32_t>{}, nb::arg("group_distances")=std::vector<std::vector<int32_t>>{}, nb::arg("query_position_weights")=std::vector<std::vector<int32_t>>{}, nb::arg("reference_position_weights")=std::vector<std::vector<int32_t>>{}, nb::arg("feature_offsets")=std::nullopt, nb::arg("query_partition_ids")=std::vector<int32_t>{}, nb::arg("reference_partition_ids")=std::vector<int32_t>{}, "Streaming component/full ball counts and minimum full score within the component ball, GIL released.");
 
     m.def("gapblock_ball_batch", [](const std::vector<std::string>& queries, const std::vector<std::string>& refs, const std::vector<int32_t>& thresholds, const std::string& alphabet, const std::optional<SubstitutionMatrix>& matrix, int32_t go, int32_t ge, const std::vector<int32_t>& prior, uint32_t width, int threads, bool exclude_exact, const std::vector<std::vector<int32_t>>& weights, const std::vector<int32_t>& query_groups, const std::vector<int32_t>& reference_groups, const std::vector<std::vector<int32_t>>& group_distances, const std::vector<std::vector<int32_t>>& query_weights, const std::vector<std::vector<int32_t>>& reference_weights, const std::optional<PairedFeatureOffsets>& feature_offsets) {
         const auto alph = parse_alphabet(alphabet);

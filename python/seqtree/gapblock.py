@@ -745,24 +745,34 @@ def group_audit_batch(queries, refs, thresholds, matrix=None, gap_open=None, gap
                gap_prior=None, alphabet="aa", threads=0, exclude_exact=False,
                position_weights_by_length=None,
                query_group_ids=None, reference_group_ids=None, group_distances=None,
-               query_position_weights=None, reference_position_weights=None, feature_offsets=None):
+               query_position_weights=None, reference_position_weights=None, feature_offsets=None,
+               query_partition_ids=None, reference_partition_ids=None):
     """Stream component-ball count, full-score count and bounded nearest in one batch.
 
     Geometry/offset options match ball_batch. Component excludes the nonnegative
     group offset; full score includes it. For each query threshold, return three
     lists: component count, full count and minimum full score among component hits.
     Empty component balls have nearest=-1. Duplicate references count separately;
-    full encoded exact puncturing is identical. O(Q) output; no sparse hit objects.
+    full encoded exact puncturing is identical. Optional nonnegative partition IDs
+    restrict each query to references with the same ID. Both arrays are required;
+    unmatched partitions return zero counts and nearest=-1. Partition restriction
+    precedes scoring and is independent of additive group/feature distances. O(Q) output; no sparse hit objects.
     """
     q, r = list(queries), list(refs)
     thresholds = [_batch_integer(v, "threshold", -(1 << 31)) for v in thresholds]
     if len(thresholds) != len(q):
         raise ValueError("group audit thresholds must have one value per query")
+    if (query_partition_ids is None) != (reference_partition_ids is None):
+        raise ValueError("both query and reference partition IDs are required")
+    qp = [] if query_partition_ids is None else [_batch_integer(v, "query partition ID") for v in query_partition_ids]
+    rp = [] if reference_partition_ids is None else [_batch_integer(v, "reference partition ID") for v in reference_partition_ids]
+    if query_partition_ids is not None and (len(qp) != len(q) or len(rp) != len(r)):
+        raise ValueError("partition IDs must cover every query and reference")
     go, ge, cube, width, threads = _batch_options((q, r), matrix, gap_open, gap_extend, gap_prior, threads)
     return _gapblock_group_audit_batch(q, r, thresholds, alphabet, matrix, go, ge, cube, width,
                                threads, exclude_exact, _position_weights(position_weights_by_length, q, r),
                             *_group_options(query_group_ids, reference_group_ids, group_distances, q, r),
-                            *_sequence_weights(query_position_weights, reference_position_weights, position_weights_by_length, q, r), feature_offsets)
+                            *_sequence_weights(query_position_weights, reference_position_weights, position_weights_by_length, q, r), feature_offsets, qp, rp)
 
 
 def ball_batch(queries, refs, thresholds, matrix=None, gap_open=None, gap_extend=1,
@@ -950,7 +960,8 @@ def _grouped_geometry(q, r, weights, query_groups, reference_groups, distances,
         query_groups, reference_groups, distances, q, r)
     geometry.query_weights, geometry.reference_weights = _sequence_weights(
         query_weights, reference_weights, weights, q, r)
-    geometry.features = features
+    if features is not None:
+        geometry.features = features
     return geometry
 
 
@@ -963,8 +974,20 @@ def grouped_count_batch(queries, refs, thresholds, *, reference_target_offsets,
         feature_offsets=None, query_withheld_peptide_ids=None,
         reference_peptide_offsets=None, reference_peptide_ids=None, score_quantum=1,
         alignment_mode="gapblock", alignment_scale=1, trim_left=0, trim_right=0,
-        additional_feature_offsets=None):
+        additional_feature_offsets=None, return_hits=False, query_target_ids=None,
+        query_reference_ids=None, max_hit_bytes=64*1024*1024):
     """Yield bounded label curves from one immutable prepared scoring population.
+
+    ``return_hits=True`` instead yields ``chunk.hits[H,3]`` read-only uint32 rows
+    (global query index, reference index, raw distance) at thresholds[-1], ordered
+    by query then reference; counts/sizes/exact_counts are empty. Requires one
+    query_target_ids entry per query and scans only that target's CSR references.
+    Optional query_reference_ids keeps reference indices strictly greater than
+    each query's supplied index (-1 keeps all). Exact exclusion still compares
+    full sequences. Supports the single non-withheld population API only.
+    max_hit_bytes bounds actual hit output per chunk (default64MiB); exceeding it
+    raises without dropping hits. Row assembly plus final output temporarily uses
+    at most roughly three times that cap, excluding inputs and worker DP scratch.
 
     ``alignment_mode`` defaults to gapblock. Global/local reuse the existing affine
     similarity recurrence and require a raw similarity matrix. For trimmed sequences
@@ -997,7 +1020,7 @@ def grouped_count_batch(queries, refs, thresholds, *, reference_target_offsets,
     Each chunk owns read-only uint32 buffers: counts[C,1+2*T+P,K], sizes[C,1+2*T+P],
     exact_counts[C,T], with start/stop query offsets. numpy.asarray is zero-copy;
     no NumPy import/dependency is required. Exact counts retain raw multiplicity;
-    exclude_exact punctures every curve and population size by full sequence identity.
+    exclude_exact masks hit curves by full sequence identity; model population sizes remain fixed.
     Optional query_withheld_peptide_ids is one ID/query (-1 means none) and
     requires full reference_peptide_offsets/reference_peptide_ids CSR. Each sorted
     unique row includes all raw peptide labels, including sparse/unselected IDs in
@@ -1018,6 +1041,15 @@ def grouped_count_batch(queries, refs, thresholds, *, reference_target_offsets,
     go, ge, cube, width, threads = _batch_options((q, r), matrix, gap_open, gap_extend, gap_prior, threads)
     geometry = _grouped_geometry(q, r, position_weights_by_length, query_group_ids,
         reference_group_ids, group_distances, query_position_weights, reference_position_weights, feature_offsets, score_quantum)
+    if return_hits or query_target_ids is not None or query_reference_ids is not None:
+        if not hasattr(geometry, "return_hits"):
+            raise RuntimeError("sparse hits require native return_hits support")
+        geometry.return_hits = bool(return_hits)
+        geometry.max_hit_bytes = _batch_integer(max_hit_bytes, "max_hit_bytes", 12)
+        if query_target_ids is not None:
+            geometry.query_target_ids = [_batch_integer(x, "query target ID", 0) for x in query_target_ids]
+        if query_reference_ids is not None:
+            geometry.query_reference_ids = [_batch_integer(x, "query reference ID", -1) for x in query_reference_ids]
     _additional_geometry(geometry, additional_feature_offsets)
     _alignment_options(geometry, q, r, alignment_mode, alignment_scale, trim_left, trim_right,
         matrix, gap_prior, position_weights_by_length, query_position_weights, reference_position_weights)
