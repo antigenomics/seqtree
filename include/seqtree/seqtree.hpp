@@ -2,6 +2,7 @@
 #include "seqtree/types.hpp"
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -13,6 +14,7 @@ namespace seqtree {
 
 struct Trie;     // internal, src/trie.hpp
 struct Scratch;  // internal, src/engines.hpp
+struct CountBuffer;
 
 // Maps characters to small integer codes (<=32) and back. Case-insensitive on
 // input. Invalid characters encode to kInvalid.
@@ -133,6 +135,12 @@ public:
     // threads <= 0 => available CPU budget. Results aligned with input order.
     std::vector<std::vector<Hit>> search_batch(const std::vector<std::string>& queries,
                                                const SearchParams&, int threads = 0) const;
+
+    // One pool, serialized owned primitive blocks; each query is emitted completely.
+    // Columns: query index, ref_id, score, n_subs, n_ins, n_dels (all nonnegative).
+    void search_batch_consume(const std::vector<std::string>& queries, const SearchParams&,
+        const std::function<void(size_t, size_t, CountBuffer&&)>& consume,
+        int threads = 0, size_t chunk_size = 32, size_t max_hit_bytes = 64*1024*1024) const;
 
     // Exact edit-count bins 0..max_total_edits; one reusable hit buffer per worker.
     std::vector<std::vector<uint64_t>> edit_histogram_batch(
