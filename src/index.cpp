@@ -251,7 +251,7 @@ void Index::search_paired_batch_consume(const Index& other,
         const std::vector<std::string>& queries, const std::vector<std::string>& other_queries,
         const SearchParams& p,
         const std::function<void(size_t, size_t, CountBuffer&&, CountBuffer&&)>& consume,
-        int threads, size_t chunk_size, size_t max_hit_bytes) const {
+        int threads, size_t chunk_size, size_t max_hit_bytes, bool skip_empty) const {
     if (queries.size() != other_queries.size())
         throw std::invalid_argument("paired query populations must have equal lengths");
     if (alphabet() != other.alphabet())
@@ -280,9 +280,11 @@ void Index::search_paired_batch_consume(const Index& other,
                 for (size_t i = start; i < stop; ++i) {
                     if (cancelled.load()) return;
                     auto& hits = worker.hits[i-start];
-                    worker.searcher.search_into(queries[i], p, hits);
+                    if (skip_empty && queries[i].empty()) hits.clear();
+                    else worker.searcher.search_into(queries[i], p, hits);
                     auto& other_hits = worker.other_hits[i-start];
-                    worker.other_searcher.search_into(other_queries[i], p, other_hits);
+                    if (skip_empty && other_queries[i].empty()) other_hits.clear();
+                    else worker.other_searcher.search_into(other_queries[i], p, other_hits);
                     if (hits.size() > max_rows - rows || other_hits.size() > max_rows - rows - hits.size())
                         throw std::overflow_error("complete query hits exceed max_hit_bytes; increase the explicit buffer limit");
                     rows += hits.size() + other_hits.size();

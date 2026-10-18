@@ -147,7 +147,7 @@ public:
         const std::vector<std::string>& queries, const std::vector<std::string>& other_queries,
         const SearchParams&,
         const std::function<void(size_t, size_t, CountBuffer&&, CountBuffer&&)>& consume,
-        int threads = 0, size_t chunk_size = 32, size_t max_hit_bytes = 64*1024*1024) const;
+        int threads = 0, size_t chunk_size = 32, size_t max_hit_bytes = 64*1024*1024, bool skip_empty = false) const;
 
     // Exact edit-count bins 0..max_total_edits; one reusable hit buffer per worker.
     std::vector<std::vector<uint64_t>> edit_histogram_batch(

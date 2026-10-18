@@ -212,7 +212,7 @@ void py_search_batch_consume(const Index& idx, const std::vector<std::string>& q
 
 void py_search_paired_batch_consume(const Index& idx, const Index& other,
         const std::vector<std::string>& queries, const std::vector<std::string>& other_queries,
-        const PyParams& pp, nb::object consume, int threads, size_t chunk_size, size_t max_hit_bytes) {
+        const PyParams& pp, nb::object consume, int threads, size_t chunk_size, size_t max_hit_bytes, bool skip_empty) {
     if (!PyCallable_Check(consume.ptr())) throw nb::value_error("consumer must be callable");
     // A callback may mutate the original Python parameters; native workers read
     // only these owned matrix/positional snapshots until the whole pool joins.
@@ -227,7 +227,7 @@ void py_search_paired_batch_consume(const Index& idx, const Index& other,
                 [&](size_t start, size_t stop, CountBuffer&& buffer, CountBuffer&& other_buffer) {
                     nb::gil_scoped_acquire acquire;
                     consume(start, stop, nb::cast(std::move(buffer)), nb::cast(std::move(other_buffer)));
-                }, threads, chunk_size, max_hit_bytes);
+                }, threads, chunk_size, max_hit_bytes, skip_empty);
         } catch (...) { error = std::current_exception(); }
     }
     // Restore the caller's GIL before Python exceptions are restored/destroyed.
@@ -778,11 +778,12 @@ NB_MODULE(_core, m) {
         .def("search_paired_batch_consume", &py_search_paired_batch_consume,
              nb::arg("other"), nb::arg("queries"), nb::arg("other_queries"),
              nb::arg("params"), nb::arg("consume"), nb::arg("threads") = 0,
-             nb::arg("chunk_size") = 32, nb::arg("max_hit_bytes") = 64*1024*1024,
+             nb::arg("chunk_size") = 32, nb::arg("max_hit_bytes") = 64*1024*1024, nb::arg("skip_empty") = false,
              "One pool with two Searchers; consume(start, stop, owned_buffer, other_owned_buffer). "
              "Both six-column buffers cover the same complete query block. Combined output "
              "bytes are bounded by max_hit_bytes; block order may vary. Same-alphabet indexes "
-             "and equal-length query populations required. Parameters are snapshotted.")
+             "and equal-length query populations required. Parameters are snapshotted. "
+             "skip_empty=True emits no hits for empty query axes; other axes remain searched.")
         .def("edit_histogram_batch", &py_edit_histogram_batch,
              nb::arg("queries"), nb::arg("params"), nb::arg("threads") = 0,
              nb::arg("exclude_exact") = false, nb::arg("max_indels") = -1,

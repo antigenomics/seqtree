@@ -81,3 +81,18 @@ print(json.dumps({'hits':count[0],'peak':resource.getrusage(resource.RUSAGE_SELF
         env=os.environ,text=True,timeout=30)) for n in (200,20000)]
     assert small['hits']==400000 and large['hits']==40000000
     assert large['peak']<=small['peak']+32*1024**2
+
+
+def test_skip_empty_preserves_other_axis_and_original_indices():
+    a=Index.build(['A'],alphabet='nt');b=Index.build(['C'],alphabet='nt')
+    p=SearchParams(max_ins=1,max_total_edits=1)
+    qa=['A','','A',''];qb=['','C','C',''];blocks=[]
+    a.search_paired_batch_consume(b,qa,qb,p,lambda *x:blocks.append(x),threads=2,chunk_size=1,skip_empty=True)
+    observed=[[],[]]
+    for start,stop,x,y in blocks:
+        for axis,buffer in enumerate((x,y)):
+            observed[axis].extend(row[0] for row in memoryview(buffer).tolist())
+    assert sorted(observed[0])==[0,2] and sorted(observed[1])==[1,2]
+    legacy=[]
+    a.search_paired_batch_consume(b,[''],[''],p,lambda *x:legacy.append(x))
+    assert memoryview(legacy[0][2]).shape[0]==memoryview(legacy[0][3]).shape[0]==1
