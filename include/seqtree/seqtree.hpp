@@ -142,6 +142,13 @@ public:
         const std::function<void(size_t, size_t, CountBuffer&&)>& consume,
         int threads = 0, size_t chunk_size = 32, size_t max_hit_bytes = 64*1024*1024) const;
 
+    // Coordinate two indexes in one pool; both owned buffers cover the same queries.
+    void search_paired_batch_consume(const Index& other,
+        const std::vector<std::string>& queries, const std::vector<std::string>& other_queries,
+        const SearchParams&,
+        const std::function<void(size_t, size_t, CountBuffer&&, CountBuffer&&)>& consume,
+        int threads = 0, size_t chunk_size = 32, size_t max_hit_bytes = 64*1024*1024) const;
+
     // Exact edit-count bins 0..max_total_edits; one reusable hit buffer per worker.
     std::vector<std::vector<uint64_t>> edit_histogram_batch(
         const std::vector<std::string>& queries, const SearchParams&,

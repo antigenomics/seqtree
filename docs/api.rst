@@ -60,6 +60,15 @@ native hit scratch. Consume and release buffers to bound total memory; buffers
 explicitly retained by a callback remain owned. Parameters and matrices are
 snapshotted, callbacks are serialized, and workers join before errors propagate.
 
+For coordinated searches over two same-alphabet indexes, use
+``Index.search_paired_batch_consume(other, queries, other_queries, params, consume, threads=0, chunk_size=32, max_hit_bytes=64*1024**2)``.
+Both equal-length query populations run in one pool with two reusable Searchers
+per worker. Serialized callbacks receive ``(start, stop, owned_buffer,
+other_owned_buffer)`` for the same complete query block. The byte ceiling applies
+to the sum of both output buffers; ownership, snapshots and error cleanup follow
+the single-index consumer contract. This API provides no pairing or score fusion;
+the caller owns those interpretations.
+
 Floating alignment target reductions
 ------------------------------------
 
