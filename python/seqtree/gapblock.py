@@ -499,19 +499,22 @@ def gapblock_score(
     return best + gap_cost(d, gap_open, gap_extend), best_i
 
 
-def _prior_cube(prior: GapPrior, width: int) -> list[int]:
+def _prior_cube(prior: GapPrior, width: int, lengths=None) -> list[int]:
     """Flatten ``prior`` to ``[m][d][i]`` with stride ``width + 1``, for the C++ kernel.
 
     Only reachable cells are filled: ``d >= 1`` (the prior never applies to equal lengths) and
     ``i <= m - d`` (the block start indexes the shorter sequence). The rest stay zero and are
-    never read.
+    never read. Input lengths restrict callback evaluation to possible full-length pairs;
+    the dense native layout is unchanged. None retains the full-width internal oracle.
     """
     w1 = width + 1
     cube = [0] * (w1 * w1 * w1)
-    for m in range(w1):
-        for d in range(1, m + 1):
+    lengths = range(w1) if lengths is None else sorted(set(lengths))
+    for row, m in enumerate(lengths):
+        for n in reversed(lengths[:row]):
+            d = m - n
             base = (m * w1 + d) * w1
-            for i in range(m - d + 1):
+            for i in range(n + 1):
                 v = int(prior(i, d, m))
                 if v < 0:
                     raise ValueError(f"gap_prior({i}, {d}, {m}) = {v} is negative")
@@ -561,7 +564,8 @@ def score_matrix(
             leaving this at 1 with a real matrix makes gaps ~14x cheaper than substitutions.
         gap_extend: Cost per additional gap column.
         gap_prior: :data:`GapPrior`, materialized once into a lookup cube and then read from C++.
-            ``None`` lets the score alone choose the block position.
+            Evaluated only for unequal input lengths and valid block starts; it must be
+            a pure nonnegative function. ``None`` lets the score alone choose the block position.
         alphabet: ``"aa"``, ``"nt"``, or ``"iupac"``. Symbols outside it raise.
         threads: Worker threads; ``0`` means one per core. Rows are disjoint, so this scales.
 
@@ -586,8 +590,9 @@ def score_matrix(
         gap_open = _default_gap_open(matrix)
     if gap_open < 0 or gap_extend < 0:
         raise ValueError("gap_open and gap_extend must be >= 0")
-    width = max((len(s) for s in q + r), default=0)
-    cube = _prior_cube(gap_prior, width) if gap_prior is not None else []
+    lengths = {len(s) for s in q + r}
+    width = max(lengths, default=0)
+    cube = _prior_cube(gap_prior, width, lengths) if gap_prior is not None else []
     return _gapblock_matrix(q, r, alphabet, matrix, gap_open, gap_extend, cube, width, threads,
                             _position_weights(position_weights_by_length, q, r),
                             *_group_options(query_group_ids, reference_group_ids, group_distances, q, r),
@@ -611,8 +616,9 @@ def _batch_options(axes, matrix, gap_open, gap_extend, gap_prior, threads):
     go = _batch_integer(_default_gap_open(matrix) if gap_open is None else gap_open, "gap_open")
     ge = _batch_integer(gap_extend, "gap_extend")
     threads = _batch_integer(threads, "threads")
-    width = max((len(s) for axis in axes for s in axis), default=0)
-    cube = _prior_cube(gap_prior, width) if gap_prior is not None else []
+    lengths = {len(s) for axis in axes for s in axis}
+    width = max(lengths, default=0)
+    cube = _prior_cube(gap_prior, width, lengths) if gap_prior is not None else []
     return go, ge, cube, width, threads
 
 
@@ -915,11 +921,11 @@ def _additional_geometry(geometry, features):
         geometry.additional_features = terms
 
 
-def _lane_prior(geometry, prior, width):
+def _lane_prior(geometry, prior, width, queries, refs):
     if prior is not None:
         if not hasattr(geometry, "gap_prior"):
             raise RuntimeError("lane priors require native grouped gap_prior support")
-        geometry.gap_prior = _prior_cube(prior, width)
+        geometry.gap_prior = _prior_cube(prior, width, {len(s) for s in queries + refs})
 
 
 def _alignment_options(geometry, q, r, mode, scale, left, right, matrix, prior,
@@ -1099,8 +1105,8 @@ def grouped_paired_sum_count_batch(queries_a, queries_b, refs_a, refs_b, thresho
         reference_position_weights_beta, feature_offsets_beta, score_quantum_beta)
     _additional_geometry(alpha, additional_feature_offsets_alpha)
     _additional_geometry(beta, additional_feature_offsets_beta)
-    _lane_prior(alpha, gap_prior_alpha, width)
-    _lane_prior(beta, gap_prior_beta, width)
+    _lane_prior(alpha, gap_prior_alpha, width, qa, ra)
+    _lane_prior(beta, gap_prior_beta, width, qb, rb)
     _alignment_options(alpha, qa, ra, alignment_mode, alignment_scale, trim_left, trim_right,
         matrix, gap_prior if gap_prior_alpha is None else gap_prior_alpha, position_weights_by_length_alpha, query_position_weights_alpha,
         reference_position_weights_alpha)

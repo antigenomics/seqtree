@@ -3,6 +3,15 @@
 All notable changes to `seqtree`. Dates are release dates. From 1.0.0 the project follows semantic
 versioning: breaking changes need a **major** bump.
 
+## Unreleased
+
+### Changed
+
+- Gap-prior lookup preparation evaluates pure callbacks only for input lengths,
+  avoiding cubic callback work for absent lengths while preserving exact scores,
+  count reductions and lane-specific priors. Equal-length/empty axes do not
+  evaluate unused priors. The dense native lookup layout is unchanged.
+
 ## [1.3.0] — 2026-10-19
 
 ### Added
