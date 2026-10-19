@@ -47,6 +47,30 @@ and exact constrained dynamic programming; other profiles use the generic search
 worker. Existing eligible count paths are retained when the bound is redundant.
 Explicit ``seqtrie`` remains unsupported.
 
+For full hits with bounded output, use
+``Index.search_batch_consume(queries, params, consume, threads=0, chunk_size=32, max_hit_bytes=64*1024**2)``.
+It searches the complete population with one native pool. Serialized callbacks,
+which may run on native worker threads,
+receive ``(start, stop, owned_buffer)`` with read-only uint32 columns
+``query_index, ref_id, score, n_subs, n_ins, n_dels``. Every query is complete;
+block order may vary across threads, while hit order within each query is unchanged.
+Each output buffer obeys the explicit byte ceiling. An oversized single query
+raises rather than truncating its hits. Workers also retain the current block's
+native hit scratch. Consume and release buffers to bound total memory; buffers
+explicitly retained by a callback remain owned. Parameters and matrices are
+snapshotted, callbacks are serialized, and workers join before errors propagate.
+
+For coordinated searches over two same-alphabet indexes, use
+``Index.search_paired_batch_consume(other, queries, other_queries, params, consume, threads=0, chunk_size=32, max_hit_bytes=64*1024**2, skip_empty=False)``.
+Both equal-length query populations run in one pool with two reusable Searchers
+per worker. Serialized callbacks receive ``(start, stop, owned_buffer,
+other_owned_buffer)`` for the same complete query block. The byte ceiling applies
+to the sum of both output buffers; ownership, snapshots and error cleanup follow
+the single-index consumer contract. This API provides no pairing or score fusion;
+the caller owns those interpretations. ``skip_empty=True`` emits no hits for an
+empty query axis while retaining searches on its partner; the default preserves
+ordinary empty-string search semantics.
+
 Floating alignment target reductions
 ------------------------------------
 

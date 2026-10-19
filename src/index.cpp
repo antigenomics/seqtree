@@ -5,9 +5,12 @@
 #include "count_unit.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <cstring>
 #include <fstream>
+#include <iterator>
 #include <limits>
+#include <mutex>
 #include <stdexcept>
 #include <vector>
 
@@ -186,6 +189,131 @@ std::vector<std::vector<Hit>> Index::search_batch(const std::vector<std::string>
     parallel_for(n, threads, [&] { return Searcher(*this); },
                  [&](size_t i, Searcher& s) { s.search_into(queries[i], p, results[i]); });
     return results;
+}
+
+void Index::search_batch_consume(const std::vector<std::string>& queries,
+        const SearchParams& p,
+        const std::function<void(size_t, size_t, CountBuffer&&)>& consume,
+        int threads, size_t chunk_size, size_t max_hit_bytes) const {
+    constexpr size_t columns = 6;
+    const size_t max_rows = max_hit_bytes / (columns * sizeof(uint32_t));
+    if (!chunk_size || !max_rows || !consume)
+        throw std::invalid_argument("positive chunk_size/max_hit_bytes and a consumer required");
+    if (queries.size() > uint64_t(std::numeric_limits<uint32_t>::max()) + 1)
+        throw std::overflow_error("query indices exceed the uint32 output buffer");
+    // Bound both the primitive output and the per-worker Hit vectors. A single
+    // query may still exceed the explicit output cap; detect that without truncation.
+    chunk_size = std::min(chunk_size, std::max(size_t(1), max_rows / std::max(size_t(1), size_t(size()))));
+    const size_t blocks = queries.size() / chunk_size + (queries.size() % chunk_size != 0);
+    std::atomic<bool> cancelled{false};
+    std::mutex callback_mutex;
+    struct Local { Searcher searcher; std::vector<std::vector<Hit>> hits; };
+    parallel_for(blocks, threads,
+        [&] { return Local{Searcher(*this), std::vector<std::vector<Hit>>(chunk_size)}; },
+        [&](size_t block, Local& worker) {
+            if (cancelled.load()) return;
+            try {
+                const size_t start = block * chunk_size;
+                const size_t stop = start + std::min(chunk_size, queries.size() - start);
+                size_t rows = 0;
+                for (size_t i = start; i < stop; ++i) {
+                    if (cancelled.load()) return;
+                    auto& hits = worker.hits[i-start];
+                    worker.searcher.search_into(queries[i], p, hits);
+                    if (hits.size() > max_rows - rows)
+                        throw std::overflow_error("complete query hits exceed max_hit_bytes; increase the explicit buffer limit");
+                    rows += hits.size();
+                }
+                CountBuffer buffer;
+                buffer.shape = {rows, columns};
+                buffer.data.resize(rows * columns);
+                size_t offset = 0;
+                for (size_t i = start; i < stop; ++i)
+                    for (const auto& hit : worker.hits[i-start]) {
+                        const uint32_t values[] = {uint32_t(i), hit.ref_id, uint32_t(hit.score),
+                            hit.n_subs, hit.n_ins, hit.n_dels};
+                        std::copy(std::begin(values), std::end(values), buffer.data.begin() + offset);
+                        offset += columns;
+                    }
+                std::lock_guard<std::mutex> lock(callback_mutex);
+                if (!cancelled.load()) {
+                    try { consume(start, stop, std::move(buffer)); }
+                    catch (...) { cancelled.store(true); throw; }
+                }
+            } catch (...) {
+                cancelled.store(true);
+                throw;
+            }
+        });
+}
+
+void Index::search_paired_batch_consume(const Index& other,
+        const std::vector<std::string>& queries, const std::vector<std::string>& other_queries,
+        const SearchParams& p,
+        const std::function<void(size_t, size_t, CountBuffer&&, CountBuffer&&)>& consume,
+        int threads, size_t chunk_size, size_t max_hit_bytes, bool skip_empty) const {
+    if (queries.size() != other_queries.size())
+        throw std::invalid_argument("paired query populations must have equal lengths");
+    if (alphabet() != other.alphabet())
+        throw std::invalid_argument("paired indexes must use the same alphabet");
+    constexpr size_t columns = 6;
+    const size_t max_rows = max_hit_bytes / (columns * sizeof(uint32_t));
+    if (!chunk_size || !max_rows || !consume)
+        throw std::invalid_argument("positive chunk_size/max_hit_bytes and a consumer required");
+    if (queries.size() > uint64_t(std::numeric_limits<uint32_t>::max()) + 1)
+        throw std::overflow_error("query indices exceed the uint32 output buffer");
+    // Bound both the primitive output and the per-worker Hit vectors. A single
+    // query may still exceed the explicit output cap; detect that without truncation.
+    chunk_size = std::min(chunk_size, std::max(size_t(1), max_rows / std::max(size_t(1), size_t(size()) + size_t(other.size()))));
+    const size_t blocks = queries.size() / chunk_size + (queries.size() % chunk_size != 0);
+    std::atomic<bool> cancelled{false};
+    std::mutex callback_mutex;
+    struct Local { Searcher searcher, other_searcher; std::vector<std::vector<Hit>> hits, other_hits; };
+    parallel_for(blocks, threads,
+        [&] { return Local{Searcher(*this), Searcher(other), std::vector<std::vector<Hit>>(chunk_size), std::vector<std::vector<Hit>>(chunk_size)}; },
+        [&](size_t block, Local& worker) {
+            if (cancelled.load()) return;
+            try {
+                const size_t start = block * chunk_size;
+                const size_t stop = start + std::min(chunk_size, queries.size() - start);
+                size_t rows = 0;
+                for (size_t i = start; i < stop; ++i) {
+                    if (cancelled.load()) return;
+                    auto& hits = worker.hits[i-start];
+                    if (skip_empty && queries[i].empty()) hits.clear();
+                    else worker.searcher.search_into(queries[i], p, hits);
+                    auto& other_hits = worker.other_hits[i-start];
+                    if (skip_empty && other_queries[i].empty()) other_hits.clear();
+                    else worker.other_searcher.search_into(other_queries[i], p, other_hits);
+                    if (hits.size() > max_rows - rows || other_hits.size() > max_rows - rows - hits.size())
+                        throw std::overflow_error("complete query hits exceed max_hit_bytes; increase the explicit buffer limit");
+                    rows += hits.size() + other_hits.size();
+                }
+                auto pack = [&](const auto& groups) {
+                    CountBuffer buffer;
+                    size_t count = 0;
+                    for (size_t i = start; i < stop; ++i) count += groups[i-start].size();
+                    buffer.shape = {count, columns};
+                    buffer.data.reserve(count * columns);
+                    for (size_t i = start; i < stop; ++i)
+                        for (const auto& hit : groups[i-start]) {
+                            const uint32_t values[] = {uint32_t(i), hit.ref_id, uint32_t(hit.score),
+                                hit.n_subs, hit.n_ins, hit.n_dels};
+                            buffer.data.insert(buffer.data.end(), std::begin(values), std::end(values));
+                        }
+                    return buffer;
+                };
+                auto buffer = pack(worker.hits), other_buffer = pack(worker.other_hits);
+                std::lock_guard<std::mutex> lock(callback_mutex);
+                if (!cancelled.load()) {
+                    try { consume(start, stop, std::move(buffer), std::move(other_buffer)); }
+                    catch (...) { cancelled.store(true); throw; }
+                }
+            } catch (...) {
+                cancelled.store(true);
+                throw;
+            }
+        });
 }
 
 std::vector<std::vector<uint64_t>> Index::edit_histogram_batch(

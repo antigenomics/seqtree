@@ -3,6 +3,15 @@
 All notable changes to `seqtree`. Dates are release dates. From 1.0.0 the project follows semantic
 versioning: breaking changes need a **major** bump.
 
+## [1.3.0] — 2026-10-19
+
+### Added
+
+- Bounded complete-query hit consumers for single and coordinated two-index
+  searches, with owned numeric buffers, explicit byte budgets and worker cleanup.
+- Optional empty query axes in coordinated search retain original query offsets
+  and supported marginal evidence without creating a query for the missing axis.
+
 ## [1.2.0] — 2026-10-17
 
 ### Fixed
