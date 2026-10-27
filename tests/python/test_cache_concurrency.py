@@ -169,18 +169,10 @@ def test_a_corrupt_cache_is_rebuilt_rather_than_raised(tmp_path):
     assert len(seqtree.Index.load(str(cache))) == n  # and the cache was rewritten in place
 
 
-def test_the_lock_is_optional_and_correctness_does_not_depend_on_it(monkeypatch):
-    """A bare ``pip install seqtree`` has no filelock -- it arrives only with huggingface_hub.
-
-    The lock saves redundant work; the atomic save is what makes concurrent use *correct*. If this
-    ever regresses into a hard import, a default install starts raising ImportError on first use.
-    """
+def test_the_lock_does_not_require_optional_filelock(tmp_path, monkeypatch):
+    """A base install serializes builds without importing an optional dependency."""
     import builtins
-
     from seqtree import control
-
-    assert control._build_lock("/tmp/x").__class__.__name__ in {"FileLock", "UnixFileLock",
-                                                                "WindowsFileLock", "nullcontext"}
 
     real_import = builtins.__import__
 
@@ -190,7 +182,10 @@ def test_the_lock_is_optional_and_correctness_does_not_depend_on_it(monkeypatch)
         return real_import(name, *args, **kwargs)
 
     monkeypatch.setattr(builtins, "__import__", no_filelock)
-    lock = control._build_lock("/tmp/x")
-    assert lock.__class__.__name__ == "nullcontext"
-    with lock:  # must be a usable context manager, not a stub that explodes
+    cache = str(tmp_path / "control.idx")
+    with control._build_lock(cache):
+        with pytest.raises(TimeoutError):
+            with control._build_lock(cache, timeout=0):
+                pass
+    with control._build_lock(cache, timeout=0):
         pass

@@ -178,3 +178,58 @@ def test_a_superseded_cache_is_not_served_and_is_cleaned_up(tmp_path):
     assert not legacy.exists(), "the superseded cache was left behind"
     assert ([p.name for p in tmp_path.iterdir() if p.suffix == ".sqtree"]
             == [control._cache_key("human_trb_aa", n, "aa", 0)])
+
+
+def test_control_build_lock_without_optional_filelock(tmp_path, monkeypatch):
+    import sys
+    import threading
+    import time
+    from seqtree.control import _build_lock
+
+    monkeypatch.setitem(sys.modules, "filelock", None)
+    ready = threading.Barrier(2)
+    state = {"active": 0, "peak": 0}
+    errors = []
+
+    def worker():
+        try:
+            ready.wait(timeout=5)
+            with _build_lock(str(tmp_path / "control.idx")):
+                state["active"] += 1
+                state["peak"] = max(state["peak"], state["active"])
+                time.sleep(0.1)
+                state["active"] -= 1
+        except BaseException as exc:
+            errors.append(exc)
+
+    workers = [threading.Thread(target=worker) for _ in range(2)]
+    for worker_thread in workers:
+        worker_thread.start()
+    for worker_thread in workers:
+        worker_thread.join(timeout=5)
+    assert not errors
+    assert not any(worker_thread.is_alive() for worker_thread in workers)
+    assert state["peak"] == 1
+    assert state["active"] == 0
+
+
+def test_control_lock_releases_after_failure_and_process_exit(tmp_path):
+    import subprocess
+    import sys
+    import pytest
+    from seqtree.control import _build_lock
+
+    cache = str(tmp_path / "control.idx")
+    with pytest.raises(RuntimeError, match="failed build"):
+        with _build_lock(cache):
+            raise RuntimeError("failed build")
+    with _build_lock(cache):
+        with pytest.raises(TimeoutError, match="Another control build"):
+            with _build_lock(cache, timeout=0.02):
+                pass
+    subprocess.run([sys.executable, "-c",
+                    "import os,sys; from seqtree.control import _build_lock; "
+                    "lock=_build_lock(sys.argv[1]); lock.__enter__(); os._exit(0)", cache],
+                   check=True, timeout=10)
+    with _build_lock(cache, timeout=1):
+        pass

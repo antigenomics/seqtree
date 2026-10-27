@@ -122,24 +122,53 @@ def _prune_superseded(cache_dir, name, size, keep):
                 pass
 
 
-def _build_lock(cache):
-    """An inter-process lock around build-and-save, if ``filelock`` happens to be installed.
+@contextlib.contextmanager
+def _build_lock(cache, timeout=600):
+    """Serialize cold builds without optional dependencies; process death releases the lock.
 
-    This is an *optimisation*, not the fix. ``Index.save`` writes to a temporary and renames it
-    into place, so a reader can never observe a half-written index whether or not this lock is
-    taken. What the lock buys is work: without it, a cold-cache fan-out of N workers has every
-    worker build the same 250k-clonotype index (seconds of CPU, 45 MB written) and N-1 of those
-    are thrown away. With it, one builds and the rest wait and load.
-
-    seqtree has no runtime dependencies, so ``filelock`` is used only if something else already
-    put it there -- ``huggingface_hub`` pulls it in, and that is installed whenever a control is
-    downloaded rather than read from the bundled asset.
+    Keep the guard file: deleting it could let waiters lock different inodes.
     """
-    try:
-        from filelock import FileLock
-    except ImportError:
-        return contextlib.nullcontext()
-    return FileLock(cache + ".lock", timeout=600)
+    import errno
+    import time
+
+    with open(cache + ".lock", "a+b") as handle:
+        if os.name == "nt":
+            import msvcrt
+            if handle.seek(0, 2) == 0:
+                handle.write(b"\0")
+                handle.flush()
+
+            def acquire():
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+
+            def release():
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+
+            def acquire():
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+            def release():
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+        deadline = time.monotonic() + timeout
+        while True:
+            try:
+                acquire()
+                break
+            except OSError as exc:
+                if exc.errno not in (errno.EACCES, errno.EAGAIN, errno.EDEADLK):
+                    raise
+                if time.monotonic() >= deadline:
+                    raise TimeoutError(f"Another control build owns {cache}.lock after {timeout:g}s") from exc
+                time.sleep(0.05)
+        try:
+            yield
+        finally:
+            release()
 
 
 def _load_cached(cache):

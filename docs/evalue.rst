@@ -68,9 +68,11 @@ precision bound below.
 
    That matters on *first* use in any multi-process fan-out — pytest-xdist, a Snakemake or Nextflow
    rule, a ``multiprocessing`` pool — all sharing one ``~/.cache``. Once the cache is warm it is
-   read-only and was never at risk. If ``filelock`` is installed (it arrives with
-   ``huggingface_hub``) the build is additionally serialized, so one worker builds and the rest
-   wait and load rather than all N rebuilding the same index; correctness does not depend on it.
+   read-only. Cold builds are serialized with an operating-system lock, including in a
+   base installation without ``filelock``. One worker builds and the rest wait and load.
+   Waiting is bounded to 600 seconds; an active owner causes a clear timeout. The kernel
+   releases ownership after an exception or process exit. Persistent ``.lock`` guard files
+   are intentional and must not be deleted while other processes may be waiting.
 
    A cache that is corrupt, truncated, or written by an older seqtree is silently rebuilt.
 
