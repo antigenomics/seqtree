@@ -75,7 +75,7 @@ i.i.d.-letter null with an \emph{empirical background} $\Pzero$ estimated from a
 repertoire, retain the Poisson/Gumbel limit superstructure with an explicit non-asymptotic error
 bound (Chen--Stein / Le~Cam~\cite{Arratia1990,LeCam1960}), and handle clonal over-dispersion by
 collapsing to unique clonotypes. The resulting E-value is automatically deflated for hits that the
-generation process alone explains and is large only for antigen-driven convergence. This puts the TCRNET approach---counting
+generation process alone explains while antigen-driven convergence is assessed by excess target counts over that expectation. This puts the TCRNET approach---counting
 sequence neighbours against a real-world control repertoire, first introduced by
 Ritvo~et~al.~\cite{Ritvo2018} and formalized as an annotation framework
 by~\cite{Pogorelyy2019}---on a rigorous, finite-sample footing, and we show the classical
@@ -86,6 +86,44 @@ elementary tasks that need only its combinatorial skeleton---unique-molecular-id
 barcode collapse, whose chance false-merge rate is a birthday-problem calculation, and tree
 clustering of CDR3 nucleotide reads to correct PCR and sequencing errors.
 \end{abstract}
+
+\section*{Scope and implementation status (28 October 2026)}
+This appendix specifies the control-counting framework used by seqtree 1.3.2.
+The search core is payload-agnostic and has no runtime dependencies; receptor annotation,
+reference curation and biological interpretation belong to downstream applications.
+The receptor and peptide examples below are recorded methodological benchmarks, not
+claims about the contents or performance of a current downstream release.
+Their reported measurements are retained without rerunning the analyses.
+
+The implemented estimator is \texttt{seqtree.evalue.evalue\_result}, shared by
+\texttt{evalues} and the pMHC control-counting wrapper.
+It returns the observed target and control counts, $\widehat E$, the Poisson
+any-hit probability, the enrichment tail and a flag identifying the rule-of-three fallback.
+For an empty control ball the returned $3N/M$ is an approximate upper confidence
+bound, rather than a measured mean; an empty control population yields an infinite E-value.
+Poisson tails remain conditional on the null assumptions developed below.
+Neither negative-binomial fitting nor multiple-testing correction is performed by this helper.
+
+\paragraph{Search and score contracts.}
+The default \texttt{auto} engine resolves to \texttt{seqtm}, which enforces edit caps
+as well as the penalty ceiling.
+The explicit \texttt{seqtrie} engine uses the penalty budget and ignores edit caps.
+Search penalties are minimized; the separate global/local pairwise alignment API
+maximizes signed substitution similarity and cannot be substituted for a penalty ball.
+Gap-block batch counts and balls support nonnegative positional weights in the
+longer-sequence frame; the target and control must use the same scoring rule and units.
+Batched search and native reductions should be used for query cohorts.
+
+\paragraph{Exclusion and fixed populations.}
+Ordinary annotation retains exact hits.
+Benchmark exclusion filters returned hits; it does not remove records from the index,
+refit a model, or change the reference and control population sizes $N$ and $M$.
+The legacy \texttt{evalues} helper excludes all zero-penalty hits when
+\texttt{exclude\_exact=True}; a zero-penalty ball need not equal sequence identity
+under a degenerate or masked scoring matrix.
+Other reducers can use encoded sequence identity, so callers must check the chosen API's contract.
+The distance-positive construction below describes a statistical neighbourhood choice,
+not permission to puncture or refit a reference model per query.
 
 \section{Introduction: the redundancy problem}
 
@@ -842,7 +880,7 @@ are built downstream in \texttt{vdjmatch} (TCR--antigen specificity) and \texttt
   \approx1/7$ is sequence-independent and cancels in the calibrated $\hat\pi$ (Remark~\ref{rem:thymic}).
 \end{enumerate}
 
-This is implemented in \texttt{seqtree.evalues} (with \texttt{exclude\_exact} for the punctured
+This is implemented in \texttt{seqtree.evalue.evalues} (with \texttt{exclude\_exact} for the punctured
 counts), a thin layer over batched search; the control loader \texttt{seqtree.load\_control} supplies
 a deduplicated background.
 
