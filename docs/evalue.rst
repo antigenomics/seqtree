@@ -39,6 +39,24 @@ factor :math:`Q` (:math:`\langle Q\rangle_{P_\mathrm{gen}} = 1`), giving the pos
 absolute frequencies and is a crude last-resort fallback. See the appendix remark on the selection
 factor for the full treatment.
 
+Estimator and exclusion contracts
+---------------------------------
+
+An empty control ball returns the approximate rule-of-three upper bound ``3N/M``
+with ``rule_of_three=True``, rather than a measured mean. An empty control
+population returns infinite ``E``. Poisson probabilities assume the stated null;
+the helper does not fit over-dispersion or apply multiple-testing corrections.
+
+Ordinary annotation retains exact hits. Benchmark exclusion filters hit counts
+without rebuilding the indices or changing population sizes ``N`` and ``M``.
+The legacy ``evalues`` helper retains only hits with positive score when
+``exclude_exact=True``; masked or degenerate penalties can assign zero score to
+distinct sequences. Check each reducer's contract before treating this as
+sequence-identity exclusion.
+
+The appendix retains historical methodological benchmarks; these are not current
+release benchmarks for downstream annotation applications.
+
 Usage
 -----
 

@@ -13,13 +13,14 @@
 \usepackage{unicode-math}
 \setmathfont{OldStandard-Math.otf}
 \usepackage{titlesec}
+\setlength{\emergencystretch}{2em}
 \usepackage[hidelinks]{hyperref}
 
 \linespread{1.15}
 \setlength{\parindent}{2em}
 \titleformat{\section}{\normalfont\large\scshape\bfseries}{\thesection.}{0.6em}{}
 \titleformat{\subsection}{\normalfont\scshape\bfseries}{\thesubsection.}{0.5em}{}
-\titleformat{\paragraph}[runin]{\bfseries\scshape}{}{0pt}{}[.]
+\titleformat{\paragraph}[runin]{\bfseries}{}{0pt}{}
 \titlespacing*{\paragraph}{\parindent}{0.4em}{0.6em}
 
 % theorem heads in small caps; plain statements italic, remarks/definitions upright
@@ -712,7 +713,7 @@ appendix, which defers its derivations to this document. The two agree; we do no
 \paragraph{Anchor masking.} A presented peptide factorizes $\sigma=(\sigma_A,\sigma_T)$ into
 MHC-facing anchors $A(a,L)$ (class~I $\{\mathrm{P2},\mathrm{P}\Omega\}$; class~II core
 $\{\mathrm{P1,P4,P6,P9}\}$) and TCR-facing positions $T$. Presentation fixes $\sigma_A$; recognition
-reads $\sigma_T$ --- Dolton~et~al.~\cite{Dolton2023} exhibit one HLA-A\*02:01 TCR cross-reacting with
+reads $\sigma_T$ --- Dolton~et~al.~\cite{Dolton2023} exhibit one HLA-A*02:01 TCR cross-reacting with
 three epitopes through a shared central motif, the anchors irrelevant. Masking $\mu_a(\sigma)=\sigma_T$
 gives the TCR-facing ball
 $B^T_\theta(q)=\{\sigma:\sigma_A\in\mathrm{motif}(a),\ s_T(q_T,\sigma_T)\le\theta\}$, with $s_T$
@@ -845,7 +846,7 @@ none of the panel'' rather than ``binds exactly one.'' $E_{\mathrm{glob}}$ is th
 \subsection{Implementation and limitations}
 Implemented in \texttt{seqtree.pmhc} (anchor-masked TCR-facing k-mer homology via the C++
 \texttt{KmerIndex} seed-and-gather; \texttt{find\_mimics}; \texttt{assign\_allele}) and
-\texttt{seqtree.pmhc\_evalue}; the positive control is the recovery of the A\*02:01 trio of
+\texttt{seqtree.pmhc\_evalue}; the positive control is the recovery of the A*02:01 trio of
 \cite{Dolton2023} as mutual TCR-facing homologs. Anchor positions are parametrized (presets per
 class, overridable); class-II homology is register-agnostic (all-window k-mers), while the reverse
 allele-guessing problem uses the register trick. Alternative CDR3 build strategies, e.g.\ the
