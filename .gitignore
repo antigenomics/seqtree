@@ -25,6 +25,7 @@ tmp/
 /CLAUDE.md
 /ROADMAP.md
 /SOURCES.md
-/skills/
+/skills/*
+!/skills/seqtree/
 /add_bindings.py
 /add_native.py

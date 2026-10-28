@@ -268,3 +268,8 @@ with separate alignment-selection and final scoring coefficients.
 insertion/deletion cap; its default preserves previous behavior. See the
 [API reference](https://antigenomics.github.io/seqtree/api.html) for array contracts
 and tie, count, exclusion and unsupported-value semantics.
+
+## Agent skill
+
+The public [seqtree skill](skills/seqtree/SKILL.md) guides use of the C++20 library
+and Python bindings for sequence search, alignment, distances, and batch operations.
