@@ -10,6 +10,12 @@ Fast fuzzy search over biological sequences (amino-acid or nucleotide), as a C++
 core with a minimal Python binding. Build an immutable index once, then search
 single queries or massive batches in parallel.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/antigenomics/seqtree/master/assets/workflow-dark.svg">
+  <source srcset="https://raw.githubusercontent.com/antigenomics/seqtree/master/assets/workflow-light.svg">
+  <img alt="seqtree workflow: inputs, batched processing and outputs. Schematic illustrations." src="https://raw.githubusercontent.com/antigenomics/seqtree/master/assets/workflow.png" width="100%">
+</picture>
+
 ## Install
 
 ```fish
@@ -31,29 +37,12 @@ p = seqtree.SearchParams(max_subs=2, engine="seqtm")
 for hit in idx.search("CASSLAPGATNEKLFF", p):
     print(hit.ref_id, hit.score, hit.n_subs)
 
-# parallel batch (releases the GIL)
-results = idx.search_batch(queries, p, threads=0)   # 0 = automatic, up to 16 allocated CPUs
-
-# matrix-weighted budget. Name seqtrie -- engine="auto" always means seqtm.
-# gap_open must follow the matrix: 2 * blosum62.scale() == 28, not the default 1.
-pm = seqtree.SearchParams(matrix="blosum62", max_penalty=12, engine="seqtrie", gap_open=28)
-top = idx.search_top("CASSLAPGATNEKLFF", pm, k=5)
-
-# alignment on demand
-aln = idx.align(0, "CASSLELGATNEKLFF", p)
-print(aln.aligned_query, aln.aligned_ref, aln.ops)
-
-# batch-vs-batch (auto-indexes the larger set)
-pairs = seqtree.pairwise_batch(query_set, db_set, p, alphabet="aa")
-
-# a short query against a long TEXT (a proteome), one index for every query length
-tix = seqtree.TextIndex.build(proteome_records, alphabet="aa", k=4)
-res = tix.search_batch(peptides, max_subs=2, threads=0)
-for hit in res[0]:
-    print(hit.ref_id, hit.offset, hit.n_subs, hit.mismatches)
+# Batch search uses the automatic budget (up to 16 allocated CPUs).
+queries = ["CASSLAPGATNEKLFF", "CASSLELGATNEKLFF"]
+results = idx.search_batch(queries, p)
 ```
 
-That is the whole core loop. Significance, gap blocks, alignment and distances are in
+Significance, gap blocks, alignment and distances are in
 [More examples](#more-examples) below, and the
 [docs](https://antigenomics.github.io/seqtree/) explain the why.
 
