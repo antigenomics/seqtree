@@ -5,6 +5,8 @@ versioning: breaking changes need a **major** bump.
 
 ## Unreleased
 
+## 1.3.3
+
 - Cap automatic native CPU budgets at 16 allocated CPUs; preserve larger explicit
   requests within the allocation and serial inner kernels in sample workers.
 
