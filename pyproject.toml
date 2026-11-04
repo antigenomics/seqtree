@@ -40,6 +40,7 @@ wheel.packages = ["python/seqtree"]
 cmake.build-type = "Release"
 # Keep the sdist lean: ship only what builds the package. Anchor with a leading "/".
 sdist.exclude = [
+    "/attic/",
     "/bench", "/tests", "/docs", "/.github", "/setup.sh", "/build", "/appendix", "/examples",
     # Local agent config: machine-specific absolute paths and unrelated repo names.
     "/.claude", "/CLAUDE.md", "/AGENTS.md", "/ROADMAP.md", "/SOURCES.md", "/skills",

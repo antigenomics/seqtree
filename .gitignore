@@ -29,3 +29,6 @@ tmp/
 !/skills/seqtree/
 /add_bindings.py
 /add_native.py
+
+# Private retired branches, notes and scratch; never package or publish.
+/attic/
