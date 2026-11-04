@@ -24,9 +24,9 @@ operations, not domain datasets, clustering policy, or biological interpretation
 
 Read the installed signatures or the public headers for the version being used.
 Python-only convenience layers do not imply matching C++ classes.
-In a source checkout, consult [API contracts](../../docs/api.rst),
-[gap-block operations](../../docs/gapblock.rst), and
-[E-value methodology](../../docs/evalue.rst) for advanced reductions and layouts.
+In a source checkout, consult [API contracts](https://antigenomics.github.io/seqtree/api.html),
+[gap-block operations](https://antigenomics.github.io/seqtree/gapblock.html), and
+[E-value methodology](https://antigenomics.github.io/seqtree/evalue.html) for advanced reductions and layouts.
 
 ## C++ integration
 
@@ -73,7 +73,7 @@ from seqtree.pairwise import score, align
 
 index = seqtree.Index.build(["CAT", "CAR", "WST"], alphabet="aa")
 params = seqtree.SearchParams(max_subs=1, engine="seqtm")
-rows = index.search_batch(["CAT", "CAR"], params, threads=1)
+rows = index.search_batch(["CAT", "CAR"], params, threads=0)
 assert {hit.ref_id for hit in rows[0]} == {0, 1}
 
 matrix = seqtree.SubstitutionMatrix.blosum62()
