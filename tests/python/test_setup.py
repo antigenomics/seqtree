@@ -15,6 +15,10 @@ def test_setup_extras_and_install_failure(tmp_path):
     root = tmp_path / "project"
     root.mkdir()
     (root / "setup.sh").write_text((Path(__file__).resolve().parents[2] / "setup.sh").read_text())
+    unknown = subprocess.run(["sh", "setup.sh", "--unknown"], cwd=root,
+                             env=env, capture_output=True, text=True, timeout=10)
+    assert unknown.returncode == 2 and "Unknown flag: --unknown" in unknown.stderr
+    assert not (root / ".venv").exists()
     activation = root / ".venv" / "bin" / "activate"
     activation.parent.mkdir(parents=True)
     activation.write_text("")

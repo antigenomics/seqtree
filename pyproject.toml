@@ -1,5 +1,5 @@
 [build-system]
-requires = ["scikit-build-core>=0.12", "nanobind>=2.5"]
+requires = ["scikit-build-core>=0.12", "nanobind>=2.5,<3"]
 build-backend = "scikit_build_core.build"
 
 [project]
@@ -26,7 +26,7 @@ dependencies = []
 # seqtree itself has no runtime dependencies and must never import it.
 test = ["pytest>=7.4", "pytest-cov>=4.1", "biopython>=1.81"]
 bench = ["huggingface_hub"]
-docs = ["sphinx", "pydata-sphinx-theme"]
+docs = ["sphinx>=7", "pydata-sphinx-theme>=0.15"]
 control = ["huggingface_hub"]  # only needed to download controls larger than the bundled subset
 pmhc = ["huggingface_hub"]     # only needed to fetch the isalgo/pmhc_data epitope tables
 

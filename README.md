@@ -4,7 +4,7 @@
 [![Python](https://img.shields.io/pypi/pyversions/seqtree.svg)](https://pypi.org/project/seqtree/)
 [![License](https://img.shields.io/badge/license-GPLv3-green)](LICENSE)
 [![CI](https://github.com/antigenomics/seqtree/actions/workflows/ci.yml/badge.svg)](https://github.com/antigenomics/seqtree/actions/workflows/ci.yml)
-[![Docs](https://github.com/antigenomics/seqtree/actions/workflows/docs.yml/badge.svg?branch=dev)](https://antigenomics.github.io/seqtree/)
+[![Docs](https://github.com/antigenomics/seqtree/actions/workflows/docs.yml/badge.svg?branch=master)](https://antigenomics.github.io/seqtree/)
 
 Fast fuzzy search over biological sequences (amino-acid or nucleotide), as a C++
 core with a minimal Python binding. Build an immutable index once, then search
