@@ -1,11 +1,20 @@
 #!/bin/sh
 # Repo-local venv + editable install, via uv. POSIX sh -- runs under bash and zsh. Flags:
 #   --tests  also install pytest extra
-#   --bench  also install benchmark extras (huggingface_hub, psutil)
+#   --bench  also install benchmark extras (huggingface_hub)
 #
 # Needs uv (https://docs.astral.sh/uv/); `brew install uv` or the standalone installer.
 set -eu
 cd "$(dirname "$0")" || exit 1
+
+extras=""
+for arg in "$@"; do
+    case "$arg" in
+        --tests) extras="${extras}test," ;;
+        --bench) extras="${extras}bench," ;;
+        *) echo "Unknown flag: $arg" >&2; exit 2 ;;
+    esac
+done
 
 if ! command -v uv >/dev/null 2>&1; then
     echo "setup.sh needs uv -- install it with 'brew install uv' or see https://docs.astral.sh/uv/"
@@ -18,14 +27,6 @@ if [ ! -d .venv ]; then
     uv venv
 fi
 . .venv/bin/activate
-
-extras=""
-for arg in "$@"; do
-    case "$arg" in
-        --tests) extras="${extras}test," ;;
-        --bench) extras="${extras}bench," ;;
-    esac
-done
 
 if [ -n "$extras" ]; then extras="[${extras%,}]"; fi
 uv pip install -e ".$extras"

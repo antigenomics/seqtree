@@ -1,10 +1,10 @@
 [build-system]
-requires = ["scikit-build-core>=0.12", "nanobind>=2.5"]
+requires = ["scikit-build-core>=0.12", "nanobind>=2.5,<3"]
 build-backend = "scikit_build_core.build"
 
 [project]
 name = "seqtree"
-version = "1.3.2"
+version = "1.3.3"
 description = "Fast fuzzy search over biological sequences (C++ core, Python bindings)"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -26,7 +26,7 @@ dependencies = []
 # seqtree itself has no runtime dependencies and must never import it.
 test = ["pytest>=7.4", "pytest-cov>=4.1", "biopython>=1.81"]
 bench = ["huggingface_hub"]
-docs = ["sphinx", "pydata-sphinx-theme"]
+docs = ["sphinx>=7", "pydata-sphinx-theme>=0.15"]
 control = ["huggingface_hub"]  # only needed to download controls larger than the bundled subset
 pmhc = ["huggingface_hub"]     # only needed to fetch the isalgo/pmhc_data epitope tables
 
@@ -40,6 +40,7 @@ wheel.packages = ["python/seqtree"]
 cmake.build-type = "Release"
 # Keep the sdist lean: ship only what builds the package. Anchor with a leading "/".
 sdist.exclude = [
+    "/attic/",
     "/bench", "/tests", "/docs", "/.github", "/setup.sh", "/build", "/appendix", "/examples",
     # Local agent config: machine-specific absolute paths and unrelated repo names.
     "/.claude", "/CLAUDE.md", "/AGENTS.md", "/ROADMAP.md", "/SOURCES.md", "/skills",

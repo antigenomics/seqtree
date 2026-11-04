@@ -3,6 +3,18 @@
 All notable changes to `seqtree`. Dates are release dates. From 1.0.0 the project follows semantic
 versioning: breaking changes need a **major** bump.
 
+## Unreleased
+
+## 1.3.3
+
+- Cap automatic native CPU budgets at 16 allocated CPUs; preserve larger explicit
+  requests within the allocation and serial inner kernels in sample workers.
+
+- Reject unknown setup flags before creating an environment or installing packages.
+- Keep native bindings in the reviewed nanobind 2.x range.
+- Build documentation from declared extras on master/dev and pull requests;
+  deploy master only, without development builds cancelling release documentation.
+
 ## [1.3.1] — 2026-10-19
 
 ### Changed

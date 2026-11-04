@@ -67,7 +67,7 @@ inline unsigned available_cpus() {
 }
 
 // Runs body(i, local) for every i in [0, n), across nt workers pulling contiguous chunks off
-// one atomic cursor. `threads <= 0` means the detected available CPU budget.
+// one atomic cursor. `threads <= 0` selects up to 16 available CPUs; positive counts may exceed that cap.
 //
 // `make_local()` is called once per worker and its result handed to every body() that worker
 // runs -- that is how a Searcher or a scratch buffer gets allocated once per thread rather
@@ -85,7 +85,7 @@ template <class MakeLocal, class Body>
 void parallel_for(size_t n, int threads, MakeLocal make_local, Body body,
                   size_t chunk_min = 1, size_t chunk_max = 1024) {
     const unsigned available = available_cpus();
-    unsigned nt = threads > 0 ? unsigned(threads) : available;
+    unsigned nt = threads > 0 ? unsigned(threads) : std::min(available, 16u);
     if (nt > available || nt >= 1000)
         throw std::invalid_argument("worker count exceeds the available CPU budget; request fewer threads");
     if (n == 0) return;

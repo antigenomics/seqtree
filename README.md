@@ -4,7 +4,7 @@
 [![Python](https://img.shields.io/pypi/pyversions/seqtree.svg)](https://pypi.org/project/seqtree/)
 [![License](https://img.shields.io/badge/license-GPLv3-green)](LICENSE)
 [![CI](https://github.com/antigenomics/seqtree/actions/workflows/ci.yml/badge.svg)](https://github.com/antigenomics/seqtree/actions/workflows/ci.yml)
-[![Docs](https://github.com/antigenomics/seqtree/actions/workflows/docs.yml/badge.svg?branch=dev)](https://antigenomics.github.io/seqtree/)
+[![Docs](https://github.com/antigenomics/seqtree/actions/workflows/docs.yml/badge.svg?branch=master)](https://antigenomics.github.io/seqtree/)
 
 Fast fuzzy search over biological sequences (amino-acid or nucleotide), as a C++
 core with a minimal Python binding. Build an immutable index once, then search
@@ -32,7 +32,7 @@ for hit in idx.search("CASSLAPGATNEKLFF", p):
     print(hit.ref_id, hit.score, hit.n_subs)
 
 # parallel batch (releases the GIL)
-results = idx.search_batch(queries, p, threads=0)   # 0 = all cores
+results = idx.search_batch(queries, p, threads=0)   # 0 = automatic, up to 16 allocated CPUs
 
 # matrix-weighted budget. Name seqtrie -- engine="auto" always means seqtm.
 # gap_open must follow the matrix: 2 * blosum62.scale() == 28, not the default 1.
@@ -273,3 +273,7 @@ and tie, count, exclusion and unsupported-value semantics.
 
 The public [seqtree skill](skills/seqtree/SKILL.md) guides use of the C++20 library
 and Python bindings for sequence search, alignment, distances, and batch operations.
+
+CPU budgets use `threads=0` for automatic parallel work, capped at 16 allocated CPUs.
+Use `1` for serial work or a positive
+count to override the automatic cap within the scheduler/container allocation.
