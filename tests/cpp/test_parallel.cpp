@@ -67,3 +67,14 @@ TEST_CASE("parallel batches reject an excessive live worker budget") {
                                         [] { return 0; }, [](size_t, int&) {}),
                     std::invalid_argument);
 }
+
+
+TEST_CASE("automatic batches cap workers without capping the allocation") {
+    for (int requested : {0, int(seqtree::available_cpus())}) {
+        std::atomic<unsigned> factories{0};
+        seqtree::parallel_for(2048, requested, [&] { ++factories; return 0; },
+                             [](size_t, int&) {});
+        CHECK(factories == (requested ? unsigned(requested) :
+                           std::min(seqtree::available_cpus(), 16u)));
+    }
+}

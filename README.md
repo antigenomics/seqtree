@@ -32,7 +32,7 @@ for hit in idx.search("CASSLAPGATNEKLFF", p):
     print(hit.ref_id, hit.score, hit.n_subs)
 
 # parallel batch (releases the GIL)
-results = idx.search_batch(queries, p, threads=0)   # 0 = all cores
+results = idx.search_batch(queries, p, threads=0)   # 0 = automatic, up to 16 allocated CPUs
 
 # matrix-weighted budget. Name seqtrie -- engine="auto" always means seqtm.
 # gap_open must follow the matrix: 2 * blosum62.scale() == 28, not the default 1.
@@ -273,3 +273,7 @@ and tie, count, exclusion and unsupported-value semantics.
 
 The public [seqtree skill](skills/seqtree/SKILL.md) guides use of the C++20 library
 and Python bindings for sequence search, alignment, distances, and batch operations.
+
+CPU budgets use `threads=0` for automatic parallel work, capped at 16 allocated CPUs.
+Use `1` for serial work or a positive
+count to override the automatic cap within the scheduler/container allocation.
