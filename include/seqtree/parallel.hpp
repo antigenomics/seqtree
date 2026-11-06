@@ -10,7 +10,11 @@
 #include <cstdlib>
 #include <exception>
 #include <fstream>
+#include <filesystem>
+#include <sstream>
 #include <mutex>
+#include <set>
+#include <string>
 #include <stdexcept>
 #include <thread>
 #include <vector>
@@ -38,10 +42,42 @@ inline unsigned available_cpus() {
     cpu_set_t affinity;
     if (sched_getaffinity(0, sizeof(affinity), &affinity) == 0)
         count = std::min(count, unsigned(std::max(1, CPU_COUNT(&affinity))));
-    std::ifstream limits("/sys/fs/cgroup/cpu.max");
-    uint64_t quota, period;
-    if (limits >> quota >> period && period)
-        count = unsigned(std::min<uint64_t>(count, std::max<uint64_t>(1, quota / period)));
+    namespace fs = std::filesystem;
+    const fs::path root("/sys/fs/cgroup");
+    std::vector<fs::path> bases{root, root / "cpu", root / "cpu,cpuacct", root / "cpuacct,cpu"};
+    std::vector<fs::path> paths = bases;
+    std::ifstream membership("/proc/self/cgroup");
+    std::string line;
+    while (std::getline(membership, line)) {
+        const auto first = line.find(':');
+        const auto second = line.find(':', first + 1);
+        if (first == std::string::npos || second == std::string::npos) continue;
+        const auto controllers = line.substr(first + 1, second - first - 1);
+        if (!controllers.empty() && ("," + controllers + ",").find(",cpu,") == std::string::npos) continue;
+        const fs::path relative = fs::path(line.substr(second + 1)).relative_path();
+        bool safe = true;
+        for (const auto& component : relative) if (component == "..") safe = false;
+        if (!safe) continue;
+        for (const auto& base : bases) {
+            if (controllers.empty() && base != root) continue;
+            for (auto path = base / relative; path != base; path = path.parent_path())
+                paths.push_back(path);
+        }
+    }
+    for (const auto& path : paths) {
+        std::string quota_text;
+        uint64_t period = 0;
+        std::ifstream v2(path / "cpu.max");
+        if (!(v2 >> quota_text >> period)) {
+            std::ifstream v1quota(path / "cpu.cfs_quota_us"), v1period(path / "cpu.cfs_period_us");
+            if (!(v1quota >> quota_text) || !(v1period >> period)) continue;
+        }
+        if (quota_text == "max" || quota_text == "-1" || !period) continue;
+        uint64_t quota = 0;
+        std::istringstream parsed(quota_text);
+        if (parsed >> quota && quota)
+            count = unsigned(std::min<uint64_t>(count, std::max<uint64_t>(1, quota / period)));
+    }
     for (const char* name : {"SLURM_CPUS_PER_TASK", "SLURM_CPUS_ON_NODE"}) {
         if (const char* value = std::getenv(name)) {
             char* end = nullptr;
@@ -50,11 +86,6 @@ inline unsigned available_cpus() {
                 count = unsigned(std::min<unsigned long>(count, allocated));
         }
     }
-#elif defined(__APPLE__)
-    unsigned physical = count;
-    size_t size = sizeof(physical);
-    if (sysctlbyname("hw.physicalcpu", &physical, &size, nullptr, 0) == 0 && physical)
-        count = std::min(count, physical);
 #elif defined(_WIN32)
     DWORD_PTR process_mask, system_mask;
     if (GetProcessAffinityMask(GetCurrentProcess(), &process_mask, &system_mask)) {
@@ -66,8 +97,42 @@ inline unsigned available_cpus() {
     return count;
 }
 
+inline unsigned physical_cores_for_cpus(const std::vector<unsigned>& cpus,
+                                       unsigned available,
+                                       const std::string& root = "/sys/devices/system/cpu/") {
+    std::set<std::pair<int, int>> cores;
+    for (unsigned cpu : cpus) {
+        const auto path = root + "cpu" + std::to_string(cpu) + "/topology/";
+        int package, core;
+        if (!(std::ifstream(path + "physical_package_id") >> package) ||
+            !(std::ifstream(path + "core_id") >> core) || package < 0 || core < 0) return available;
+        cores.emplace(package, core);
+    }
+    return cores.empty() ? available : std::min(available, unsigned(cores.size()));
+}
+
+// Topology is separate from the logical allocation: explicit budgets may use SMT.
+inline unsigned physical_cpus() {
+    const unsigned available = available_cpus();
+#ifdef __linux__
+    cpu_set_t affinity;
+    if (sched_getaffinity(0, sizeof(affinity), &affinity) == 0) {
+        std::vector<unsigned> cpus;
+        for (int cpu = 0; cpu < CPU_SETSIZE; ++cpu)
+            if (CPU_ISSET(cpu, &affinity)) cpus.push_back(unsigned(cpu));
+        return physical_cores_for_cpus(cpus, available);
+    }
+#elif defined(__APPLE__)
+    unsigned physical = available;
+    size_t size = sizeof(physical);
+    if (sysctlbyname("hw.physicalcpu", &physical, &size, nullptr, 0) == 0 && physical)
+        return std::min(available, physical);
+#endif
+    return available;
+}
+
 // Runs body(i, local) for every i in [0, n), across nt workers pulling contiguous chunks off
-// one atomic cursor. `threads <= 0` selects up to 16 available CPUs; positive counts may exceed that cap.
+// one atomic cursor. `threads <= 0` selects available physical cores; positive counts may use logical CPUs.
 //
 // `make_local()` is called once per worker and its result handed to every body() that worker
 // runs -- that is how a Searcher or a scratch buffer gets allocated once per thread rather
@@ -85,7 +150,7 @@ template <class MakeLocal, class Body>
 void parallel_for(size_t n, int threads, MakeLocal make_local, Body body,
                   size_t chunk_min = 1, size_t chunk_max = 1024) {
     const unsigned available = available_cpus();
-    unsigned nt = threads > 0 ? unsigned(threads) : std::min(available, 16u);
+    unsigned nt = threads > 0 ? unsigned(threads) : physical_cpus();
     if (nt > available || nt >= 1000)
         throw std::invalid_argument("worker count exceeds the available CPU budget; request fewer threads");
     if (n == 0) return;

@@ -1,6 +1,7 @@
 #include "doctest.h"
 #include "seqtree/parallel.hpp"
 #include <memory>
+#include <chrono>
 #include <stdexcept>
 
 TEST_CASE("serial batches run inline and create one scratch") {
@@ -69,12 +70,29 @@ TEST_CASE("parallel batches reject an excessive live worker budget") {
 }
 
 
-TEST_CASE("automatic batches cap workers without capping the allocation") {
+TEST_CASE("automatic batches use physical cores without capping explicit allocation") {
     for (int requested : {0, int(seqtree::available_cpus())}) {
         std::atomic<unsigned> factories{0};
         seqtree::parallel_for(2048, requested, [&] { ++factories; return 0; },
                              [](size_t, int&) {});
         CHECK(factories == (requested ? unsigned(requested) :
-                           std::min(seqtree::available_cpus(), 16u)));
+                           seqtree::physical_cpus()));
     }
+}
+
+TEST_CASE("SMT topology counts only cores represented by affinity") {
+    const auto root = std::filesystem::temp_directory_path() /
+        ("seqtree-topology-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    std::vector<unsigned> cpus;
+    for (unsigned cpu = 0; cpu < 40; ++cpu) {
+        const auto path = root / ("cpu" + std::to_string(cpu)) / "topology";
+        std::filesystem::create_directories(path);
+        std::ofstream(path / "physical_package_id") << 0;
+        std::ofstream(path / "core_id") << cpu % 20;
+        cpus.push_back(cpu);
+    }
+    CHECK(seqtree::physical_cores_for_cpus(cpus, 40, root.string() + "/") == 20);
+    CHECK(seqtree::physical_cores_for_cpus({0, 1, 20, 21}, 4, root.string() + "/") == 2);
+    CHECK(seqtree::physical_cores_for_cpus(cpus, 3, root.string() + "/") == 3);
+    std::filesystem::remove_all(root);
 }

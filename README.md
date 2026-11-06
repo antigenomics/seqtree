@@ -20,7 +20,7 @@ Prebuilt wheels cover **Linux x86-64**, **macOS arm64 (Apple Silicon)**, and **W
 There are **no Intel/x86-64 macOS wheels** — Intel Macs build from source (see below), which just
 needs a C++20 compiler and CMake (pulled in automatically by the build).
 
-## Quickstart
+## Quick start
 
 ```python
 import seqtree
@@ -31,26 +31,9 @@ p = seqtree.SearchParams(max_subs=2, engine="seqtm")
 for hit in idx.search("CASSLAPGATNEKLFF", p):
     print(hit.ref_id, hit.score, hit.n_subs)
 
-# parallel batch (releases the GIL)
-results = idx.search_batch(queries, p, threads=0)   # 0 = automatic, up to 16 allocated CPUs
-
-# matrix-weighted budget. Name seqtrie -- engine="auto" always means seqtm.
-# gap_open must follow the matrix: 2 * blosum62.scale() == 28, not the default 1.
-pm = seqtree.SearchParams(matrix="blosum62", max_penalty=12, engine="seqtrie", gap_open=28)
-top = idx.search_top("CASSLAPGATNEKLFF", pm, k=5)
-
-# alignment on demand
-aln = idx.align(0, "CASSLELGATNEKLFF", p)
-print(aln.aligned_query, aln.aligned_ref, aln.ops)
-
-# batch-vs-batch (auto-indexes the larger set)
-pairs = seqtree.pairwise_batch(query_set, db_set, p, alphabet="aa")
-
-# a short query against a long TEXT (a proteome), one index for every query length
-tix = seqtree.TextIndex.build(proteome_records, alphabet="aa", k=4)
-res = tix.search_batch(peptides, max_subs=2, threads=0)
-for hit in res[0]:
-    print(hit.ref_id, hit.offset, hit.n_subs, hit.mismatches)
+# Batch search uses the automatic budget (allocated physical cores).
+queries = ["CASSLAPGATNEKLFF", "CASSLELGATNEKLFF"]
+results = idx.search_batch(queries, p)
 ```
 
 That is the whole core loop. Significance, gap blocks, alignment and distances are in
@@ -136,7 +119,7 @@ Beyond search, seqtree ships:
   C++ call (`numpy.asarray` wraps the result with no copy) — no `python-Levenshtein` or `rapidfuzz`
   dependency needed. Hamming requires equal lengths (it raises otherwise); comparison is
   case-sensitive. The same module *enumerates* a Hamming ball as well as scoring one:
-  `neighbourhood(seq, r)` lists its `19·L + 1` members, and `neighbourhood_union(seqs, r)` takes
+  `neighbourhood(seq, r=1)` lists its `19·L + 1` amino-acid members, and `neighbourhood_union(seqs, r)` takes
   the union over many centres with each distinct sequence emitted **once** — deduplicated during
   the walk, so the `Σ 19·L_i` multiset never exists. For a tight specificity group that is a 41.7%
   saving, not a rounding correction.
@@ -246,6 +229,17 @@ Figures (throughput, scaling, matrix-scoring overhead, collisions, E-value matri
 detection) and the full methodology are in the [benchmarks docs](https://antigenomics.github.io/seqtree/benchmarks.html).
 Set `RUN_BENCHMARK=1` for the large tiers.
 
+## Parallel processing
+
+CPU budgets use `threads=0` for automatic parallel work, using physical cores within the allocation.
+Use `1` for serial work or a positive
+count to select logical CPUs within the scheduler/container allocation.
+
+Automatic sizing counts distinct physical cores within the process affinity mask,
+then respects scheduler and container limits. When topology is unavailable, it
+uses the available logical CPU count. A 40-logical-CPU, 20-core node therefore
+uses up to 20 workers automatically; an explicit budget may use SMT threads.
+
 ## Development
 
 This repo follows **git-flow**:
@@ -273,7 +267,3 @@ and tie, count, exclusion and unsupported-value semantics.
 
 The public [seqtree skill](skills/seqtree/SKILL.md) guides use of the C++20 library
 and Python bindings for sequence search, alignment, distances, and batch operations.
-
-CPU budgets use `threads=0` for automatic parallel work, capped at 16 allocated CPUs.
-Use `1` for serial work or a positive
-count to override the automatic cap within the scheduler/container allocation.

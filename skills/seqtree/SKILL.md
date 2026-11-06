@@ -132,5 +132,5 @@ indices, refitting models, or changing population sizes. The legacy `evalues`
 helper excludes zero-score hits, which can include nonidentical sequences under
 masked penalties; other reducers use encoded identity. Check the specific API.
 
-Automatic native batches use at most 16 available CPUs; positive thread counts
-override this cap within the allocation.
+Automatic native batches prefer physical cores within the allocation; positive thread
+counts may use logical CPUs within that allocation.
