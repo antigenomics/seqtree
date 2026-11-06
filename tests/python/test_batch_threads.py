@@ -70,10 +70,6 @@ assert index.edit_histogram_batch(queries, params, threads=0) == [[1, 1]] * 8
 one = index.search_batch(queries, params, threads=1)
 all_available = index.search_batch(queries, params, threads=0)
 assert [[(h.ref_id, h.score) for h in row] for row in one] == [[(h.ref_id, h.score) for h in row] for row in all_available]
-try:
-    index.search_batch(queries, params, threads=2)
-except ValueError:
-    pass
-else:
-    raise AssertionError("explicit oversubscription was accepted")
+capped = index.search_batch(queries, params, threads=2)
+assert [[(h.ref_id, h.score) for h in row] for row in capped] == [[(h.ref_id, h.score) for h in row] for row in one]
 '''], check=True, timeout=30)
