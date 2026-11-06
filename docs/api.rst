@@ -8,13 +8,15 @@ Batch CPU budgets
 
 ``threads=1`` runs inline. ``threads=0`` selects the detected available CPU budget:
 Linux physical cores within affinity, visible cgroup v1/v2 quotas and SLURM allocation; macOS physical cores;
-Windows process affinity. Legacy nonpositive values also select automatic mode.
+Windows physical cores within process affinity and visible job CPU-rate limits. Legacy nonpositive values also select automatic mode.
 Positive counts bound workers; a batch launches at most its query count. A request
 above the detected allocation raises ``ValueError``; explicit counts are never clamped.
 The caller performs one share of the work: a budget of B uses B compute threads
 in total, creating only B-1 additional OS threads when there is enough work.
 Pools are joined before the call returns; use one batch rather than an outer pool
-of internally threaded searches. Hidden cgroup limits and Windows CPU-rate job limits require an explicit thread budget.
+of internally threaded searches. Hidden cgroup limits and parent Windows job limits require an explicit thread budget.
+Windows processes spanning processor groups fail explicitly: bind the process to one
+group before launching a batch. Weight-based job scheduling is not a hard CPU quota.
 
 Grouped by the job you are doing. For a starting point: :class:`Index` searches a *set of
 sequences*, :class:`TextIndex` searches a *long text*, and :mod:`seqtree.pairwise` aligns *two

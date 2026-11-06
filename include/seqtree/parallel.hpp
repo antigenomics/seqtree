@@ -35,6 +35,63 @@
 
 namespace seqtree {
 
+inline unsigned cpu_rate_budget(unsigned available, unsigned system_cpus, unsigned rate) {
+    if (!rate || rate > 10000) throw std::invalid_argument("invalid Windows CPU rate limit");
+    return std::min(available, std::max(1u, unsigned(uint64_t(system_cpus) * rate / 10000)));
+}
+
+#ifdef _WIN32
+inline std::pair<unsigned, unsigned> windows_cpu_budget() {
+    const HANDLE process = GetCurrentProcess();
+    USHORT group_count = 1, group = 0;
+    if (!GetProcessGroupAffinity(process, &group_count, &group) || group_count != 1)
+        throw std::runtime_error("CPU budgeting requires a single Windows processor group; bind the process to one group");
+    DWORD_PTR mask = 0, system_mask = 0;
+    if (!GetProcessAffinityMask(process, &mask, &system_mask) || !mask)
+        throw std::runtime_error("cannot read Windows process CPU affinity");
+    unsigned logical = 0;
+    for (auto bits = mask; bits; bits &= bits - 1) ++logical;
+    DWORD bytes = 0;
+    GetLogicalProcessorInformationEx(RelationProcessorCore, nullptr, &bytes);
+    if (!bytes) throw std::runtime_error("cannot read Windows physical CPU topology");
+    std::vector<unsigned char> buffer(bytes);
+    if (!GetLogicalProcessorInformationEx(RelationProcessorCore,
+            reinterpret_cast<PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX>(buffer.data()), &bytes))
+        throw std::runtime_error("cannot read Windows physical CPU topology");
+    unsigned physical = 0;
+    for (size_t offset = 0; offset < bytes;) {
+        const auto* info = reinterpret_cast<const SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX*>(buffer.data() + offset);
+        if (!info->Size || offset + info->Size > bytes)
+            throw std::runtime_error("invalid Windows physical CPU topology");
+        bool allowed = false;
+        for (WORD i = 0; i < info->Processor.GroupCount; ++i)
+            allowed |= info->Processor.GroupMask[i].Group == group &&
+                       (info->Processor.GroupMask[i].Mask & mask) != 0;
+        physical += allowed;
+        offset += info->Size;
+    }
+    if (!physical) throw std::runtime_error("Windows affinity contains no physical cores");
+    BOOL in_job = FALSE;
+    if (!IsProcessInJob(process, nullptr, &in_job))
+        throw std::runtime_error("cannot inspect Windows CPU job membership");
+    if (in_job) {
+        JOBOBJECT_CPU_RATE_CONTROL_INFORMATION rate{};
+        if (!QueryInformationJobObject(nullptr, JobObjectCpuRateControlInformation, &rate, sizeof(rate), nullptr))
+            throw std::runtime_error("cannot inspect Windows CPU job limit");
+        if (rate.ControlFlags & JOB_OBJECT_CPU_RATE_CONTROL_ENABLE) {
+            unsigned fraction = 0;
+            if (rate.ControlFlags & JOB_OBJECT_CPU_RATE_CONTROL_HARD_CAP) fraction = rate.CpuRate;
+            else if (rate.ControlFlags & JOB_OBJECT_CPU_RATE_CONTROL_MIN_MAX_RATE) fraction = rate.MaxRate;
+            if (fraction) {
+                const auto total = GetActiveProcessorCount(ALL_PROCESSOR_GROUPS);
+                logical = cpu_rate_budget(logical, total, fraction);
+            }
+        }
+    }
+    return {logical, std::min(logical, physical)};
+}
+#endif
+
 // Resolve once per batch; affinity/quota limits can change between calls.
 inline unsigned available_cpus() {
     unsigned count = std::max(1u, std::thread::hardware_concurrency());
@@ -87,12 +144,7 @@ inline unsigned available_cpus() {
         }
     }
 #elif defined(_WIN32)
-    DWORD_PTR process_mask, system_mask;
-    if (GetProcessAffinityMask(GetCurrentProcess(), &process_mask, &system_mask)) {
-        unsigned allowed = 0;
-        for (; process_mask; process_mask &= process_mask - 1) ++allowed;
-        if (allowed) count = std::min(count, allowed);
-    }
+    count = std::min(count, windows_cpu_budget().first);
 #endif
     return count;
 }
@@ -127,6 +179,8 @@ inline unsigned physical_cpus() {
     size_t size = sizeof(physical);
     if (sysctlbyname("hw.physicalcpu", &physical, &size, nullptr, 0) == 0 && physical)
         return std::min(available, physical);
+#elif defined(_WIN32)
+    return windows_cpu_budget().second;
 #endif
     return available;
 }

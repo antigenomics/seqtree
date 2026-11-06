@@ -96,3 +96,15 @@ TEST_CASE("SMT topology counts only cores represented by affinity") {
     CHECK(seqtree::physical_cores_for_cpus(cpus, 3, root.string() + "/") == 3);
     std::filesystem::remove_all(root);
 }
+
+TEST_CASE("Windows hard CPU rates respect affinity and floor fractional CPUs") {
+    CHECK(seqtree::cpu_rate_budget(40, 40, 5000) == 20);
+    CHECK(seqtree::cpu_rate_budget(4, 40, 5000) == 4);
+    CHECK(seqtree::cpu_rate_budget(40, 40, 100) == 1);
+    CHECK_THROWS_AS(seqtree::cpu_rate_budget(40, 40, 0), std::invalid_argument);
+#ifdef _WIN32
+    const auto [logical, physical] = seqtree::windows_cpu_budget();
+    CHECK(logical >= physical);
+    CHECK(physical >= 1);
+#endif
+}
