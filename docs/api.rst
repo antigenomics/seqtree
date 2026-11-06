@@ -10,7 +10,7 @@ Batch CPU budgets
 Linux physical cores within affinity, visible cgroup v1/v2 quotas and SLURM allocation; macOS physical cores;
 Windows physical cores within process affinity and visible job CPU-rate limits. Legacy nonpositive values also select automatic mode.
 Positive counts bound workers; a batch launches at most its query count. A request
-above the detected allocation raises ``ValueError``; explicit counts are never clamped.
+above the detected allocation is capped to the available budget.
 The caller performs one share of the work: a budget of B uses B compute threads
 in total, creating only B-1 additional OS threads when there is enough work.
 Pools are joined before the call returns; use one batch rather than an outer pool
