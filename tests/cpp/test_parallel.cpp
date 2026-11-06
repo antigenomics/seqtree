@@ -61,12 +61,13 @@ TEST_CASE("factory and body exceptions propagate after workers join") {
     }
 }
 
-TEST_CASE("parallel batches reject an excessive live worker budget") {
+TEST_CASE("parallel batches cap an excessive live worker budget") {
     const unsigned available = seqtree::available_cpus();
     REQUIRE(available >= 1);
-    CHECK_THROWS_AS(seqtree::parallel_for(size_t(available) + 1, int(available) + 1,
-                                        [] { return 0; }, [](size_t, int&) {}),
-                    std::invalid_argument);
+    std::atomic<unsigned> factories{0};
+    seqtree::parallel_for(size_t(available) + 1, int(available) + 1,
+                         [&] { ++factories; return 0; }, [](size_t, int&) {});
+    CHECK(factories == std::min(available, 999u));
 }
 
 

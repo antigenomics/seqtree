@@ -5,6 +5,11 @@ versioning: breaking changes need a **major** bump.
 
 ## Unreleased
 
+## 1.3.4
+
+- Clamp oversized CPU/thread requests to the available budget instead of aborting.
+  Preserve automatic selection, explicit smaller budgets and bounded native workers.
+
 ## 1.3.3
 
 - Cap automatic native CPU budgets at 16 allocated CPUs; preserve larger explicit

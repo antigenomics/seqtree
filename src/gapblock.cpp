@@ -1143,8 +1143,8 @@ GroupedCountBatch::GroupedCountBatch(const std::vector<std::string>& qa, const s
             beta->query_groups,beta->reference_groups,beta->group_distances,
             beta->query_weights,beta->reference_weights,beta->features,&bound_b);
     } else if (!qb.empty() || !rb.empty()) throw std::invalid_argument("paired axes require beta geometry");
-    if (threads<0 || unsigned(threads)>available_cpus())
-        throw std::invalid_argument("worker count exceeds the available CPU budget");
+    if (threads<0)
+        throw std::invalid_argument("worker count must be nonnegative");
     in.cuts=std::move(cuts); in.offsets=std::move(offsets); in.labels=std::move(labels);
     if (!in.return_hits) in.prepare_bins();
     in.target_peptides=std::move(target_peptides); in.exclusive=std::move(exclusive);

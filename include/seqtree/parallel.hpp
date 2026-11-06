@@ -205,8 +205,7 @@ void parallel_for(size_t n, int threads, MakeLocal make_local, Body body,
                   size_t chunk_min = 1, size_t chunk_max = 1024) {
     const unsigned available = available_cpus();
     unsigned nt = threads > 0 ? unsigned(threads) : physical_cpus();
-    if (nt > available || nt >= 1000)
-        throw std::invalid_argument("worker count exceeds the available CPU budget; request fewer threads");
+    nt = std::min({nt, available, 999u});
     if (n == 0) return;
     nt = unsigned(std::min<size_t>(nt, n));  // Do not start idle workers for absent work.
 
