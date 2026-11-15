@@ -341,9 +341,9 @@ rows identical in both views. No cross-row combinations are created.
    from seqtree.gapblock import topk_batch, count_batch
 
    queries, refs = ["ACDE", "ACD"], ["ACDE", "ACD", "ACDF"]
-   hits = topk_batch(queries, refs, k=2, threads=1)
+   hits = topk_batch(queries, refs, k=2, threads=0)
    thresholds = [[h.score for h in row] for row in hits]
-   counts = count_batch(queries, refs, thresholds, threads=1)
+   counts = count_batch(queries, refs, thresholds, threads=0)
 
 Each operation runs as one native batch with the GIL released. Top-k results use
 O(Q*k) storage and each worker uses O(k + maximum sequence length) scratch.

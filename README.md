@@ -10,6 +10,12 @@ Fast fuzzy search over biological sequences (amino-acid or nucleotide), as a C++
 core with a minimal Python binding. Build an immutable index once, then search
 single queries or massive batches in parallel.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/antigenomics/seqtree/master/assets/workflow-dark.svg">
+  <source srcset="https://raw.githubusercontent.com/antigenomics/seqtree/master/assets/workflow-light.svg">
+  <img alt="seqtree workflow: inputs, batched processing and outputs. Schematic illustrations." src="https://raw.githubusercontent.com/antigenomics/seqtree/master/assets/workflow.png" width="100%">
+</picture>
+
 ## Install
 
 ```fish
@@ -36,7 +42,7 @@ queries = ["CASSLAPGATNEKLFF", "CASSLELGATNEKLFF"]
 results = idx.search_batch(queries, p)
 ```
 
-That is the whole core loop. Significance, gap blocks, alignment and distances are in
+Significance, gap blocks, alignment and distances are in
 [More examples](#more-examples) below, and the
 [docs](https://antigenomics.github.io/seqtree/) explain the why.
 
